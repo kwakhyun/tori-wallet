@@ -1,4 +1,4 @@
-package com.giwawallet
+package com.toriwallet
 
 import android.app.Application
 import com.facebook.react.PackageList
