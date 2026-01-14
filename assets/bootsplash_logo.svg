@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="200" height="200" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+  <!-- 심플한 고양이 얼굴 - 스플래시용 -->
+  <g transform="translate(10, 15)">
+    <!-- 왼쪽 귀 -->
+    <path d="M15 35 L5 5 L30 25 Z" fill="#6366F1"/>
+    <!-- 오른쪽 귀 -->
+    <path d="M65 35 L75 5 L50 25 Z" fill="#6366F1"/>
+    <!-- 귀 안쪽 (왼쪽) -->
+    <path d="M17 30 L12 12 L27 25 Z" fill="#818CF8"/>
+    <!-- 귀 안쪽 (오른쪽) -->
+    <path d="M63 30 L68 12 L53 25 Z" fill="#818CF8"/>
+    <!-- 얼굴 -->
+    <ellipse cx="40" cy="50" rx="35" ry="30" fill="#6366F1"/>
+    <!-- 왼쪽 눈 -->
+    <ellipse cx="25" cy="45" rx="6" ry="7" fill="white"/>
+    <ellipse cx="26" cy="46" rx="3" ry="4" fill="#1F2937"/>
+    <circle cx="27" cy="44" r="1.5" fill="white"/>
+    <!-- 오른쪽 눈 -->
+    <ellipse cx="55" cy="45" rx="6" ry="7" fill="white"/>
+    <ellipse cx="56" cy="46" rx="3" ry="4" fill="#1F2937"/>
+    <circle cx="57" cy="44" r="1.5" fill="white"/>
+    <!-- 코 -->
+    <ellipse cx="40" cy="58" rx="4" ry="3" fill="#A5B4FC"/>
+    <!-- 입 -->
+    <path d="M40 61 Q35 67 30 63" stroke="#A5B4FC" stroke-width="2" fill="none" stroke-linecap="round"/>
+    <path d="M40 61 Q45 67 50 63" stroke="#A5B4FC" stroke-width="2" fill="none" stroke-linecap="round"/>
+    <!-- 수염 (왼쪽) -->
+    <line x1="5" y1="50" x2="18" y2="52" stroke="#A5B4FC" stroke-width="1.5" stroke-linecap="round"/>
+    <line x1="5" y1="58" x2="18" y2="57" stroke="#A5B4FC" stroke-width="1.5" stroke-linecap="round"/>
+    <line x1="7" y1="66" x2="18" y2="62" stroke="#A5B4FC" stroke-width="1.5" stroke-linecap="round"/>
+    <!-- 수염 (오른쪽) -->
+    <line x1="75" y1="50" x2="62" y2="52" stroke="#A5B4FC" stroke-width="1.5" stroke-linecap="round"/>
+    <line x1="75" y1="58" x2="62" y2="57" stroke="#A5B4FC" stroke-width="1.5" stroke-linecap="round"/>
+    <line x1="73" y1="66" x2="62" y2="62" stroke="#A5B4FC" stroke-width="1.5" stroke-linecap="round"/>
+  </g>
+</svg>

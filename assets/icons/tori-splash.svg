@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Tori Wallet - Splash Screen Logo
+  스플래시 스크린용 SVG 로고
+-->
+<svg width="200" height="280" viewBox="0 0 200 280" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="splashGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#C7D2FE"/>
+      <stop offset="30%" stop-color="#818CF8"/>
+      <stop offset="70%" stop-color="#6366F1"/>
+      <stop offset="100%" stop-color="#4F46E5"/>
+    </linearGradient>
+    <linearGradient id="splashShine" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="white" stop-opacity="0.3"/>
+      <stop offset="40%" stop-color="white" stop-opacity="0.1"/>
+      <stop offset="100%" stop-color="white" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+
+  <!-- 메인 아이콘 - 중앙 배치 -->
+  <g transform="translate(34, 0)">
+    <!-- 배경 -->
+    <rect x="0" y="0" width="132" height="132" rx="32" ry="32" fill="url(#splashGradient)"/>
+
+    <!-- 광택 -->
+    <path d="M32 0 L100 0 Q132 0 132 32 L132 60 Q66 75 0 60 L0 32 Q0 0 32 0 Z" fill="url(#splashShine)"/>
+
+    <!-- 새 -->
+    <g transform="translate(18, 18)">
+      <path d="M18 42 C18 22, 32 10, 54 10 C66 10, 74 18, 66 28 C58 38, 42 40, 32 42 C54 46, 70 58, 62 74 C54 90, 32 96, 14 84 C4 76, 4 60, 18 42 Z" fill="white"/>
+      <path d="M24 44 Q44 28, 64 42 Q52 58, 30 72 Q18 58, 24 44 Z" fill="#6366F1" opacity="0.12"/>
+      <circle cx="60" cy="24" r="6" fill="#3730A3"/>
+      <circle cx="62" cy="22" r="2.5" fill="white"/>
+      <path d="M66 26 L84 18 L72 36 Z" fill="white"/>
+      <path d="M10 78 Q2 88, -2 100 Q12 92, 20 84 Z" fill="white" opacity="0.8"/>
+    </g>
+  </g>
+
+  <!-- 텍스트: TORI -->
+  <g transform="translate(24, 155)">
+    <!-- T -->
+    <path d="M0 0 L36 0 L36 9 L23 9 L23 52 L13 52 L13 9 L0 9 Z" fill="white"/>
+    <!-- O -->
+    <path d="M42 26 C42 10, 54 0, 72 0 C90 0, 102 10, 102 26 C102 42, 90 52, 72 52 C54 52, 42 42, 42 26 Z M54 26 C54 36, 62 44, 72 44 C82 44, 90 36, 90 26 C90 16, 82 8, 72 8 C62 8, 54 16, 54 26 Z" fill="white"/>
+    <!-- R -->
+    <path d="M108 0 L138 0 C154 0, 164 8, 164 20 C164 30, 158 36, 146 39 L172 52 L157 52 L137 40 L120 40 L120 52 L108 52 Z M120 9 L120 31 L136 31 C147 31, 152 27, 152 20 C152 13, 147 9, 136 9 Z" fill="white"/>
+  </g>
+
+  <!-- WALLET subtitle -->
+  <g transform="translate(38, 225)">
+    <path d="M0 5 L6 5 L13 22 L20 5 L26 5 L33 22 L40 5 L46 5 L36 35 L30 35 L23 18 L16 35 L10 35 Z" fill="#9CA3AF"/>
+    <path d="M52 5 L68 5 L80 35 L73 35 L70 27 L56 27 L53 35 L46 35 Z M58 21 L68 21 L63 8 Z" fill="#9CA3AF"/>
+    <path d="M82 5 L90 5 L90 28 L106 28 L106 35 L82 35 Z" fill="#9CA3AF"/>
+    <path d="M108 5 L116 5 L116 28 L132 28 L132 35 L108 35 Z" fill="#9CA3AF"/>
+  </g>
+</svg>
