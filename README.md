@@ -1,97 +1,401 @@
-This is a new [**React Native**](https://reactnative.dev) project, bootstrapped using [`@react-native-community/cli`](https://github.com/react-native-community/cli).
+# Tori Wallet 🦊
 
-# Getting Started
+[![CI](https://github.com/kwakhyun/tori-wallet/actions/workflows/ci.yml/badge.svg)](https://github.com/kwakhyun/tori-wallet/actions/workflows/ci.yml)
+[![E2E Tests](https://github.com/kwakhyun/tori-wallet/actions/workflows/e2e.yml/badge.svg)](https://github.com/kwakhyun/tori-wallet/actions/workflows/e2e.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![React Native](https://img.shields.io/badge/React%20Native-0.83-blue.svg)](https://reactnative.dev/)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5.0-blue.svg)](https://www.typescriptlang.org/)
 
-> **Note**: Make sure you have completed the [Set Up Your Environment](https://reactnative.dev/docs/set-up-your-environment) guide before proceeding.
+React Native + TypeScript 기반의 Web3 모바일 지갑 앱입니다.
 
-## Step 1: Start Metro
+## 📱 스크린샷
 
-First, you will need to run **Metro**, the JavaScript build tool for React Native.
+<div align="center">
+<table>
+<tr>
+<td align="center"><b>🏠 홈</b></td>
+<td align="center"><b>💸 전송</b></td>
+<td align="center"><b>🔄 스왑</b></td>
+<td align="center"><b>📊 포트폴리오</b></td>
+</tr>
+<tr>
+<td><img src="docs/screenshots/home/home-main.png" width="180" alt="홈 화면"/></td>
+<td><img src="docs/screenshots/send/send-input.png" width="180" alt="토큰 전송"/></td>
+<td><img src="docs/screenshots/swap/swap-main.png" width="180" alt="스왑"/></td>
+<td><img src="docs/screenshots/portfolio/portfolio-overview.png" width="180" alt="포트폴리오"/></td>
+</tr>
+</table>
+</div>
 
-To start the Metro dev server, run the following command from the root of your React Native project:
+## ⚡ Quick Start
 
-```sh
-# Using npm
-npm start
+```bash
+# 1. 의존성 설치
+yarn install
 
-# OR using Yarn
-yarn start
+# 2. iOS Pod 설치
+cd ios && pod install && cd ..
+
+# 3. 환경변수 설정
+cp .env.example .env
+# .env 파일에 WALLETCONNECT_PROJECT_ID 입력
+
+# 4. 실행
+yarn ios     # iOS
+yarn android # Android
 ```
 
-## Step 2: Build and run your app
+## 🎯 프로젝트 개요
 
-With Metro running, open a new terminal window/pane from the root of your React Native project, and use one of the following commands to build and run your Android or iOS app:
+Tori Wallet은 사용자 친화적인 Web3 경험을 제공하기 위해 개발된 모바일 지갑 앱입니다.  
+블록체인 기술의 복잡성을 숨기고, 누구나 쉽고 안전하게 디지털 자산을 관리할 수 있도록 설계되었습니다.
 
-### Android
+### 핵심 목표
 
-```sh
-# Using npm
-npm run android
+- **사용성**: 직관적인 UI/UX로 Web3 진입 장벽 낮추기
+- **보안성**: 사용자 자산 보호를 최우선으로 하는 설계
+- **확장성**: 멀티체인 및 다양한 dApp 연동 지원
 
-# OR using Yarn
-yarn android
+## 🚀 주요 기능
+
+### 지갑 관리
+
+- **HD 지갑 생성/복구**: BIP-39/BIP-44 표준 기반 니모닉 지갑
+- **다중 계정**: 하나의 니모닉으로 여러 계정 파생 및 관리
+- **생체인증**: Face ID / Touch ID 지원으로 빠른 인증
+
+### 멀티체인 지원
+
+- Ethereum, Polygon, Arbitrum, Optimism, Base 등 주요 L1/L2 지원
+- 네트워크 간 원활한 전환
+
+### dApp 연동
+
+- **WalletConnect v2**: dApp과의 안전한 연결
+- 메시지 서명, 트랜잭션 승인 처리
+- 연결된 세션 관리
+
+### 토큰 스왑
+
+- **멀티 DEX 가격 비교**: 최적의 교환 비율 제공
+- **슬리피지/가스 설정**: 사용자 맞춤 설정
+- **스왑 히스토리**: 거래 내역 추적
+- **즐겨찾기 페어**: 자주 사용하는 토큰 쌍 저장
+
+### 토큰 수신
+
+- **QR 코드 생성**: 주소를 QR 코드로 표시
+- **주소 공유**: 클립보드 복사, 외부 앱 공유
+
+### 암호화폐 구매
+
+- **외부 서비스 연동**: MoonPay, Banxa 등 온램프 서비스
+- **카드/계좌이체 구매**: 법정화폐로 암호화폐 구매
+
+### 코인 탐색 (Explore)
+
+- **인기 코인 목록**: 실시간 시세 및 변동률
+- **코인 검색**: 이름/심볼로 코인 검색
+- **코인 상세**: 차트, 시가총액, 거래량 등 상세 정보
+
+### 포트폴리오 분석
+
+- **자산 현황 차트**: 파이 차트, 라인 차트 시각화
+- **수익률 추적**: 기간별 자산 변동 분석
+- **토큰별 분포**: 자산 구성 한눈에 파악
+
+### 트랜잭션
+
+- **토큰 전송**: 네이티브/ERC-20 토큰 전송
+- **가스 추정**: 실시간 가스비 계산
+- **트랜잭션 추적**: 전송 상태 모니터링
+- **활동 내역**: 전체 트랜잭션 히스토리 조회
+
+### 설정
+
+- **네트워크 전환**: 지원하는 체인 간 전환
+- **보안 설정**: PIN 변경, 생체인증 설정
+- **복구 구문 확인**: 니모닉 백업 재확인
+- **주소록**: 자주 쓰는 주소 저장/관리
+- **지갑 잠금/초기화**: 보안 잠금, 앱 초기화
+
+## 📦 기술 스택
+
+| 분류            | 기술                                                  |
+| --------------- | ----------------------------------------------------- |
+| **Framework**   | React Native 0.83 + TypeScript                        |
+| **Blockchain**  | Viem (Ethereum 인터랙션)                              |
+| **dApp 연결**   | WalletConnect Web3Wallet                              |
+| **상태 관리**   | Zustand (클라이언트), TanStack Query (서버)           |
+| **로컬 DB**     | Realm (주소록, 트랜잭션 캐시, 토큰 설정)              |
+| **스타일링**    | styled-components/native                              |
+| **네비게이션**  | React Navigation 7                                    |
+| **보안 저장소** | react-native-keychain, react-native-encrypted-storage |
+| **테스트**      | Jest, React Testing Library, Detox (E2E)              |
+| **CI/CD**       | GitHub Actions                                        |
+
+### 기술 선택 이유
+
+| 기술                  | 선택 이유                                                            |
+| --------------------- | -------------------------------------------------------------------- |
+| **Viem**              | ethers.js 대비 번들 크기 50% 감소, TypeScript 지원 우수, 모던 API    |
+| **Zustand**           | Redux 대비 보일러플레이트 최소화, 직관적 API, 작은 번들 크기         |
+| **TanStack Query**    | 서버 상태 캐싱/동기화 자동화, 중복 요청 제거, stale-while-revalidate |
+| **Realm**             | SQLite 대비 React Native 통합 우수, 실시간 동기화, 오프라인 퍼스트   |
+| **styled-components** | 컴포넌트 기반 스타일링, 테마 시스템, 동적 스타일 적용 용이           |
+
+## 🏗 아키텍처
+
+### 데이터 레이어 분리
+
+```
+┌───────────────────────────────────────────────────────────────┐
+│                       Tori Wallet                              │
+├───────────────────────────────────────────────────────────────┤
+│  UI Layer (React Native)                                       │
+│  └── 화면, 컴포넌트, 네비게이션                                  │
+├───────────────────────────────────────────────────────────────┤
+│  State Management                                              │
+│  ├── Zustand: 클라이언트 상태 (지갑, 설정)                       │
+│  └── React Query: 서버 상태 (REST/RPC - 잔액, 가스, TX 조회)     │
+├───────────────────────────────────────────────────────────────┤
+│  Local Storage                                                 │
+│  ├── Realm: 복잡한 로컬 데이터                                   │
+│  │   ├── 주소록 (Address Book)                                  │
+│  │   ├── 트랜잭션 캐시 (상태: pending/confirmed/failed)          │
+│  │   ├── 토큰 리스트 (숨김/스팸 플래그)                           │
+│  │   ├── WalletConnect 세션/요청 로그                            │
+│  │   ├── 동기화 상태 & 잔액 스냅샷 (오프라인 UX)                  │
+│  │   └── 사용자 환경설정                                         │
+│  ├── AsyncStorage: 단순 설정 값                                  │
+│  └── Keychain: 민감한 데이터 (니모닉, 개인키)                     │
+├───────────────────────────────────────────────────────────────┤
+│  Services Layer                                                │
+│  ├── walletService: 지갑 관리 (니모닉, 키)                       │
+│  ├── chainClient: 멀티체인 RPC (Viem)                           │
+│  ├── txService: 트랜잭션 처리                                    │
+│  ├── wcService: WalletConnect                                  │
+│  └── ... (스왑, 토큰, 포트폴리오 등)                              │
+└───────────────────────────────────────────────────────────────┘
 ```
 
-### iOS
+### 폴더 구조
 
-For iOS, remember to install CocoaPods dependencies (this only needs to be run on first clone or after updating native deps).
-
-The first time you create a new project, run the Ruby bundler to install CocoaPods itself:
-
-```sh
-bundle install
+```
+src/
+├── app/              # App 진입점, 프로바이더
+├── components/       # 재사용 컴포넌트
+│   ├── common/       # Button, Input, Card, ErrorBoundary 등
+│   ├── charts/       # 포트폴리오 차트 컴포넌트
+│   └── swap/         # 스왑 관련 모달
+├── config/           # 앱 설정 (QueryClient 등)
+├── hooks/            # 커스텀 훅 (useBalance, useWallet 등)
+├── navigation/       # 네비게이션 설정
+├── realm/            # Realm 로컬 데이터베이스
+│   ├── database.ts   # Realm 초기화 및 관리
+│   ├── schemas/      # 스키마 정의
+│   ├── services/     # CRUD 서비스
+│   │   ├── addressBookService.ts
+│   │   ├── transactionCacheService.ts
+│   │   ├── tokenListService.ts
+│   │   ├── wcLogService.ts
+│   │   ├── syncStatusService.ts
+│   │   └── userPreferencesService.ts
+│   └── hooks/        # React 훅
+├── screens/          # 화면 컴포넌트
+├── services/         # 비즈니스 로직
+│   ├── chainClient.ts    # 블록체인 클라이언트 (멀티체인 RPC)
+│   ├── walletService.ts  # 지갑 관리 (니모닉, 키)
+│   ├── txService.ts      # 트랜잭션 처리
+│   ├── swapService.ts    # 토큰 스왑
+│   ├── wcService.ts      # WalletConnect
+│   ├── coinService.ts    # 코인 시세/정보 조회
+│   ├── tokenService.ts   # ERC-20 토큰 관리
+│   ├── buyService.ts     # 암호화폐 구매 (온램프)
+│   └── portfolioAnalyticsService.ts  # 포트폴리오 분석
+├── store/            # Zustand 스토어
+│   ├── walletStore.ts    # 지갑 상태
+│   └── swapStore.ts      # 스왑 상태 (히스토리, 설정)
+├── styles/           # 테마, 공통 스타일
+└── utils/            # 유틸리티 함수
+    ├── error.ts      # 에러 처리
+    ├── format.ts     # 포맷팅
+    └── address.ts    # 주소 관련
 ```
 
-Then, and every time you update your native dependencies, run:
+## ⚡ 성능 최적화
 
-```sh
-bundle exec pod install
+상세 내용은 [PERFORMANCE_OPTIMIZATION.md](docs/PERFORMANCE_OPTIMIZATION.md) 참고
+
+### 적용된 최적화 기법
+
+| 최적화 기법         | 적용 범위       | 효과                 |
+| ------------------- | --------------- | -------------------- |
+| useCallback/useMemo | 모든 화면       | 리렌더링 감소        |
+| FlatList            | 리스트 화면 6개 | 메모리 효율화        |
+| React Query 캐싱    | API 호출 전체   | 네트워크 요청 감소   |
+| 오프라인 퍼스트     | 전체 앱         | 네트워크 불안정 대응 |
+| Realm 캐싱          | 6개 서비스      | 오프라인 UX          |
+| 지수 백오프 재시도  | API 재시도      | 서버 부하 분산       |
+
+## 🔐 보안 설계
+
+사용자 자산을 다루는 서비스 특성상 보안에 각별히 신경 썼습니다.
+
+### 니모닉/개인키 보호
+
+- `react-native-keychain`으로 iOS Keychain / Android Keystore 활용
+- PIN 기반 추가 암호화 레이어
+- 메모리에서 민감 데이터 즉시 제거
+
+### 인증
+
+- 생체인증(Face ID/Touch ID) 연동
+- 앱 백그라운드 전환 시 자동 잠금
+- 일정 시간 미사용 시 자동 로그아웃
+
+### 트랜잭션 보안
+
+- 서명 전 상세 정보 검토 모달
+- dApp 연결 시 권한 명시적 승인
+
+## ⚡ 에러 처리 및 안정성
+
+### 에러 바운더리
+
+- 컴포넌트 레벨 크래시 방지
+- 사용자 친화적 복구 화면
+
+### 네트워크 에러 대응
+
+- React Query 기반 자동 재시도 (지수 백오프)
+- 오프라인 시 캐시 데이터 표시
+- 네트워크 복구 시 자동 동기화
+
+### 오프라인 UX (Realm 기반)
+
+- **잔액 스냅샷**: 마지막으로 동기화된 잔액을 로컬에 저장하여 오프라인에서도 표시
+- **토큰 리스트 캐싱**: 토큰 정보와 마지막 잔액을 Realm에 캐시
+- **동기화 상태 표시**: 마지막 동기화 시간을 표시하여 데이터 신선도 인지
+- **트랜잭션 캐시**: 네트워크 요청 없이 최근 트랜잭션 히스토리 조회
+- **펜딩 트랜잭션 추적**: 로컬에서 생성한 트랜잭션의 상태를 자동으로 추적
+
+### 예외 처리
+
+- 체계적인 에러 코드 및 메시지 관리
+- 사용자에게 친숙한 한국어 에러 메시지
+
+## 🧪 테스트
+
+```bash
+yarn test              # 단위/통합 테스트
+yarn test:coverage     # 커버리지 리포트
+yarn e2e:ios           # E2E 테스트 (iOS)
+yarn e2e:android       # E2E 테스트 (Android)
 ```
 
-For more information, please visit [CocoaPods Getting Started guide](https://guides.cocoapods.org/using/getting-started.html).
+### 테스트 현황
 
-```sh
-# Using npm
-npm run ios
+| 테스트 유형     | 범위                              | 테스트 수 |
+| --------------- | --------------------------------- | --------- |
+| **단위 테스트** | 유틸리티, 스토어, 서비스          | 50+       |
+| **통합 테스트** | 커스텀 훅, 컴포넌트               | 20+       |
+| **E2E 테스트**  | 온보딩, 토큰 전송, 지갑 잠금/해제 | 36 케이스 |
 
-# OR using Yarn
-yarn ios
+## 🔧 Environment Variables
+
+`.env.example`을 복사하여 `.env` 파일을 생성하세요.
+
+```env
+WALLETCONNECT_PROJECT_ID=your_project_id
 ```
 
-If everything is set up correctly, you should see your new app running in the Android Emulator, iOS Simulator, or your connected device.
+> WalletConnect 프로젝트 ID: [WalletConnect Cloud](https://cloud.walletconnect.com/)에서 발급
 
-This is one way to run your app — you can also build it directly from Android Studio or Xcode.
+## 📝 Scripts
 
-## Step 3: Modify your app
+| Script           | Description                 |
+| ---------------- | --------------------------- |
+| `yarn start`     | Metro 개발 서버 시작        |
+| `yarn ios`       | iOS 시뮬레이터에서 실행     |
+| `yarn android`   | Android 에뮬레이터에서 실행 |
+| `yarn test`      | Jest 테스트 실행            |
+| `yarn lint`      | ESLint 검사                 |
+| `yarn typecheck` | TypeScript 타입 검사        |
+| `yarn clean`     | 캐시 및 node_modules 정리   |
 
-Now that you have successfully run the app, let's make changes!
+## 🚀 CI/CD 배포
 
-Open `App.tsx` in your text editor of choice and make some changes. When you save, your app will automatically update and reflect these changes — this is powered by [Fast Refresh](https://reactnative.dev/docs/fast-refresh).
+GitHub Actions를 통해 자동 배포가 설정되어 있습니다.
 
-When you want to forcefully reload, for example to reset the state of your app, you can perform a full reload:
+### 워크플로우
 
-- **Android**: Press the <kbd>R</kbd> key twice or select **"Reload"** from the **Dev Menu**, accessed via <kbd>Ctrl</kbd> + <kbd>M</kbd> (Windows/Linux) or <kbd>Cmd ⌘</kbd> + <kbd>M</kbd> (macOS).
-- **iOS**: Press <kbd>R</kbd> in iOS Simulator.
+| Workflow    | 트리거                  | 설명                   |
+| ----------- | ----------------------- | ---------------------- |
+| **CI**      | PR, Push (main/develop) | 린트, 타입체크, 테스트 |
+| **E2E**     | Push (main), Daily      | Detox E2E 테스트       |
+| **Release** | Tag (v\*), Manual       | 스토어 배포            |
 
-## Congratulations! :tada:
+### 배포 방법
 
-You've successfully run and modified your React Native App. :partying_face:
+```bash
+# 1. 버전 태그 생성 및 푸시
+git tag v1.0.0
+git push origin v1.0.0
 
-### Now what?
+# 2. 자동으로 App Store / Play Store에 배포됨
+```
 
-- If you want to add this new React Native code to an existing application, check out the [Integration guide](https://reactnative.dev/docs/integration-with-existing-apps).
-- If you're curious to learn more about React Native, check out the [docs](https://reactnative.dev/docs/getting-started).
+### 수동 배포
 
-# Troubleshooting
+GitHub Actions → Release → Run workflow에서:
 
-If you're having issues getting the above steps to work, see the [Troubleshooting](https://reactnative.dev/docs/troubleshooting) page.
+- **Platform**: android / ios / both
+- **Track**: internal / alpha / beta / production
 
-# Learn More
+### 필요한 Secrets
 
-To learn more about React Native, take a look at the following resources:
+GitHub Repository → Settings → Secrets에서 설정:
 
-- [React Native Website](https://reactnative.dev) - learn more about React Native.
-- [Getting Started](https://reactnative.dev/docs/environment-setup) - an **overview** of React Native and how setup your environment.
-- [Learn the Basics](https://reactnative.dev/docs/getting-started) - a **guided tour** of the React Native **basics**.
-- [Blog](https://reactnative.dev/blog) - read the latest official React Native **Blog** posts.
-- [`@facebook/react-native`](https://github.com/facebook/react-native) - the Open Source; GitHub **repository** for React Native.
+| Secret                                  | 설명                             |
+| --------------------------------------- | -------------------------------- |
+| `WALLETCONNECT_PROJECT_ID`              | WalletConnect 프로젝트 ID        |
+| `ANDROID_KEYSTORE_BASE64`               | Android 릴리즈 키스토어 (base64) |
+| `ANDROID_KEYSTORE_PASSWORD`             | 키스토어 비밀번호                |
+| `ANDROID_KEY_ALIAS`                     | 키 별칭                          |
+| `ANDROID_KEY_PASSWORD`                  | 키 비밀번호                      |
+| `GOOGLE_PLAY_SERVICE_ACCOUNT_JSON`      | Google Play API 서비스 계정      |
+| `APPLE_TEAM_ID`                         | Apple Developer Team ID          |
+| `APP_STORE_CONNECT_API_KEY_ID`          | App Store Connect API Key ID     |
+| `APP_STORE_CONNECT_API_ISSUER_ID`       | App Store Connect Issuer ID      |
+| `APP_STORE_CONNECT_API_KEY_CONTENT`     | API Key 내용 (.p8)               |
+| `IOS_DISTRIBUTION_CERTIFICATE_BASE64`   | iOS 배포 인증서 (base64)         |
+| `IOS_DISTRIBUTION_CERTIFICATE_PASSWORD` | 인증서 비밀번호                  |
+| `IOS_PROVISIONING_PROFILE_BASE64`       | 프로비저닝 프로파일 (base64)     |
+
+## 🤝 Contributing
+
+1. Fork the repository
+2. Create feature branch (`git checkout -b feature/amazing-feature`)
+3. Commit changes (`git commit -m 'feat: add amazing feature'`)
+4. Push to branch (`git push origin feature/amazing-feature`)
+5. Open Pull Request
+
+## 📄 License
+
+MIT License - see [LICENSE](LICENSE) for details.
+
+## 📮 Contact
+
+- **Email**: khyun9685@gmail.com
+- **GitHub**: [@kwakhyun](https://github.com/kwakhyun)
+
+---
+
+<div align="center">
+
+### 📚 Documentation
+
+[개인정보 처리방침](docs/PRIVACY_POLICY.md) · [Privacy Policy](docs/PRIVACY_POLICY_EN.md) · [이용약관](docs/TERMS_OF_SERVICE.md) · [Terms of Service](docs/TERMS_OF_SERVICE_EN.md) · [성능 최적화](docs/PERFORMANCE_OPTIMIZATION.md)
+
+</div>
