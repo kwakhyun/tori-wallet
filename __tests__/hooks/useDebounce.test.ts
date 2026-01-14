@@ -13,10 +13,11 @@ interface DebounceProps<T> {
 
 describe('useDebounce', () => {
   beforeEach(() => {
-    jest.useFakeTimers();
+    jest.useFakeTimers({ legacyFakeTimers: true });
   });
 
   afterEach(() => {
+    jest.runOnlyPendingTimers();
     jest.useRealTimers();
   });
 

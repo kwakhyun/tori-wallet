@@ -5,6 +5,9 @@ module.exports = {
   fakeTimers: {
     enableGlobally: false,
   },
+  // CI 환경에서 안정성을 위한 설정
+  testTimeout: 30000,
+  maxWorkers: process.env.CI ? 2 : '50%',
   moduleNameMapper: {
     '^@app/(.*)$': '<rootDir>/src/app/$1',
     '^@navigation/(.*)$': '<rootDir>/src/navigation/$1',

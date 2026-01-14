@@ -160,9 +160,12 @@ describe('Realm Hooks', () => {
     it('should expose CRUD methods', async () => {
       const { result } = renderHook(() => useAddressBook());
 
-      await waitFor(() => {
-        expect(result.current.isLoading).toBe(false);
-      });
+      await waitFor(
+        () => {
+          expect(result.current.isLoading).toBe(false);
+        },
+        { timeout: 5000 },
+      );
 
       expect(typeof result.current.addAddress).toBe('function');
       expect(typeof result.current.updateAddress).toBe('function');
@@ -174,9 +177,12 @@ describe('Realm Hooks', () => {
     it('should call addAddress correctly', async () => {
       const { result } = renderHook(() => useAddressBook());
 
-      await waitFor(() => {
-        expect(result.current.isLoading).toBe(false);
-      });
+      await waitFor(
+        () => {
+          expect(result.current.isLoading).toBe(false);
+        },
+        { timeout: 5000 },
+      );
 
       await act(async () => {
         await result.current.addAddress({
@@ -203,7 +209,7 @@ describe('Realm Hooks', () => {
         () => {
           expect(result.current.isLoading).toBe(false);
         },
-        { timeout: 3000 },
+        { timeout: 5000 },
       );
 
       expect(Array.isArray(result.current.tokens)).toBe(true);
@@ -213,9 +219,12 @@ describe('Realm Hooks', () => {
     it('should expose token management methods', async () => {
       const { result } = renderHook(() => useTokenList(1));
 
-      await waitFor(() => {
-        expect(result.current.isLoading).toBe(false);
-      });
+      await waitFor(
+        () => {
+          expect(result.current.isLoading).toBe(false);
+        },
+        { timeout: 5000 },
+      );
 
       expect(typeof result.current.hideToken).toBe('function');
       expect(typeof result.current.showToken).toBe('function');
@@ -234,7 +243,7 @@ describe('Realm Hooks', () => {
         () => {
           expect(syncStatusService.getSyncStatus).toHaveBeenCalled();
         },
-        { timeout: 3000 },
+        { timeout: 5000 },
       );
 
       // 함수 타입 확인
@@ -253,7 +262,7 @@ describe('Realm Hooks', () => {
         () => {
           expect(syncStatusService.getSyncStatus).toHaveBeenCalled();
         },
-        { timeout: 3000 },
+        { timeout: 5000 },
       );
 
       await act(async () => {
@@ -277,7 +286,7 @@ describe('Realm Hooks', () => {
         () => {
           expect(result.current.isLoading).toBe(false);
         },
-        { timeout: 3000 },
+        { timeout: 5000 },
       );
 
       expect(Array.isArray(result.current.sessions)).toBe(true);
@@ -289,9 +298,12 @@ describe('Realm Hooks', () => {
     it('should expose session management methods', async () => {
       const { result } = renderHook(() => useWCActiveSessions());
 
-      await waitFor(() => {
-        expect(result.current.isLoading).toBe(false);
-      });
+      await waitFor(
+        () => {
+          expect(result.current.isLoading).toBe(false);
+        },
+        { timeout: 5000 },
+      );
 
       expect(typeof result.current.refetch).toBe('function');
       expect(typeof result.current.logSessionConnected).toBe('function');

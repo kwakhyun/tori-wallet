@@ -38,7 +38,7 @@ jobs:
         run: yarn typecheck
 
       - name: Run tests
-        run: yarn test --testPathIgnorePatterns="e2e|apiMocking" --coverage --ci
+        run: yarn test --testPathIgnorePatterns="e2e|apiMocking" --coverage --ci --maxWorkers=2
         env:
           CI: true
 
