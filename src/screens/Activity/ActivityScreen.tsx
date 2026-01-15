@@ -38,6 +38,7 @@ function ActivityScreen(): React.JSX.Element {
 
   const [forceRefresh, setForceRefresh] = useState(false);
   const [hasSynced, setHasSynced] = useState(false);
+  const [isInitialLoading, setIsInitialLoading] = useState(true);
 
   // Realm 캐시에서 트랜잭션 로드 (빠른 초기 로딩)
   const {
@@ -113,9 +114,10 @@ function ActivityScreen(): React.JSX.Element {
     syncToCache();
   }, [apiTransactions, activeNetworkChainId, hasSynced, refetchCache]);
 
-  // 네트워크 변경 시 동기화 플래그 리셋
+  // 네트워크 변경 시 동기화 플래그 및 로딩 상태 리셋
   useEffect(() => {
     setHasSynced(false);
+    setIsInitialLoading(true);
   }, [activeNetworkChainId, activeWallet?.address]);
 
   // 표시할 트랜잭션 결정 (API 데이터 우선, 없으면 캐시)
@@ -141,7 +143,16 @@ function ActivityScreen(): React.JSX.Element {
     }));
   }, [apiTransactions, cachedTransactions]);
 
-  const isLoading = isCacheLoading && isApiLoading && transactions.length === 0;
+  // 초기 로딩 완료 체크 (API 첫 응답이 오면 초기 로딩 완료)
+  useEffect(() => {
+    if (!isApiLoading && isInitialLoading) {
+      // API 응답이 왔으면 초기 로딩 완료
+      setIsInitialLoading(false);
+    }
+  }, [isApiLoading, isInitialLoading]);
+
+  // 로딩 상태: 초기 로딩 중이고 데이터가 없을 때만 스켈레톤 표시
+  const isLoading = isInitialLoading && transactions.length === 0;
 
   const handleRefresh = useCallback(async () => {
     setForceRefresh(true);

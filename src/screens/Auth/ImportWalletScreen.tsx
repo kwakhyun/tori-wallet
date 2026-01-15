@@ -156,25 +156,52 @@ function ImportWalletScreen(): React.JSX.Element {
     setLoadingMessage('복구 구문 검증 중...');
 
     try {
-      // 단계 1: 복구 구문 검증 (20%)
-      await new Promise(resolve => setTimeout(resolve, 300));
-      setLoadingProgress(20);
+      // 애니메이션을 위한 부드러운 진행률 업데이트 함수
+      const smoothProgress = async (
+        start: number,
+        end: number,
+        duration: number,
+      ) => {
+        const steps = 10;
+        const stepDuration = duration / steps;
+        const stepSize = (end - start) / steps;
+
+        for (let i = 1; i <= steps; i++) {
+          await new Promise(resolve => setTimeout(resolve, stepDuration));
+          setLoadingProgress(start + stepSize * i);
+        }
+      };
+
+      // 단계 1: 복구 구문 검증 (0% -> 20%)
+      await smoothProgress(0, 20, 300);
       setLoadingMessage('니모닉 유효성 확인...');
 
-      // 단계 2: 키 파생 준비 (40%)
-      await new Promise(resolve => setTimeout(resolve, 300));
-      setLoadingProgress(40);
+      // 단계 2: 키 파생 준비 (20% -> 40%)
+      await smoothProgress(20, 40, 300);
       setLoadingMessage('마스터 키 생성 중...');
 
-      // 단계 3: 계정 파생 (60%)
-      await new Promise(resolve => setTimeout(resolve, 300));
-      setLoadingProgress(60);
+      // 단계 3: 계정 파생 - UI 블로킹 방지를 위해 setTimeout으로 감싸기
+      // 이 단계가 실제 작업이 진행되는 곳
+      await smoothProgress(40, 55, 200);
       setLoadingMessage('지갑 주소 생성 중...');
 
-      const account = walletService.deriveAccount(mnemonic, 0);
+      // 실제 계정 파생 (동기 작업을 비동기로 래핑)
+      const account = await new Promise<
+        ReturnType<typeof walletService.deriveAccount>
+      >((resolve, reject) => {
+        // setTimeout으로 다음 틱에서 실행하여 UI 업데이트 허용
+        setTimeout(() => {
+          try {
+            const result = walletService.deriveAccount(mnemonic, 0);
+            resolve(result);
+          } catch (err) {
+            reject(err);
+          }
+        }, 50);
+      });
 
-      // 단계 4: 완료 (100%)
-      setLoadingProgress(100);
+      // 단계 4: 마무리 (55% -> 100%)
+      await smoothProgress(55, 100, 300);
       setLoadingMessage('완료!');
 
       await new Promise(resolve => setTimeout(resolve, 200));
