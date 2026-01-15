@@ -9,10 +9,17 @@ import {
   RenderOptions,
   waitFor,
   screen,
+  cleanup,
 } from '@testing-library/react-native';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ThemeProvider } from 'styled-components/native';
 import { lightTheme, darkTheme } from '../src/styles/theme';
+
+// CI 환경에서 cleanup 타임아웃 방지를 위한 afterEach 설정
+afterEach(() => {
+  // cleanup을 동기적으로 실행
+  cleanup();
+});
 
 // NavigationContainer 모킹 (타임아웃 방지)
 const MockNavigationContainer = ({

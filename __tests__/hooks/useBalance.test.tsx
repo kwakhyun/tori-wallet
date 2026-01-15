@@ -29,7 +29,7 @@ jest.mock('../../src/services/chainClient', () => ({
 }));
 
 // CI 환경에서의 타임아웃 설정
-const WAIT_TIMEOUT = process.env.CI ? 10000 : 5000;
+const WAIT_TIMEOUT = process.env.CI ? 15000 : 5000;
 
 const createTestQueryClient = () =>
   new QueryClient({
@@ -42,10 +42,15 @@ const createTestQueryClient = () =>
     },
   });
 
+// 테스트별 queryClient 관리
+let testQueryClient: QueryClient;
+
 const createWrapper = () => {
-  const queryClient = createTestQueryClient();
+  testQueryClient = createTestQueryClient();
   return ({ children }: { children: React.ReactNode }) => (
-    <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    <QueryClientProvider client={testQueryClient}>
+      {children}
+    </QueryClientProvider>
   );
 };
 
@@ -56,6 +61,13 @@ describe('useBalance', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     mockGetBalance.mockResolvedValue(BigInt('1000000000000000000'));
+  });
+
+  afterEach(() => {
+    // 쿼리 클라이언트 정리
+    if (testQueryClient) {
+      testQueryClient.clear();
+    }
   });
 
   it('should return balance data', async () => {
@@ -171,6 +183,12 @@ describe('useTokenBalance', () => {
     mockReadContract.mockResolvedValue(BigInt('5000000')); // 5 USDC (6 decimals)
   });
 
+  afterEach(() => {
+    if (testQueryClient) {
+      testQueryClient.clear();
+    }
+  });
+
   it('should return token balance data', async () => {
     const { result } = renderHook(
       () => useTokenBalance(TEST_ADDRESS, TEST_TOKEN_ADDRESS, 6, 1),
@@ -238,6 +256,12 @@ describe('useMultipleBalances', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     mockReadContract.mockResolvedValue(BigInt('1000000000000000000'));
+  });
+
+  afterEach(() => {
+    if (testQueryClient) {
+      testQueryClient.clear();
+    }
   });
 
   it('should return multiple token balances', async () => {

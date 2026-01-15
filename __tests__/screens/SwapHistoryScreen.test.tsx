@@ -4,10 +4,15 @@
  */
 
 import React from 'react';
-import { render, screen } from '@testing-library/react-native';
+import { render, screen, cleanup } from '@testing-library/react-native';
 import { ThemeProvider } from 'styled-components/native';
 import SwapHistoryScreen from '../../src/screens/Swap/SwapHistoryScreen';
 import { theme } from '../../src/styles/theme';
+
+// CI 환경에서 cleanup 타임아웃 방지
+afterEach(() => {
+  cleanup();
+});
 
 // Navigation mocks
 const mockNavigate = jest.fn();

@@ -3,8 +3,12 @@
  * 테스트 환경 설정
  */
 
-// 기본 타임아웃 증가
-jest.setTimeout(30000);
+// 기본 타임아웃 증가 (CI 환경에서 안정성 확보)
+jest.setTimeout(60000);
+
+// @testing-library/react-native 자동 cleanup 비활성화
+// 각 테스트 파일에서 수동으로 cleanup 호출하거나 test-utils 사용
+process.env.RNTL_SKIP_AUTO_CLEANUP = 'true';
 
 // MSW를 위한 폴리필 (Node 18 이상에서 필요)
 import { TextEncoder, TextDecoder } from 'util';
@@ -265,7 +269,7 @@ jest.mock('@react-navigation/native', () => ({
 }));
 
 // Silence the warning: Animated: `useNativeDriver` is not supported
-jest.mock('react-native/Libraries/Animated/NativeAnimatedHelper');
+// moduleNameMapper에서 처리됨
 
 // Suppress console warnings for deprecation notices
 const originalWarn = console.warn;

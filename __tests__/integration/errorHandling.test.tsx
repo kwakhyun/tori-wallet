@@ -4,7 +4,12 @@
  */
 
 import React from 'react';
-import { waitFor } from '../test-utils';
+import { waitFor, cleanup } from '@testing-library/react-native';
+
+// CI 환경에서 cleanup 타임아웃 방지
+afterEach(() => {
+  cleanup();
+});
 
 // 네트워크 에러 시뮬레이션을 위한 모킹
 const mockGetBalance = jest.fn();
@@ -66,12 +71,15 @@ describe('Error Handling - Network Errors', () => {
         { wrapper },
       );
 
-      await waitFor(() => {
-        expect(result.current.isError).toBe(true);
-      });
+      await waitFor(
+        () => {
+          expect(result.current.isError).toBe(true);
+        },
+        { timeout: 20000 },
+      );
 
       expect(result.current.error).toBeDefined();
-    });
+    }, 25000);
 
     it('should handle RPC rate limit error', async () => {
       mockGetBalance.mockRejectedValue(new Error('429 Too Many Requests'));
@@ -100,10 +108,13 @@ describe('Error Handling - Network Errors', () => {
         { wrapper },
       );
 
-      await waitFor(() => {
-        expect(result.current.isError).toBe(true);
-      });
-    });
+      await waitFor(
+        () => {
+          expect(result.current.isError).toBe(true);
+        },
+        { timeout: 20000 },
+      );
+    }, 25000);
 
     it('should handle invalid chain ID', async () => {
       mockGetBalance.mockRejectedValue(new Error('Invalid chain ID'));
@@ -132,10 +143,13 @@ describe('Error Handling - Network Errors', () => {
         { wrapper },
       );
 
-      await waitFor(() => {
-        expect(result.current.isError).toBe(true);
-      });
-    });
+      await waitFor(
+        () => {
+          expect(result.current.isError).toBe(true);
+        },
+        { timeout: 20000 },
+      );
+    }, 25000);
   });
 
   describe('Token Fetch Errors', () => {

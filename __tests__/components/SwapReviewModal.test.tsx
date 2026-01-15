@@ -3,14 +3,29 @@
  */
 
 import React from 'react';
-import { render, fireEvent } from '../test-utils';
+import { render, fireEvent, cleanup } from '@testing-library/react-native';
+import { ThemeProvider } from 'styled-components/native';
 import { SwapReviewModal } from '../../src/components/swap/SwapReviewModal';
+import { theme } from '../../src/styles/theme';
 import type {
   SwapQuote,
   SwapToken,
 } from '../../src/services/enhancedSwapService';
 
+// CI 환경에서 cleanup 타임아웃 방지
+afterEach(() => {
+  cleanup();
+});
+
+const renderWithTheme = (component: React.ReactElement) => {
+  return render(<ThemeProvider theme={theme}>{component}</ThemeProvider>);
+};
+
 describe('SwapReviewModal', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
   const sellToken: SwapToken = {
     symbol: 'ETH',
     name: 'Ethereum',
@@ -66,36 +81,38 @@ describe('SwapReviewModal', () => {
   });
 
   it('should render correctly when visible', () => {
-    const { toJSON } = render(<SwapReviewModal {...defaultProps} />);
+    const { toJSON } = renderWithTheme(<SwapReviewModal {...defaultProps} />);
     expect(toJSON()).not.toBeNull();
   });
 
   it('should render empty when tokens are null', () => {
     const props = { ...defaultProps, sellToken: null, buyToken: null };
-    const { toJSON } = render(<SwapReviewModal {...props} />);
+    const { toJSON } = renderWithTheme(<SwapReviewModal {...props} />);
     expect(toJSON()).toBeNull();
   });
 
   it('should render empty when quote is null', () => {
     const props = { ...defaultProps, quote: null };
-    const { toJSON } = render(<SwapReviewModal {...props} />);
+    const { toJSON } = renderWithTheme(<SwapReviewModal {...props} />);
     expect(toJSON()).toBeNull();
   });
 
   it('should call onClose when close button pressed', () => {
-    const { getByText } = render(<SwapReviewModal {...defaultProps} />);
+    const { getByText } = renderWithTheme(
+      <SwapReviewModal {...defaultProps} />,
+    );
     fireEvent.press(getByText('✕'));
     expect(defaultProps.onClose).toHaveBeenCalled();
   });
 
   it('should display token amounts', () => {
-    const { root } = render(<SwapReviewModal {...defaultProps} />);
+    const { root } = renderWithTheme(<SwapReviewModal {...defaultProps} />);
     expect(root).toBeTruthy();
   });
 
   it('should show loading state', () => {
     const props = { ...defaultProps, isLoading: true };
-    const { root } = render(<SwapReviewModal {...props} />);
+    const { root } = renderWithTheme(<SwapReviewModal {...props} />);
     expect(root).toBeTruthy();
   });
 
@@ -104,7 +121,7 @@ describe('SwapReviewModal', () => {
       ...defaultProps,
       priceImpact: { percent: '5.0', level: 'high' as const },
     };
-    const { root } = render(<SwapReviewModal {...props} />);
+    const { root } = renderWithTheme(<SwapReviewModal {...props} />);
     expect(root).toBeTruthy();
   });
 
@@ -113,7 +130,7 @@ describe('SwapReviewModal', () => {
       ...defaultProps,
       priceImpact: { percent: '10.0', level: 'critical' as const },
     };
-    const { root } = render(<SwapReviewModal {...props} />);
+    const { root } = renderWithTheme(<SwapReviewModal {...props} />);
     expect(root).toBeTruthy();
   });
 });
