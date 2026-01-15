@@ -19,3 +19,18 @@ buildscript {
 }
 
 apply plugin: "com.facebook.react.rootproject"
+
+// 모든 서브프로젝트에 minSdkVersion 강제 적용 (라이브러리 호환성)
+subprojects {
+    afterEvaluate { project ->
+        if (project.hasProperty('android')) {
+            android {
+                if (android.hasProperty('defaultConfig')) {
+                    android.defaultConfig {
+                        minSdkVersion rootProject.ext.minSdkVersion
+                    }
+                }
+            }
+        }
+    }
+}

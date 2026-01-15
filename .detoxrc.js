@@ -42,7 +42,8 @@ module.exports = {
     simulator: {
       type: 'ios.simulator',
       device: {
-        type: 'iPhone 15 Pro',
+        // GitHub Actions macos-latest에서 사용 가능한 시뮬레이터
+        type: process.env.CI ? 'iPhone 15' : 'iPhone 15 Pro',
       },
     },
     attached: {
@@ -54,7 +55,8 @@ module.exports = {
     emulator: {
       type: 'android.emulator',
       device: {
-        avdName: 'Pixel_4_API_34',
+        // CI 환경에서는 GitHub Actions에서 생성한 에뮬레이터 사용
+        avdName: process.env.CI ? 'detox_pixel_6' : 'Pixel_4_API_34',
       },
     },
   },
