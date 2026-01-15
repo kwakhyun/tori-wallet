@@ -5,9 +5,8 @@
  */
 
 import React, { useEffect, useRef } from 'react';
-import { Animated, DimensionValue, View, StyleSheet } from 'react-native';
-import styled from 'styled-components/native';
-import { palette } from '@/styles/theme';
+import { Animated, DimensionValue, View } from 'react-native';
+import styled, { useTheme } from 'styled-components/native';
 
 interface SkeletonProps {
   width?: DimensionValue;
@@ -33,7 +32,19 @@ export function Skeleton({
   alignSelf,
   testID,
 }: SkeletonProps) {
+  const theme = useTheme();
   const shimmerValue = useRef(new Animated.Value(0)).current;
+
+  // 테마에 따른 스켈레톤 색상
+  const containerColor = theme.isDark
+    ? theme.colors.backgroundTertiary
+    : theme.colors.border;
+  const shimmerColor = theme.isDark
+    ? theme.colors.surface
+    : theme.colors.backgroundTertiary;
+  const overlayColor = theme.isDark
+    ? 'rgba(255, 255, 255, 0.08)'
+    : 'rgba(0, 0, 0, 0.04)';
 
   useEffect(() => {
     const animation = Animated.loop(
@@ -68,52 +79,41 @@ export function Skeleton({
   return (
     <View
       testID={testID}
-      style={[
-        styles.container,
-        {
-          width,
-          height,
-          borderRadius,
-          marginTop,
-          marginBottom,
-          marginLeft,
-          alignSelf,
-        },
-      ]}
+      style={{
+        overflow: 'hidden',
+        backgroundColor: containerColor,
+        width,
+        height,
+        borderRadius,
+        marginTop,
+        marginBottom,
+        marginLeft,
+        alignSelf,
+      }}
     >
       <Animated.View
-        style={[
-          styles.shimmer,
-          {
-            opacity,
-            transform: [{ scaleX }],
-          },
-        ]}
+        style={{
+          flex: 1,
+          backgroundColor: shimmerColor,
+          opacity,
+          transform: [{ scaleX }],
+        }}
       />
       {/* Shimmer highlight overlay */}
-      <Animated.View style={[styles.overlay, { opacity: shimmerValue }]} />
+      <Animated.View
+        style={{
+          position: 'absolute',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          backgroundColor: overlayColor,
+          opacity: shimmerValue,
+        }}
+      />
     </View>
   );
 }
-
-const styles = StyleSheet.create({
-  container: {
-    overflow: 'hidden',
-    backgroundColor: palette.gray[800],
-  },
-  shimmer: {
-    flex: 1,
-    backgroundColor: palette.gray[700],
-  },
-  overlay: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    backgroundColor: 'rgba(255, 255, 255, 0.08)',
-  },
-});
 
 /**
  * 원형 스켈레톤 (아바타, 아이콘 등)

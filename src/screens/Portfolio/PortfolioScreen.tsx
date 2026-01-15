@@ -429,7 +429,7 @@ const TabButton = styled(TouchableOpacity)<{ $active: boolean }>`
 
 const TabText = styled.Text<{ $active: boolean }>`
   color: ${({ theme, $active }) =>
-    $active ? theme.colors.textPrimary : theme.colors.textMuted};
+    $active ? '#FFFFFF' : theme.colors.textMuted};
   font-weight: 600;
   font-size: 14px;
 `;
@@ -492,8 +492,7 @@ const TimeRangeButton = styled(TouchableOpacity)<{ $active: boolean }>`
 `;
 
 const TimeRangeText = styled.Text<{ $active: boolean }>`
-  color: ${({ theme, $active }) =>
-    $active ? theme.colors.textPrimary : theme.colors.textMuted};
+  color: ${({ $active }) => ($active ? '#FFFFFF' : '#71717A')};
   font-size: 12px;
   font-weight: 600;
 `;

@@ -52,7 +52,7 @@ const PrimaryButton = styled.TouchableOpacity`
 `;
 
 const PrimaryButtonText = styled.Text`
-  color: ${({ theme }) => theme.colors.textPrimary};
+  color: #ffffff;
   font-size: ${({ theme }) => theme.typography.button.fontSize}px;
   font-weight: ${({ theme }) => theme.typography.button.fontWeight};
 `;

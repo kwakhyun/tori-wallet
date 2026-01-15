@@ -4,7 +4,7 @@
  */
 
 import React, { useCallback, useState, useEffect } from 'react';
-import styled, { useTheme } from 'styled-components/native';
+import styled, { useTheme, ThemeProvider } from 'styled-components/native';
 import {
   SafeAreaView,
   StatusBar,
@@ -54,7 +54,7 @@ function SettingsScreen(): React.JSX.Element {
   } = useWalletStore();
 
   // 테마 상태
-  const { themeMode, setThemeMode } = useThemeStore();
+  const { themeMode, setThemeMode, activeTheme } = useThemeStore();
 
   const activeWallet = wallets[activeWalletIndex];
   const activeNetwork = networks.find(n => n.chainId === activeNetworkChainId);
@@ -615,61 +615,63 @@ function SettingsScreen(): React.JSX.Element {
         presentationStyle="pageSheet"
         onRequestClose={() => setShowNetworkModal(false)}
       >
-        <ModalContainer>
-          <ModalHeader>
-            <ModalTitle>네트워크 선택</ModalTitle>
-            <CloseButton onPress={() => setShowNetworkModal(false)}>
-              <CloseButtonText>✕</CloseButtonText>
-            </CloseButton>
-          </ModalHeader>
-          <ModalContent>
-            {/* 메인넷 섹션 */}
-            <NetworkSectionTitle>메인넷 (실제 자산)</NetworkSectionTitle>
-            {networks
-              .filter(n => !n.isTestnet)
-              .map(network => (
-                <NetworkItem
-                  key={network.chainId}
-                  onPress={() => handleSelectNetwork(network.chainId)}
-                  $isActive={network.chainId === activeNetworkChainId}
-                >
-                  <NetworkInfo>
-                    <NetworkDot $isTestnet={network.isTestnet} />
-                    <NetworkItemInfo>
-                      <NetworkItemName>{network.name}</NetworkItemName>
-                      <NetworkItemSymbol>{network.symbol}</NetworkItemSymbol>
-                    </NetworkItemInfo>
-                  </NetworkInfo>
-                  {network.chainId === activeNetworkChainId && (
-                    <CheckMark>✓</CheckMark>
-                  )}
-                </NetworkItem>
-              ))}
+        <ThemeProvider theme={activeTheme}>
+          <ModalContainer>
+            <ModalHeader>
+              <ModalTitle>네트워크 선택</ModalTitle>
+              <CloseButton onPress={() => setShowNetworkModal(false)}>
+                <CloseButtonText>✕</CloseButtonText>
+              </CloseButton>
+            </ModalHeader>
+            <ModalContent>
+              {/* 메인넷 섹션 */}
+              <NetworkSectionTitle>메인넷 (실제 자산)</NetworkSectionTitle>
+              {networks
+                .filter(n => !n.isTestnet)
+                .map(network => (
+                  <NetworkItem
+                    key={network.chainId}
+                    onPress={() => handleSelectNetwork(network.chainId)}
+                    $isActive={network.chainId === activeNetworkChainId}
+                  >
+                    <NetworkInfo>
+                      <NetworkDot $isTestnet={network.isTestnet} />
+                      <NetworkItemInfo>
+                        <NetworkItemName>{network.name}</NetworkItemName>
+                        <NetworkItemSymbol>{network.symbol}</NetworkItemSymbol>
+                      </NetworkItemInfo>
+                    </NetworkInfo>
+                    {network.chainId === activeNetworkChainId && (
+                      <CheckMark>✓</CheckMark>
+                    )}
+                  </NetworkItem>
+                ))}
 
-            {/* 테스트넷 섹션 */}
-            <NetworkSectionTitle>테스트넷 (무료 테스트)</NetworkSectionTitle>
-            {networks
-              .filter(n => n.isTestnet)
-              .map(network => (
-                <NetworkItem
-                  key={network.chainId}
-                  onPress={() => handleSelectNetwork(network.chainId)}
-                  $isActive={network.chainId === activeNetworkChainId}
-                >
-                  <NetworkInfo>
-                    <NetworkDot $isTestnet={network.isTestnet} />
-                    <NetworkItemInfo>
-                      <NetworkItemName>{network.name}</NetworkItemName>
-                      <NetworkItemSymbol>{network.symbol}</NetworkItemSymbol>
-                    </NetworkItemInfo>
-                  </NetworkInfo>
-                  {network.chainId === activeNetworkChainId && (
-                    <CheckMark>✓</CheckMark>
-                  )}
-                </NetworkItem>
-              ))}
-          </ModalContent>
-        </ModalContainer>
+              {/* 테스트넷 섹션 */}
+              <NetworkSectionTitle>테스트넷 (무료 테스트)</NetworkSectionTitle>
+              {networks
+                .filter(n => n.isTestnet)
+                .map(network => (
+                  <NetworkItem
+                    key={network.chainId}
+                    onPress={() => handleSelectNetwork(network.chainId)}
+                    $isActive={network.chainId === activeNetworkChainId}
+                  >
+                    <NetworkInfo>
+                      <NetworkDot $isTestnet={network.isTestnet} />
+                      <NetworkItemInfo>
+                        <NetworkItemName>{network.name}</NetworkItemName>
+                        <NetworkItemSymbol>{network.symbol}</NetworkItemSymbol>
+                      </NetworkItemInfo>
+                    </NetworkInfo>
+                    {network.chainId === activeNetworkChainId && (
+                      <CheckMark>✓</CheckMark>
+                    )}
+                  </NetworkItem>
+                ))}
+            </ModalContent>
+          </ModalContainer>
+        </ThemeProvider>
       </Modal>
 
       {/* 테마 선택 모달 */}
@@ -679,44 +681,46 @@ function SettingsScreen(): React.JSX.Element {
         presentationStyle="pageSheet"
         onRequestClose={() => setShowThemeModal(false)}
       >
-        <ModalContainer>
-          <ModalHeader>
-            <ModalTitle>테마 선택</ModalTitle>
-            <CloseButton onPress={() => setShowThemeModal(false)}>
-              <CloseButtonText>✕</CloseButtonText>
-            </CloseButton>
-          </ModalHeader>
-          <ModalContent>
-            {themeModeOptions.map(option => (
-              <ThemeItem
-                key={option.value}
-                onPress={() => handleSelectTheme(option.value)}
-                $isActive={themeMode === option.value}
-              >
-                <ThemeItemLeft>
-                  <ThemeIcon>
-                    {option.value === 'system'
-                      ? '📱'
-                      : option.value === 'light'
-                      ? '☀️'
-                      : '🌙'}
-                  </ThemeIcon>
-                  <ThemeItemInfo>
-                    <ThemeItemName>{option.label}</ThemeItemName>
-                    <ThemeItemDescription>
+        <ThemeProvider theme={activeTheme}>
+          <ModalContainer>
+            <ModalHeader>
+              <ModalTitle>테마 선택</ModalTitle>
+              <CloseButton onPress={() => setShowThemeModal(false)}>
+                <CloseButtonText>✕</CloseButtonText>
+              </CloseButton>
+            </ModalHeader>
+            <ModalContent>
+              {themeModeOptions.map(option => (
+                <ThemeItem
+                  key={option.value}
+                  onPress={() => handleSelectTheme(option.value)}
+                  $isActive={themeMode === option.value}
+                >
+                  <ThemeItemLeft>
+                    <ThemeIcon>
                       {option.value === 'system'
-                        ? '기기 설정에 따라 자동 변경'
+                        ? '📱'
                         : option.value === 'light'
-                        ? '밝은 배경의 라이트 모드'
-                        : '어두운 배경의 다크 모드'}
-                    </ThemeItemDescription>
-                  </ThemeItemInfo>
-                </ThemeItemLeft>
-                {themeMode === option.value && <CheckMark>✓</CheckMark>}
-              </ThemeItem>
-            ))}
-          </ModalContent>
-        </ModalContainer>
+                        ? '☀️'
+                        : '🌙'}
+                    </ThemeIcon>
+                    <ThemeItemInfo>
+                      <ThemeItemName>{option.label}</ThemeItemName>
+                      <ThemeItemDescription>
+                        {option.value === 'system'
+                          ? '기기 설정에 따라 자동 변경'
+                          : option.value === 'light'
+                          ? '밝은 배경의 라이트 모드'
+                          : '어두운 배경의 다크 모드'}
+                      </ThemeItemDescription>
+                    </ThemeItemInfo>
+                  </ThemeItemLeft>
+                  {themeMode === option.value && <CheckMark>✓</CheckMark>}
+                </ThemeItem>
+              ))}
+            </ModalContent>
+          </ModalContainer>
+        </ThemeProvider>
       </Modal>
 
       {/* 복구 구문 보기 모달 */}
@@ -726,18 +730,165 @@ function SettingsScreen(): React.JSX.Element {
         presentationStyle="pageSheet"
         onRequestClose={closeMnemonicModal}
       >
-        <ModalContainer>
-          <ModalHeader>
-            <ModalTitle>복구 구문</ModalTitle>
-            <CloseButton onPress={closeMnemonicModal}>
-              <CloseButtonText>✕</CloseButtonText>
-            </CloseButton>
-          </ModalHeader>
-          <ModalContent>
-            {!mnemonic ? (
+        <ThemeProvider theme={activeTheme}>
+          <ModalContainer>
+            <ModalHeader>
+              <ModalTitle>복구 구문</ModalTitle>
+              <CloseButton onPress={closeMnemonicModal}>
+                <CloseButtonText>✕</CloseButtonText>
+              </CloseButton>
+            </ModalHeader>
+            <ModalContent>
+              {!mnemonic ? (
+                <PinSection>
+                  <PinDescription>
+                    복구 구문을 보려면 PIN을 입력하세요.
+                  </PinDescription>
+                  <PinInput
+                    value={pinInput}
+                    onChangeText={setPinInput}
+                    placeholder="6자리 PIN"
+                    placeholderTextColor={theme.colors.textMuted}
+                    keyboardType="number-pad"
+                    maxLength={6}
+                    secureTextEntry
+                  />
+                  <PrimaryButton
+                    onPress={handleVerifyPinForMnemonic}
+                    disabled={isLoading}
+                  >
+                    {isLoading ? (
+                      <ActivityIndicator color={theme.colors.textPrimary} />
+                    ) : (
+                      <PrimaryButtonText>확인</PrimaryButtonText>
+                    )}
+                  </PrimaryButton>
+                </PinSection>
+              ) : (
+                <MnemonicSection>
+                  <WarningBox>
+                    <WarningIcon>⚠️</WarningIcon>
+                    <WarningText>
+                      절대로 이 구문을 다른 사람에게 보여주지 마세요!{'\n'}
+                      스크린샷도 찍지 마세요!
+                    </WarningText>
+                  </WarningBox>
+                  <MnemonicGrid>
+                    {mnemonic.split(' ').map((word, index) => (
+                      <MnemonicWord key={index}>
+                        <MnemonicIndex>{index + 1}</MnemonicIndex>
+                        <MnemonicText>{word}</MnemonicText>
+                      </MnemonicWord>
+                    ))}
+                  </MnemonicGrid>
+                </MnemonicSection>
+              )}
+            </ModalContent>
+          </ModalContainer>
+        </ThemeProvider>
+      </Modal>
+
+      {/* PIN 변경 모달 */}
+      <Modal
+        visible={showPinChangeModal}
+        animationType="slide"
+        presentationStyle="pageSheet"
+        onRequestClose={closePinChangeModal}
+      >
+        <ThemeProvider theme={activeTheme}>
+          <ModalContainer>
+            <ModalHeader>
+              <ModalTitle>PIN 변경</ModalTitle>
+              <CloseButton onPress={closePinChangeModal}>
+                <CloseButtonText>✕</CloseButtonText>
+              </CloseButton>
+            </ModalHeader>
+            <ModalContent>
+              <PinSection>
+                {pinStep === 'verify' && (
+                  <>
+                    <PinDescription>현재 PIN을 입력하세요.</PinDescription>
+                    <PinInput
+                      value={pinInput}
+                      onChangeText={setPinInput}
+                      placeholder="현재 PIN (6자리)"
+                      placeholderTextColor={theme.colors.textMuted}
+                      keyboardType="number-pad"
+                      maxLength={6}
+                      secureTextEntry
+                    />
+                  </>
+                )}
+                {pinStep === 'new' && (
+                  <>
+                    <PinDescription>새로운 PIN을 입력하세요.</PinDescription>
+                    <PinInput
+                      value={newPin}
+                      onChangeText={setNewPin}
+                      placeholder="새 PIN (6자리)"
+                      placeholderTextColor={theme.colors.textMuted}
+                      keyboardType="number-pad"
+                      maxLength={6}
+                      secureTextEntry
+                    />
+                  </>
+                )}
+                {pinStep === 'confirm' && (
+                  <>
+                    <PinDescription>새 PIN을 다시 입력하세요.</PinDescription>
+                    <PinInput
+                      value={confirmPin}
+                      onChangeText={setConfirmPin}
+                      placeholder="PIN 확인 (6자리)"
+                      placeholderTextColor={theme.colors.textMuted}
+                      keyboardType="number-pad"
+                      maxLength={6}
+                      secureTextEntry
+                    />
+                  </>
+                )}
+                <PinStepIndicator>
+                  <StepDot $active={pinStep === 'verify'} />
+                  <StepDot $active={pinStep === 'new'} />
+                  <StepDot $active={pinStep === 'confirm'} />
+                </PinStepIndicator>
+                <PrimaryButton
+                  onPress={handlePinChangeStep}
+                  disabled={isLoading}
+                >
+                  {isLoading ? (
+                    <ActivityIndicator color={theme.colors.textPrimary} />
+                  ) : (
+                    <PrimaryButtonText>
+                      {pinStep === 'confirm' ? '완료' : '다음'}
+                    </PrimaryButtonText>
+                  )}
+                </PrimaryButton>
+              </PinSection>
+            </ModalContent>
+          </ModalContainer>
+        </ThemeProvider>
+      </Modal>
+
+      {/* 생체인증 PIN 확인 모달 */}
+      <Modal
+        visible={showBiometricPinModal}
+        animationType="slide"
+        presentationStyle="pageSheet"
+        onRequestClose={closeBiometricPinModal}
+      >
+        <ThemeProvider theme={activeTheme}>
+          <ModalContainer>
+            <ModalHeader>
+              <ModalTitle>생체인증 활성화</ModalTitle>
+              <CloseButton onPress={closeBiometricPinModal}>
+                <CloseButtonText>✕</CloseButtonText>
+              </CloseButton>
+            </ModalHeader>
+            <ModalContent>
               <PinSection>
                 <PinDescription>
-                  복구 구문을 보려면 PIN을 입력하세요.
+                  생체인증을 활성화하려면 PIN을 입력하세요.
                 </PinDescription>
                 <PinInput
                   value={pinInput}
@@ -749,7 +900,7 @@ function SettingsScreen(): React.JSX.Element {
                   secureTextEntry
                 />
                 <PrimaryButton
-                  onPress={handleVerifyPinForMnemonic}
+                  onPress={handleVerifyPinForBiometric}
                   disabled={isLoading}
                 >
                   {isLoading ? (
@@ -759,147 +910,9 @@ function SettingsScreen(): React.JSX.Element {
                   )}
                 </PrimaryButton>
               </PinSection>
-            ) : (
-              <MnemonicSection>
-                <WarningBox>
-                  <WarningIcon>⚠️</WarningIcon>
-                  <WarningText>
-                    절대로 이 구문을 다른 사람에게 보여주지 마세요!{'\n'}
-                    스크린샷도 찍지 마세요!
-                  </WarningText>
-                </WarningBox>
-                <MnemonicGrid>
-                  {mnemonic.split(' ').map((word, index) => (
-                    <MnemonicWord key={index}>
-                      <MnemonicIndex>{index + 1}</MnemonicIndex>
-                      <MnemonicText>{word}</MnemonicText>
-                    </MnemonicWord>
-                  ))}
-                </MnemonicGrid>
-              </MnemonicSection>
-            )}
-          </ModalContent>
-        </ModalContainer>
-      </Modal>
-
-      {/* PIN 변경 모달 */}
-      <Modal
-        visible={showPinChangeModal}
-        animationType="slide"
-        presentationStyle="pageSheet"
-        onRequestClose={closePinChangeModal}
-      >
-        <ModalContainer>
-          <ModalHeader>
-            <ModalTitle>PIN 변경</ModalTitle>
-            <CloseButton onPress={closePinChangeModal}>
-              <CloseButtonText>✕</CloseButtonText>
-            </CloseButton>
-          </ModalHeader>
-          <ModalContent>
-            <PinSection>
-              {pinStep === 'verify' && (
-                <>
-                  <PinDescription>현재 PIN을 입력하세요.</PinDescription>
-                  <PinInput
-                    value={pinInput}
-                    onChangeText={setPinInput}
-                    placeholder="현재 PIN (6자리)"
-                    placeholderTextColor={theme.colors.textMuted}
-                    keyboardType="number-pad"
-                    maxLength={6}
-                    secureTextEntry
-                  />
-                </>
-              )}
-              {pinStep === 'new' && (
-                <>
-                  <PinDescription>새로운 PIN을 입력하세요.</PinDescription>
-                  <PinInput
-                    value={newPin}
-                    onChangeText={setNewPin}
-                    placeholder="새 PIN (6자리)"
-                    placeholderTextColor={theme.colors.textMuted}
-                    keyboardType="number-pad"
-                    maxLength={6}
-                    secureTextEntry
-                  />
-                </>
-              )}
-              {pinStep === 'confirm' && (
-                <>
-                  <PinDescription>새 PIN을 다시 입력하세요.</PinDescription>
-                  <PinInput
-                    value={confirmPin}
-                    onChangeText={setConfirmPin}
-                    placeholder="PIN 확인 (6자리)"
-                    placeholderTextColor={theme.colors.textMuted}
-                    keyboardType="number-pad"
-                    maxLength={6}
-                    secureTextEntry
-                  />
-                </>
-              )}
-              <PinStepIndicator>
-                <StepDot $active={pinStep === 'verify'} />
-                <StepDot $active={pinStep === 'new'} />
-                <StepDot $active={pinStep === 'confirm'} />
-              </PinStepIndicator>
-              <PrimaryButton onPress={handlePinChangeStep} disabled={isLoading}>
-                {isLoading ? (
-                  <ActivityIndicator color={theme.colors.textPrimary} />
-                ) : (
-                  <PrimaryButtonText>
-                    {pinStep === 'confirm' ? '완료' : '다음'}
-                  </PrimaryButtonText>
-                )}
-              </PrimaryButton>
-            </PinSection>
-          </ModalContent>
-        </ModalContainer>
-      </Modal>
-
-      {/* 생체인증 PIN 확인 모달 */}
-      <Modal
-        visible={showBiometricPinModal}
-        animationType="slide"
-        presentationStyle="pageSheet"
-        onRequestClose={closeBiometricPinModal}
-      >
-        <ModalContainer>
-          <ModalHeader>
-            <ModalTitle>생체인증 활성화</ModalTitle>
-            <CloseButton onPress={closeBiometricPinModal}>
-              <CloseButtonText>✕</CloseButtonText>
-            </CloseButton>
-          </ModalHeader>
-          <ModalContent>
-            <PinSection>
-              <PinDescription>
-                생체인증을 활성화하려면 PIN을 입력하세요.
-              </PinDescription>
-              <PinInput
-                value={pinInput}
-                onChangeText={setPinInput}
-                placeholder="6자리 PIN"
-                placeholderTextColor={theme.colors.textMuted}
-                keyboardType="number-pad"
-                maxLength={6}
-                secureTextEntry
-              />
-              <PrimaryButton
-                onPress={handleVerifyPinForBiometric}
-                disabled={isLoading}
-              >
-                {isLoading ? (
-                  <ActivityIndicator color={theme.colors.textPrimary} />
-                ) : (
-                  <PrimaryButtonText>확인</PrimaryButtonText>
-                )}
-              </PrimaryButton>
-            </PinSection>
-          </ModalContent>
-        </ModalContainer>
+            </ModalContent>
+          </ModalContainer>
+        </ThemeProvider>
       </Modal>
     </Container>
   );

@@ -43,8 +43,8 @@ export function Button({
       {loading ? (
         <ActivityIndicator
           color={
-            variant === 'primary'
-              ? theme.colors.textPrimary
+            variant === 'primary' || variant === 'secondary'
+              ? '#FFFFFF'
               : theme.colors.primary
           }
           size="small"
@@ -128,9 +128,10 @@ const ButtonText = styled.Text<{ $variant: string; $size: string }>`
       case 'text':
         return `color: ${theme.colors.primary};`;
       case 'secondary':
-        return `color: ${theme.colors.textPrimary};`;
+        return `color: #FFFFFF;`;
       default:
-        return `color: ${theme.colors.textPrimary};`;
+        // primary 버튼은 항상 흰색 텍스트
+        return `color: #FFFFFF;`;
     }
   }}
 

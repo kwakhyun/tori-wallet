@@ -4,10 +4,11 @@
  */
 
 import { create } from 'zustand';
-import { persist, createJSONStorage } from 'zustand/middleware';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Appearance, ColorSchemeName } from 'react-native';
 import { ThemeMode, darkTheme, lightTheme, Theme } from '@/styles/theme';
+
+const THEME_STORAGE_KEY = 'tori-theme-mode';
 
 interface ThemeState {
   // 사용자가 선택한 테마 모드
@@ -19,10 +20,14 @@ interface ThemeState {
   // 현재 다크 모드인지 여부
   isDarkMode: boolean;
 
+  // 초기화 완료 여부
+  isHydrated: boolean;
+
   // Actions
   setThemeMode: (mode: ThemeMode) => void;
   toggleTheme: () => void;
   updateSystemTheme: (colorScheme: ColorSchemeName) => void;
+  hydrate: () => Promise<void>;
 }
 
 // 시스템 테마 가져오기
@@ -50,61 +55,79 @@ const resolveTheme = (
   }
 };
 
-export const useThemeStore = create<ThemeState>()(
-  persist(
-    (set, get) => ({
-      themeMode: 'system',
-      activeTheme: getSystemTheme(),
-      isDarkMode: getSystemTheme().isDark,
+export const useThemeStore = create<ThemeState>()((set, get) => ({
+  themeMode: 'system',
+  activeTheme: getSystemTheme(),
+  isDarkMode: getSystemTheme().isDark,
+  isHydrated: false,
 
-      setThemeMode: (mode: ThemeMode) => {
+  setThemeMode: (mode: ThemeMode) => {
+    const activeTheme = resolveTheme(mode);
+    console.log('🎨 setThemeMode:', mode, 'isDark:', activeTheme.isDark);
+
+    // 상태 업데이트
+    set({
+      themeMode: mode,
+      activeTheme,
+      isDarkMode: activeTheme.isDark,
+    });
+
+    // 디버깅: set 호출 후 상태 확인
+    const newState = get();
+    console.log(
+      '🎨 After set - state:',
+      newState.themeMode,
+      newState.isDarkMode,
+    );
+    console.log('🎨 Listeners count:', useThemeStore.getState() === newState);
+
+    // AsyncStorage에 저장 (비동기, 에러 무시)
+    AsyncStorage.setItem(THEME_STORAGE_KEY, mode).catch(err => {
+      console.warn('Failed to save theme mode:', err);
+    });
+  },
+
+  toggleTheme: () => {
+    const currentMode = get().themeMode;
+    const newMode: ThemeMode = currentMode === 'dark' ? 'light' : 'dark';
+    get().setThemeMode(newMode);
+  },
+
+  updateSystemTheme: (colorScheme: ColorSchemeName) => {
+    const { themeMode } = get();
+    if (themeMode === 'system') {
+      const activeTheme = resolveTheme('system', colorScheme);
+      set({
+        activeTheme,
+        isDarkMode: activeTheme.isDark,
+      });
+    }
+  },
+
+  hydrate: async () => {
+    try {
+      const savedMode = await AsyncStorage.getItem(THEME_STORAGE_KEY);
+      if (savedMode && ['light', 'dark', 'system'].includes(savedMode)) {
+        const mode = savedMode as ThemeMode;
         const activeTheme = resolveTheme(mode);
         set({
           themeMode: mode,
           activeTheme,
           isDarkMode: activeTheme.isDark,
+          isHydrated: true,
         });
-      },
+      } else {
+        set({ isHydrated: true });
+      }
+    } catch (err) {
+      console.warn('Failed to load theme mode:', err);
+      set({ isHydrated: true });
+    }
+  },
+}));
 
-      toggleTheme: () => {
-        const currentMode = get().themeMode;
-        const newMode: ThemeMode = currentMode === 'dark' ? 'light' : 'dark';
-        const activeTheme = resolveTheme(newMode);
-        set({
-          themeMode: newMode,
-          activeTheme,
-          isDarkMode: activeTheme.isDark,
-        });
-      },
-
-      updateSystemTheme: (colorScheme: ColorSchemeName) => {
-        const { themeMode } = get();
-        if (themeMode === 'system') {
-          const activeTheme = resolveTheme('system', colorScheme);
-          set({
-            activeTheme,
-            isDarkMode: activeTheme.isDark,
-          });
-        }
-      },
-    }),
-    {
-      name: 'tori-theme-storage',
-      storage: createJSONStorage(() => AsyncStorage),
-      partialize: state => ({
-        themeMode: state.themeMode,
-      }),
-      onRehydrateStorage: () => state => {
-        if (state) {
-          // 저장된 테마 모드에 따라 activeTheme 재설정
-          const activeTheme = resolveTheme(state.themeMode);
-          state.activeTheme = activeTheme;
-          state.isDarkMode = activeTheme.isDark;
-        }
-      },
-    },
-  ),
-);
+// 앱 시작 시 테마 로드
+useThemeStore.getState().hydrate();
 
 // 테마 모드 옵션 (설정 화면에서 사용)
 export const themeModeOptions = [
