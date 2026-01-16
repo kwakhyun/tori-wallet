@@ -53,7 +53,14 @@ jobs:
           brew install applesimutils
 
       - name: List available simulators
-        run: applesimutils --list | grep -E "iPhone 1[45]" | head -10 || true
+        id: find-simulator
+        run: |
+          echo "Available iPhone simulators:"
+          applesimutils --list | grep -E '"name".*iPhone' | head -20 || true
+          # iPhone 16, 15, 14 순서로 사용 가능한 시뮬레이터 찾기
+          DEVICE=$(applesimutils --list | grep -oE '"name" : "iPhone 1[4-6]( Pro)?"' | head -1 | sed 's/"name" : "//;s/"$//' || echo "iPhone 16")
+          echo "Selected device: $DEVICE"
+          echo "device=$DEVICE" >> $GITHUB_OUTPUT
 
       - name: Create .env file
         run: |
@@ -66,6 +73,7 @@ jobs:
         run: yarn e2e:ios
         env:
           CI: true
+          DETOX_IOS_DEVICE: ${{ steps.find-simulator.outputs.device }}
 
       - name: Upload test artifacts
         if: failure()

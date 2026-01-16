@@ -43,7 +43,10 @@ module.exports = {
       type: 'ios.simulator',
       device: {
         // GitHub Actions macos-latest에서 사용 가능한 시뮬레이터
-        type: process.env.CI ? 'iPhone 15' : 'iPhone 15 Pro',
+        // 환경변수로 오버라이드 가능: DETOX_IOS_DEVICE
+        type:
+          process.env.DETOX_IOS_DEVICE ||
+          (process.env.CI ? 'iPhone 17' : 'iPhone 15 Pro'),
       },
     },
     attached: {

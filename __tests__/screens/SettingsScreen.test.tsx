@@ -3,9 +3,6 @@
  * 설정 스크린 테스트
  */
 
-import React from 'react';
-import { render } from '../test-utils';
-
 // 네비게이션 모킹
 const mockNavigate = jest.fn();
 jest.mock('@react-navigation/native', () => {

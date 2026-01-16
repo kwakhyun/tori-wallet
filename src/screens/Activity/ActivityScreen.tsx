@@ -41,14 +41,11 @@ function ActivityScreen(): React.JSX.Element {
   const [isInitialLoading, setIsInitialLoading] = useState(true);
 
   // Realm 캐시에서 트랜잭션 로드 (빠른 초기 로딩)
-  const {
-    transactions: cachedTransactions,
-    isLoading: isCacheLoading,
-    refetch: refetchCache,
-  } = useTransactions(activeWallet?.address, {
-    chainId: activeNetworkChainId,
-    limit: 20,
-  });
+  const { transactions: cachedTransactions, refetch: refetchCache } =
+    useTransactions(activeWallet?.address, {
+      chainId: activeNetworkChainId,
+      limit: 20,
+    });
 
   // API에서 최신 트랜잭션 가져오기 (백그라운드 동기화)
   const {
