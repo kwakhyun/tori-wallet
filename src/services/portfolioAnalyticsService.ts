@@ -1,5 +1,4 @@
 /**
- * Tori Wallet - Portfolio Analytics Service
  * 포트폴리오 분석 및 통계 서비스
  */
 

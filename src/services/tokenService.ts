@@ -1,6 +1,5 @@
 /**
- * Tori Wallet - Token Service
- * ERC-20 토큰 잔액 조회 및 가격 정보
+ * ERC-20 토큰 잔액 및 가격 조회 서비스
  */
 
 import { createPublicClient, http, formatUnits } from 'viem';
@@ -37,7 +36,7 @@ interface TokenConfig {
 
 // 체인별 기본 토큰 설정
 const DEFAULT_TOKENS: Record<number, TokenConfig[]> = {
-  // Ethereum Mainnet
+  // Ethereum 메인넷
   1: [
     {
       symbol: 'ETH',
@@ -65,7 +64,7 @@ const DEFAULT_TOKENS: Record<number, TokenConfig[]> = {
       logoUrl: 'https://assets.coingecko.com/coins/images/6319/small/usdc.png',
     },
   ],
-  // Sepolia Testnet
+  // Sepolia 테스트넷
   11155111: [
     {
       symbol: 'ETH',

@@ -1,6 +1,5 @@
 /**
- * Tori Wallet - Buy Crypto Service
- * 암호화폐 구매를 위한 외부 서비스 연동
+ * 암호화폐 구매 서비스 (외부 결제 연동)
  */
 
 import { Alert, Linking } from 'react-native';

@@ -1,6 +1,5 @@
 /**
- * Tori Wallet - Wallet Service
- * 니모닉/키 관리 (보안 저장소 분리)
+ * 니모닉/키 관리 서비스 (보안 저장소 연동)
  */
 
 import { Buffer } from '../utils/polyfills';
@@ -23,10 +22,9 @@ export interface StoredAccount {
 
 class WalletService {
   /**
-   * 새로운 니모닉 생성 (12 또는 24 단어)
+   * 새 니모닉 생성 (12 또는 24 단어)
    */
   generateMnemonic(wordCount: 12 | 24 = 12): string {
-    // 12 words = 128 bits, 24 words = 256 bits
     const strength = wordCount === 24 ? 256 : 128;
     return generateMnemonic(english, strength);
   }
@@ -53,20 +51,16 @@ class WalletService {
   }
 
   /**
-   * 니모닉을 암호화하여 안전하게 저장
+   * 니모닉 암호화 저장
    */
   async storeMnemonic(mnemonic: string, pin: string): Promise<void> {
     try {
-      // Keychain에 니모닉 저장
-      // 시뮬레이터 호환성을 위해 생체인증 없이 저장 (실제 앱에서는 생체인증 사용 권장)
+      // Keychain에 저장 (시뮬레이터 호환성을 위해 생체인증 옵션 제외)
       await Keychain.setGenericPassword(MNEMONIC_STORAGE_KEY, mnemonic, {
         service: MNEMONIC_STORAGE_KEY,
-        // 시뮬레이터에서는 생체인증이 없을 수 있으므로 옵션 제거
-        // 실제 배포 시에는 아래 주석 해제:
-        // accessControl: Keychain.ACCESS_CONTROL.BIOMETRY_ANY_OR_DEVICE_PASSCODE,
       });
 
-      // 암호화된 저장소에 백업 (PIN 암호화)
+      // 암호화된 저장소에 PIN 암호화 백업
       const encrypted = this.encryptWithPin(mnemonic, pin);
       await EncryptedStorage.setItem(MNEMONIC_STORAGE_KEY, encrypted);
     } catch (error) {
@@ -76,11 +70,11 @@ class WalletService {
   }
 
   /**
-   * 저장된 니모닉 불러오기 (생체인증 요청)
+   * 니모닉 조회 (생체인증 요청)
    */
   async retrieveMnemonic(): Promise<string | null> {
     try {
-      // 먼저 생체인증 없이 시도 (시뮬레이터 호환)
+      // 생체인증 없이 먼저 시도 (시뮬레이터 호환)
       const credentials = await Keychain.getGenericPassword({
         service: MNEMONIC_STORAGE_KEY,
       });
@@ -89,7 +83,7 @@ class WalletService {
         return credentials.password;
       }
 
-      // Keychain에 없으면 생체인증으로 다시 시도
+      // Keychain에 없으면 생체인증으로 재시도
       const credentialsWithAuth = await Keychain.getGenericPassword({
         service: MNEMONIC_STORAGE_KEY,
         authenticationPrompt: {

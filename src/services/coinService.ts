@@ -1,11 +1,10 @@
 /**
- * Tori Wallet - Coin Service
- * CoinGecko API를 사용한 코인 데이터 조회
+ * CoinGecko API 기반 코인 데이터 조회 서비스
  * Rate limit 대응: 캐시 + 쓰로틀링 + 백업 API
  */
 
 const COINGECKO_API = 'https://api.coingecko.com/api/v3';
-const COINCAP_API = 'https://api.coincap.io/v2'; // 백업 API
+const COINCAP_API = 'https://api.coincap.io/v2';
 
 export interface Coin {
   id: string;
@@ -515,9 +514,9 @@ class CoinService {
     const chainToCoingeckoId: Record<number, string> = {
       1: 'ethereum',
       137: 'matic-network',
-      42161: 'ethereum', // Arbitrum uses ETH
-      10: 'ethereum', // Optimism uses ETH
-      8453: 'ethereum', // Base uses ETH
+      42161: 'ethereum', // Arbitrum (ETH 사용)
+      10: 'ethereum', // Optimism (ETH 사용)
+      8453: 'ethereum', // Base (ETH 사용)
       11155111: 'ethereum', // Sepolia (testnet, show ETH price)
     };
 

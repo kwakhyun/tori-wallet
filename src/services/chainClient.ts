@@ -1,6 +1,5 @@
 /**
- * Tori Wallet - Chain Client (viem wrapper)
- * 체인 연결 및 RPC 호출 관리
+ * viem 기반 체인 클라이언트 (RPC 연결 관리)
  */
 
 import { createPublicClient, http, formatEther, parseEther } from 'viem';
@@ -28,7 +27,7 @@ interface ChainClientConfig {
   rpcUrl?: string;
 }
 
-// 안정적인 Public RPC URLs (무료, 레이트 리밋 여유)
+// 기본 Public RPC URLs (무료, 안정적)
 const DEFAULT_RPC_URLS: Record<number, string> = {
   1: 'https://eth.llamarpc.com',
   137: 'https://polygon-bor-rpc.publicnode.com',
@@ -38,7 +37,7 @@ const DEFAULT_RPC_URLS: Record<number, string> = {
   11155111: 'https://ethereum-sepolia-rpc.publicnode.com',
 };
 
-// 백업 RPC URLs (주 RPC 실패시 사용) - 추후 재시도 로직에서 사용 예정
+// 백업 RPC URLs (주 RPC 실패 시 사용 예정)
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 const FALLBACK_RPC_URLS: Record<number, string[]> = {
   1: [
@@ -70,7 +69,7 @@ class ChainClient {
       throw new Error(`Unsupported chain: ${chainId}`);
     }
 
-    // 제공된 rpcUrl이 없으면 안정적인 기본 RPC 사용
+    // rpcUrl이 없으면 기본 RPC 사용
     const finalRpcUrl = rpcUrl || DEFAULT_RPC_URLS[chainId];
 
     const client = createPublicClient({
@@ -169,15 +168,15 @@ class ChainClient {
 
   private handleError(error: unknown): Error {
     if (error instanceof Error) {
-      // RPC timeout
+      // RPC 타임아웃
       if (error.message.includes('timeout')) {
         return new ChainError('RPC_TIMEOUT', 'RPC 서버 응답 시간 초과');
       }
-      // Rate limit
+      // 요청 제한
       if (error.message.includes('429')) {
         return new ChainError('RATE_LIMIT', 'API 요청 한도 초과');
       }
-      // Insufficient funds
+      // 잔액 부족
       if (error.message.includes('insufficient funds')) {
         return new ChainError('INSUFFICIENT_FUNDS', '잔액 부족');
       }

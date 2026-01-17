@@ -1,6 +1,5 @@
 /**
- * Tori Wallet - Signing Service
- * WalletConnect 서명 요청 처리
+ * WalletConnect 서명 요청 처리 서비스
  */
 
 import { Buffer } from '../utils/polyfills';
@@ -24,7 +23,7 @@ import { createLogger } from '@/utils/logger';
 
 const logger = createLogger('Signing');
 
-// 지원하는 체인
+// 지원 체인
 const CHAINS = {
   1: mainnet,
   11155111: sepolia,
@@ -34,7 +33,7 @@ const CHAINS = {
   8453: base,
 } as const;
 
-// RPC URLs
+// 체인별 RPC URL
 const RPC_URLS: Record<number, string> = {
   1: 'https://ethereum-rpc.publicnode.com',
   11155111: 'https://ethereum-sepolia-rpc.publicnode.com',
@@ -58,7 +57,7 @@ interface TransactionParams {
 
 class SigningService {
   /**
-   * 트랜잭션 서명 및 전송 (eth_sendTransaction)
+   * 트랜잭션 서명 및 전송
    */
   async sendTransaction(
     params: TransactionParams,
@@ -80,9 +79,7 @@ class SigningService {
       transport: http(rpcUrl),
     });
 
-    // 트랜잭션 파라미터 변환
-    // Note: viem의 SendTransactionParameters는 복잡한 조건부 타입으로,
-    // gasPrice와 maxFeePerGas가 상호 배타적이어야 함
+    // 트랜잭션 파라미터 변환 (gasPrice와 maxFeePerGas는 상호 배타적)
     const txParams = {
       account,
       to: params.to as `0x${string}`,
@@ -102,8 +99,7 @@ class SigningService {
       nonce: params.nonce ? parseInt(params.nonce, 16) : undefined,
     };
 
-    // 트랜잭션 전송
-    // Type assertion needed due to viem's complex conditional types for gas pricing
+    // 트랜잭션 전송 (viem 조건부 타입으로 인한 타입 단언 필요)
     const hash = await walletClient.sendTransaction(
       txParams as Parameters<typeof walletClient.sendTransaction>[0],
     );
@@ -113,7 +109,7 @@ class SigningService {
   }
 
   /**
-   * 트랜잭션 서명만 (eth_signTransaction)
+   * 트랜잭션 서명만 수행
    */
   async signTransaction(
     params: TransactionParams,
@@ -152,13 +148,13 @@ class SigningService {
   }
 
   /**
-   * 개인 메시지 서명 (personal_sign)
+   * 개인 메시지 서명
    */
   async personalSign(message: string, _address: string): Promise<string> {
     const privateKey = await this.getPrivateKey();
     const account = privateKeyToAccount(privateKey as `0x${string}`);
 
-    // 메시지가 hex인 경우 변환
+    // hex 메시지인 경우 문자열로 변환
     let messageToSign: string;
     if (message.startsWith('0x')) {
       try {
@@ -177,13 +173,12 @@ class SigningService {
   }
 
   /**
-   * 일반 서명 (eth_sign) - 위험! 일반적으로 사용 안 함
+   * 일반 서명 (보안 주의 - raw hash 서명)
    */
   async ethSign(message: string, _address: string): Promise<string> {
     const privateKey = await this.getPrivateKey();
     const account = privateKeyToAccount(privateKey as `0x${string}`);
 
-    // eth_sign은 raw hash에 서명
     const signature = await account.signMessage({
       message: { raw: message as `0x${string}` },
     });
@@ -193,7 +188,7 @@ class SigningService {
   }
 
   /**
-   * 타입 데이터 서명 (eth_signTypedData_v4)
+   * 타입 데이터 서명
    */
   async signTypedData(
     typedData: string | object,
@@ -274,28 +269,24 @@ class SigningService {
   }
 
   /**
-   * 개인키 가져오기
+   * 개인키 조회 (니모닉에서 파생)
    */
   private async getPrivateKey(): Promise<string> {
-    // 니모닉에서 개인키 파생
     const mnemonic = await walletService.retrieveMnemonic();
 
     if (!mnemonic) {
       throw new Error('Failed to retrieve mnemonic. Please authenticate.');
     }
 
-    // 니모닉에서 직접 개인키 파생을 위해 viem 사용
     const hdAccount = mnemonicToAccount(mnemonic, {
       path: "m/44'/60'/0'/0/0" as const,
     });
 
-    // HDAccount의 getHdKey()를 통해 개인키 접근
     const privateKeyBytes = hdAccount.getHdKey().privateKey;
     if (!privateKeyBytes) {
       throw new Error('Failed to derive private key');
     }
 
-    // Uint8Array를 hex string으로 변환
     const privateKey = `0x${Buffer.from(privateKeyBytes).toString('hex')}`;
 
     return privateKey;

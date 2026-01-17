@@ -1,24 +1,22 @@
 /**
- * Tori Wallet - Swap Service
- * 0x API를 사용한 토큰 스왑
+ * 0x API 기반 토큰 스왑 서비스
  */
 
 import { formatUnits, parseUnits } from 'viem';
 
-// 0x API 엔드포인트
+// 체인별 0x API 엔드포인트 (Sepolia는 미지원)
 const ZEROX_API_URLS: Record<number, string> = {
   1: 'https://api.0x.org',
   137: 'https://polygon.api.0x.org',
   42161: 'https://arbitrum.api.0x.org',
   10: 'https://optimism.api.0x.org',
   8453: 'https://base.api.0x.org',
-  // Sepolia는 0x API 미지원 - 테스트용 mock 사용
 };
 
-// 체인별 네이티브 토큰 주소 (0x API에서 사용)
+// 네이티브 토큰 주소 (0x API 표준)
 const NATIVE_TOKEN_ADDRESS = '0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE';
 
-// 인기 토큰 목록 (체인별)
+// 체인별 스왑 가능 토큰 목록
 export const SWAP_TOKENS: Record<number, SwapToken[]> = {
   1: [
     {
@@ -172,7 +170,7 @@ export const SWAP_TOKENS: Record<number, SwapToken[]> = {
       logoUrl: 'https://assets.coingecko.com/coins/images/6319/small/usdc.png',
     },
   ],
-  // Sepolia 테스트넷 (테스트용)
+  // Sepolia 테스트넷
   11155111: [
     {
       symbol: 'ETH',
@@ -280,7 +278,7 @@ class SwapService {
   }
 
   /**
-   * 스왑 가격만 가져오기 (가스 계산 없이 빠름)
+   * 스왑 가격 조회 (가스 계산 제외, 빠른 조회용)
    */
   async getPrice(
     params: SwapParams,
@@ -340,7 +338,7 @@ class SwapService {
   }
 
   /**
-   * 체인에서 사용 가능한 토큰 목록
+   * 체인별 지원 토큰 목록 조회
    */
   getTokens(chainId: number): SwapToken[] {
     return SWAP_TOKENS[chainId] || [];
@@ -354,10 +352,9 @@ class SwapService {
   }
 
   /**
-   * 토큰 승인 필요 여부 확인
+   * 토큰 승인 필요 여부 (네이티브 토큰은 승인 불필요)
    */
   needsApproval(sellToken: SwapToken): boolean {
-    // 네이티브 토큰(ETH, MATIC 등)은 승인 불필요
     return sellToken.address !== NATIVE_TOKEN_ADDRESS;
   }
 

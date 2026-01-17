@@ -1,6 +1,5 @@
 /**
- * Tori Wallet - Transaction History Service
- * Etherscan API를 사용한 트랜잭션 내역 조회
+ * Blockscout API 기반 트랜잭션 내역 조회 서비스
  */
 
 export interface Transaction {

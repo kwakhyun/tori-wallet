@@ -1,11 +1,10 @@
 /**
- * Tori Wallet - Enhanced Swap Service
- * 고도화된 스왑 서비스 (멀티 DEX, 가격 비교, 최적 경로)
+ * 멀티 DEX 스왑 서비스 (가격 비교, 최적 경로 탐색)
  */
 
 import { formatUnits, parseUnits } from 'viem';
 
-// 0x API 엔드포인트
+// 체인별 0x API 엔드포인트
 const ZEROX_API_URLS: Record<number, string> = {
   1: 'https://api.0x.org',
   137: 'https://polygon.api.0x.org',
@@ -27,7 +26,7 @@ const WETH_ADDRESSES: Record<number, string> = {
   8453: '0x4200000000000000000000000000000000000006',
 };
 
-// 인기 토큰 목록 (체인별) - 확장
+// 체인별 스왑 가능 토큰 목록
 export const SWAP_TOKENS: Record<number, SwapToken[]> = {
   1: [
     {

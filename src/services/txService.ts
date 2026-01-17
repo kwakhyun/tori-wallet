@@ -1,6 +1,5 @@
 /**
- * Tori Wallet - Transaction Service
- * 전송 파이프라인 (검증→추정→서명→전파→추적)
+ * 트랜잭션 전송 서비스 (검증 → 추정 → 서명 → 전파 → 추적)
  */
 
 import { chainClient, ChainError } from './chainClient';

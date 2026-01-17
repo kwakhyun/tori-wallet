@@ -1,6 +1,5 @@
 /**
- * Tori Wallet - WalletConnect Service
- * dApp 연결 관리
+ * WalletConnect dApp 연결 관리 서비스
  */
 
 import { Core } from '@walletconnect/core';
@@ -11,8 +10,7 @@ import { createLogger } from '@/utils/logger';
 
 const logger = createLogger('WalletConnect');
 
-// WalletConnect Project ID
-// https://cloud.walletconnect.com 에서 무료로 발급받으세요
+// WalletConnect Project ID (https://cloud.walletconnect.com 에서 발급)
 const PROJECT_ID = 'eb14faeda8b62ae100939b41cdf136d8';
 
 const METADATA = {
@@ -61,6 +59,7 @@ class WCService {
       });
 
       this.web3wallet = await Web3Wallet.init({
+        // WalletConnect Core 버전 간 타입 불일치로 인한 타입 무시
         // @ts-expect-error - WalletConnect Core type mismatch between versions
         core: core,
         metadata: METADATA,
@@ -145,7 +144,7 @@ class WCService {
     try {
       const { id, params } = proposal;
 
-      // EIP155 계정 형식으로 변환
+      // EIP155 계정 형식 변환
       const accounts = chainIds.map(chainId => `eip155:${chainId}:${address}`);
       const chains = chainIds.map(chainId => `eip155:${chainId}`);
 
