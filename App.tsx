@@ -1,5 +1,5 @@
 /**
- * Tori Wallet - Main App
+ * 메인 앱 컴포넌트
  */
 
 import '@/utils/polyfills'; // 반드시 첫 번째로 import
