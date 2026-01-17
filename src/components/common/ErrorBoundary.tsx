@@ -1,6 +1,5 @@
 /**
- * Tori Wallet - Error Boundary
- * 앱 크래시 방지 및 복구 화면 표시
+ * 에러 경계 컴포넌트 (앱 크래시 방지 및 복구)
  */
 
 import React, { Component, ErrorInfo, ReactNode } from 'react';

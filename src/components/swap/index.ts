@@ -1,5 +1,5 @@
 /**
- * Tori Wallet - Swap Components
+ * 스왑 컴포넌트 내보내기
  */
 
 export { SwapReviewModal } from './SwapReviewModal';

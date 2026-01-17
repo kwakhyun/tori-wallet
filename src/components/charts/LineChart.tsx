@@ -1,5 +1,4 @@
 /**
- * Tori Wallet - Line Chart Component
  * 포트폴리오 가치 추이 라인 차트
  */
 

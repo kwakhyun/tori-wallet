@@ -1,6 +1,5 @@
 /**
- * Tori Wallet - QR Scanner Component
- * 카메라를 사용한 QR 코드 스캔 컴포넌트
+ * QR 코드 스캔 컴포넌트
  */
 
 import React, { useCallback, useEffect, useState } from 'react';

@@ -1,5 +1,4 @@
 /**
- * Tori Wallet - Pie Chart Component
  * 자산 배분 파이 차트
  */
 

@@ -1,5 +1,5 @@
 /**
- * Tori Wallet - Card Component
+ * 카드 컴포넌트
  */
 
 import React from 'react';

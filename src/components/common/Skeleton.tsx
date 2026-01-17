@@ -1,7 +1,5 @@
 /**
- * Tori Wallet - Skeleton UI Component
- * 데이터 로딩 시 표시되는 스켈레톤 UI
- * Shimmer 애니메이션 효과 적용
+ * 로딩 스켈레톤 UI 컴포넌트 (Shimmer 애니메이션)
  */
 
 import React, { useEffect, useRef } from 'react';

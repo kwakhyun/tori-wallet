@@ -1,5 +1,5 @@
 /**
- * Tori Wallet - Input Component
+ * 인풋 컴포넌트
  */
 
 import React, { useState } from 'react';

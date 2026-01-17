@@ -1,6 +1,5 @@
 /**
- * Tori Wallet - Sign Request Modal
- * WalletConnect 서명 요청 UI
+ * WalletConnect 서명 요청 모달
  */
 
 import React from 'react';

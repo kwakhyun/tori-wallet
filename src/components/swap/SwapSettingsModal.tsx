@@ -1,5 +1,4 @@
 /**
- * Tori Wallet - Swap Settings Modal
  * 스왑 고급 설정 모달
  */
 

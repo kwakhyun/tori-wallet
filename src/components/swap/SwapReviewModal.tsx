@@ -1,6 +1,5 @@
 /**
- * Tori Wallet - Swap Review Modal
- * 스왑 전 상세 확인 모달
+ * 스왑 확인 모달
  */
 
 import React from 'react';

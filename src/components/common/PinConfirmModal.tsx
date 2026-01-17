@@ -1,5 +1,4 @@
 /**
- * Tori Wallet - PIN Confirm Modal
  * 트랜잭션 전 PIN 확인 모달
  */
 
