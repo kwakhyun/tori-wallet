@@ -42,11 +42,7 @@ module.exports = {
     simulator: {
       type: 'ios.simulator',
       device: {
-        // GitHub Actions macos-latest에서 사용 가능한 시뮬레이터
-        // 환경변수로 오버라이드 가능: DETOX_IOS_DEVICE
-        type:
-          process.env.DETOX_IOS_DEVICE ||
-          (process.env.CI ? 'iPhone 17' : 'iPhone 15 Pro'),
+        type: process.env.DETOX_IOS_DEVICE || 'iPhone 15 Pro',
       },
     },
     attached: {
@@ -58,8 +54,7 @@ module.exports = {
     emulator: {
       type: 'android.emulator',
       device: {
-        // CI 환경에서는 GitHub Actions에서 생성한 에뮬레이터 사용
-        avdName: process.env.CI ? 'detox_pixel_6' : 'Pixel_4_API_34',
+        avdName: process.env.DETOX_ANDROID_AVD || 'Pixel_4_API_34',
       },
     },
   },

@@ -1,7 +1,5 @@
 # Tori Wallet 🦊
 
-[![CI](https://github.com/kwakhyun/tori-wallet/actions/workflows/ci.yml/badge.svg)](https://github.com/kwakhyun/tori-wallet/actions/workflows/ci.yml)
-[![E2E Tests](https://github.com/kwakhyun/tori-wallet/actions/workflows/e2e.yml/badge.svg)](https://github.com/kwakhyun/tori-wallet/actions/workflows/e2e.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![React Native](https://img.shields.io/badge/React%20Native-0.83-blue.svg)](https://reactnative.dev/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.0-blue.svg)](https://www.typescriptlang.org/)
@@ -132,7 +130,6 @@ Tori Wallet은 사용자 친화적인 Web3 경험을 제공하기 위해 개발�
 | **네비게이션**  | React Navigation 7                                    |
 | **보안 저장소** | react-native-keychain, react-native-encrypted-storage |
 | **테스트**      | Jest, React Testing Library, Detox (E2E)              |
-| **CI/CD**       | GitHub Actions                                        |
 
 ### 기술 선택 이유
 
@@ -298,9 +295,82 @@ yarn e2e:android       # E2E 테스트 (Android)
 
 | 테스트 유형     | 범위                              | 테스트 수 |
 | --------------- | --------------------------------- | --------- |
-| **단위 테스트** | 유틸리티, 스토어, 서비스          | 50+       |
-| **통합 테스트** | 커스텀 훅, 컴포넌트               | 20+       |
+| **단위 테스트** | 유틸리티, 스토어, 서비스          | 1,200+    |
+| **통합 테스트** | 커스텀 훅, 컴포넌트               | 50+       |
 | **E2E 테스트**  | 온보딩, 토큰 전송, 지갑 잠금/해제 | 36 케이스 |
+
+### 테스트 커버리지
+
+**전체 결과: 74개 테스트 스위트, 1,225개 테스트 통과** ✅
+
+#### 📦 서비스 레이어 (Services)
+
+| 파일                         | Statements | Branches  | Functions  | Lines      |
+| ---------------------------- | ---------- | --------- | ---------- | ---------- |
+| buyService.ts                | 100% ✅    | 100% ✅   | 100% ✅    | 100% ✅    |
+| chainClient.ts               | 100% ✅    | 100% ✅   | 100% ✅    | 100% ✅    |
+| coinService.ts               | 83.75%     | 64.81%    | 93.1%      | 84.07%     |
+| enhancedSwapService.ts       | 96.32% ✅  | 89.18% ✅ | 100% ✅    | 96.12% ✅  |
+| portfolioAnalyticsService.ts | 98.98% ✅  | 96.77% ✅ | 100% ✅    | 98.83% ✅  |
+| signingService.ts            | 97.5% ✅   | 97.61% ✅ | 100% ✅    | 97.5% ✅   |
+| swapService.ts               | 92.59% ✅  | 85.71% ✅ | 100% ✅    | 92% ✅     |
+| tokenService.ts              | 94.11% ✅  | 83.33% ✅ | 100% ✅    | 96.77% ✅  |
+| transactionHistory.ts        | 92.15% ✅  | 87.5% ✅  | 100% ✅    | 93.87% ✅  |
+| txService.ts                 | 98.46% ✅  | 100% ✅   | 100% ✅    | 98.38% ✅  |
+| walletService.ts             | 100% ✅    | 95% ✅    | 100% ✅    | 100% ✅    |
+| wcService.ts                 | 93.67% ✅  | 77.77%    | 100% ✅    | 94.66% ✅  |
+| **전체 서비스**              | **94.58%** | **84.7%** | **98.83%** | **94.86%** |
+
+#### 🗄️ 상태 관리 (Store)
+
+| 파일             | Statements | Branches   | Functions  | Lines      |
+| ---------------- | ---------- | ---------- | ---------- | ---------- |
+| securityStore.ts | 100% ✅    | 100% ✅    | 100% ✅    | 100% ✅    |
+| swapStore.ts     | 92.85% ✅  | 63.15%     | 93.75% ✅  | 94.11% ✅  |
+| themeStore.ts    | 84.61% ✅  | 83.33% ✅  | 87.5% ✅   | 84.21% ✅  |
+| walletStore.ts   | 100% ✅    | 100% ✅    | 100% ✅    | 100% ✅    |
+| **전체 스토어**  | **93.33%** | **76.74%** | **96.15%** | **93.22%** |
+
+#### 🛠️ 유틸리티 (Utils)
+
+| 파일          | Statements | Branches   | Functions | Lines      |
+| ------------- | ---------- | ---------- | --------- | ---------- |
+| address.ts    | 100% ✅    | 100% ✅    | 100% ✅   | 100% ✅    |
+| error.ts      | 100% ✅    | 96.77% ✅  | 100% ✅   | 100% ✅    |
+| format.ts     | 100% ✅    | 100% ✅    | 100% ✅   | 100% ✅    |
+| logger.ts     | 98.07% ✅  | 86.11% ✅  | 100% ✅   | 98.03% ✅  |
+| **전체 유틸** | **89.04%** | **86.29%** | **90%**   | **88.65%** |
+
+#### 🧩 컴포넌트 (Components)
+
+| 파일                 | Statements | Branches   | Functions  | Lines      |
+| -------------------- | ---------- | ---------- | ---------- | ---------- |
+| Button.tsx           | 100% ✅    | 100% ✅    | 100% ✅    | 100% ✅    |
+| Card.tsx             | 100% ✅    | 100% ✅    | 100% ✅    | 100% ✅    |
+| ErrorBoundary.tsx    | 100% ✅    | 100% ✅    | 100% ✅    | 100% ✅    |
+| Input.tsx            | 100% ✅    | 100% ✅    | 100% ✅    | 100% ✅    |
+| Logo.tsx             | 100% ✅    | 100% ✅    | 100% ✅    | 100% ✅    |
+| Skeleton.tsx         | 100% ✅    | 100% ✅    | 100% ✅    | 100% ✅    |
+| LineChart.tsx        | 100% ✅    | 92% ✅     | 100% ✅    | 100% ✅    |
+| PieChart.tsx         | 91.3% ✅   | 100% ✅    | 85.71% ✅  | 90.47% ✅  |
+| PinConfirmModal.tsx  | 100% ✅    | 100% ✅    | 100% ✅    | 100% ✅    |
+| SignRequestModal.tsx | 88.88% ✅  | 75%        | 88.23% ✅  | 90.69% ✅  |
+| SwapReviewModal.tsx  | 93.47% ✅  | 73.33%     | 100% ✅    | 93.18% ✅  |
+| **전체 컴포넌트**    | **94.73%** | **85.58%** | **92.68%** | **95.18%** |
+
+#### 📱 스크린 (Screens) - 주요 화면
+
+| 파일                   | Statements | Branches  | Functions | Lines     |
+| ---------------------- | ---------- | --------- | --------- | --------- |
+| HomeScreen.tsx         | 95.18% ✅  | 66.66%    | 96.25% ✅ | 96.27% ✅ |
+| ActivityScreen.tsx     | 82.85% ✅  | 50%       | 85.96% ✅ | 85.6% ✅  |
+| TokenDetailScreen.tsx  | 95.23% ✅  | 40.62%    | 100% ✅   | 100% ✅   |
+| ReceiveTokenScreen.tsx | 87.91% ✅  | 33.33%    | 90.56% ✅ | 87.77% ✅ |
+| SwapHistoryScreen.tsx  | 90.17% ✅  | 67.85%    | 84.44% ✅ | 90.47% ✅ |
+| WelcomeScreen.tsx      | 100% ✅    | 100% ✅   | 100% ✅   | 100% ✅   |
+| UnlockScreen.tsx       | 98.87% ✅  | 91.66% ✅ | 100% ✅   | 100% ✅   |
+
+> 💡 ✅ 표시는 80% 이상 커버리지 달성을 의미합니다.
 
 ## 🔧 Environment Variables
 
@@ -323,55 +393,6 @@ WALLETCONNECT_PROJECT_ID=your_project_id
 | `yarn lint`      | ESLint 검사                 |
 | `yarn typecheck` | TypeScript 타입 검사        |
 | `yarn clean`     | 캐시 및 node_modules 정리   |
-
-## 🚀 CI/CD 배포
-
-GitHub Actions를 통해 자동 배포가 설정되어 있습니다.
-
-### 워크플로우
-
-| Workflow    | 트리거                  | 설명                   |
-| ----------- | ----------------------- | ---------------------- |
-| **CI**      | PR, Push (main/develop) | 린트, 타입체크, 테스트 |
-| **E2E**     | Push (main), Daily      | Detox E2E 테스트       |
-| **Release** | Tag (v\*), Manual       | 스토어 배포            |
-
-### 배포 방법
-
-```bash
-# 1. 버전 태그 생성 및 푸시
-git tag v1.0.0
-git push origin v1.0.0
-
-# 2. 자동으로 App Store / Play Store에 배포됨
-```
-
-### 수동 배포
-
-GitHub Actions → Release → Run workflow에서:
-
-- **Platform**: android / ios / both
-- **Track**: internal / alpha / beta / production
-
-### 필요한 Secrets
-
-GitHub Repository → Settings → Secrets에서 설정:
-
-| Secret                                  | 설명                             |
-| --------------------------------------- | -------------------------------- |
-| `WALLETCONNECT_PROJECT_ID`              | WalletConnect 프로젝트 ID        |
-| `ANDROID_KEYSTORE_BASE64`               | Android 릴리즈 키스토어 (base64) |
-| `ANDROID_KEYSTORE_PASSWORD`             | 키스토어 비밀번호                |
-| `ANDROID_KEY_ALIAS`                     | 키 별칭                          |
-| `ANDROID_KEY_PASSWORD`                  | 키 비밀번호                      |
-| `GOOGLE_PLAY_SERVICE_ACCOUNT_JSON`      | Google Play API 서비스 계정      |
-| `APPLE_TEAM_ID`                         | Apple Developer Team ID          |
-| `APP_STORE_CONNECT_API_KEY_ID`          | App Store Connect API Key ID     |
-| `APP_STORE_CONNECT_API_ISSUER_ID`       | App Store Connect Issuer ID      |
-| `APP_STORE_CONNECT_API_KEY_CONTENT`     | API Key 내용 (.p8)               |
-| `IOS_DISTRIBUTION_CERTIFICATE_BASE64`   | iOS 배포 인증서 (base64)         |
-| `IOS_DISTRIBUTION_CERTIFICATE_PASSWORD` | 인증서 비밀번호                  |
-| `IOS_PROVISIONING_PROFILE_BASE64`       | 프로비저닝 프로파일 (base64)     |
 
 ## 🤝 Contributing
 
