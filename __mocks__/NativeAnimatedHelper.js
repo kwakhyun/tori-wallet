@@ -1,6 +1,5 @@
 /**
  * Mock for react-native/Libraries/Animated/NativeAnimatedHelper
- * CI 환경에서 모듈을 찾지 못하는 문제 해결
  */
 
 module.exports = {

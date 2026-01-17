@@ -1,5 +1,5 @@
 /**
- * Tori Wallet - Jest Setup Files (runs before preset)
+ * Jest 설정 파일 (preset 실행 전)
  * react-native preset이 로드되기 전에 실행되는 설정
  */
 

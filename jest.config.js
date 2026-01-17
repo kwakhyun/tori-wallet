@@ -1,8 +1,6 @@
 module.exports = {
   preset: 'react-native',
-  // NativeAnimatedHelper mock을 가장 먼저 설정 (preset 로드 전)
   setupFiles: ['<rootDir>/jest.setupFiles.js'],
-  // setupFilesAfterEnv에서 설정 파일 로드 (moduleNameMapper 적용 후 실행)
   setupFilesAfterEnv: [
     '@testing-library/jest-native/extend-expect',
     './jest.setup.js',
@@ -10,11 +8,11 @@ module.exports = {
   fakeTimers: {
     enableGlobally: false,
   },
-  // CI 환경에서 안정성을 위한 설정
-  testTimeout: 60000,
-  maxWorkers: process.env.CI ? 2 : '50%',
+  testTimeout: 15000,
+  maxWorkers: 2,
+  forceExit: true,
   moduleNameMapper: {
-    // NativeAnimatedHelper mock (CI 환경 호환) - RN 0.83+ 경로 변경 대응
+    // NativeAnimatedHelper mock - RN 0.83+ 경로 변경 대응
     '^react-native/Libraries/Animated/NativeAnimatedHelper$':
       '<rootDir>/__mocks__/NativeAnimatedHelper.js',
     '^react-native/src/private/animated/NativeAnimatedHelper$':

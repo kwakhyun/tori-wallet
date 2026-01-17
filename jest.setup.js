@@ -1,9 +1,8 @@
 /**
- * Tori Wallet - Jest Setup
+ * Jest 설정
  * 테스트 환경 설정
  */
 
-// 기본 타임아웃 증가 (CI 환경에서 안정성 확보)
 jest.setTimeout(60000);
 
 // @testing-library/react-native 자동 cleanup 비활성화
