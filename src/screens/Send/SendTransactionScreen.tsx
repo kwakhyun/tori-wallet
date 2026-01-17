@@ -1,6 +1,5 @@
 /**
- * Tori Wallet - Send Transaction Screen
- * ETH 전송 화면 - 실제 트랜잭션 전송
+ * ETH 전송 화면
  */
 
 import React, { useState, useCallback, useEffect } from 'react';

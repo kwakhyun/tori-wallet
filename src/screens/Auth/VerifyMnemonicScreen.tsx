@@ -1,6 +1,5 @@
 /**
- * Tori Wallet - Verify Mnemonic Screen
- * 니모닉 검증 화면 - 사용자가 올바르게 백업했는지 확인
+ * 니모닉 검증 화면 (백업 확인)
  */
 
 import React, { useState, useMemo, useCallback } from 'react';

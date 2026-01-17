@@ -1,6 +1,5 @@
 /**
- * Tori Wallet - Unlock Screen
- * 잠금 해제를 위한 PIN 입력 화면
+ * 잠금 해제 PIN 입력 화면
  */
 
 import React, { useState, useCallback } from 'react';

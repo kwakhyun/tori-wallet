@@ -1,6 +1,5 @@
 /**
- * Tori Wallet - Coin Detail Screen
- * 코인 상세 화면 - 가격 정보, 시세 그래프, 구매 버튼
+ * 코인 상세 화면 (가격, 시세 그래프, 구매)
  */
 
 import React, { useState, useCallback, useEffect } from 'react';

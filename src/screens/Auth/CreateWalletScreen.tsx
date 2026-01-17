@@ -1,6 +1,5 @@
 /**
- * Tori Wallet - Create Wallet Screen
- * 새 지갑 생성 - 니모닉 생성 화면
+ * 새 지갑 생성 화면 (니모닉 생성)
  */
 
 import React, { useState, useCallback } from 'react';

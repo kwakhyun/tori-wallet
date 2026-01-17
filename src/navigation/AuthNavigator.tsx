@@ -1,5 +1,5 @@
 /**
- * Tori Wallet - Auth Navigator
+ * 인증 네비게이터
  */
 
 import React from 'react';

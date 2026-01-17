@@ -1,6 +1,5 @@
 /**
- * Tori Wallet - Settings Screen
- * 설정 화면 - 네트워크 전환, 지갑 관리 등
+ * 설정 화면 (네트워크 전환, 지갑 관리)
  */
 
 import React, { useCallback, useState, useEffect } from 'react';

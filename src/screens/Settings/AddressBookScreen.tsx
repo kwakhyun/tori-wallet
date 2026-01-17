@@ -1,6 +1,5 @@
 /**
- * Tori Wallet - Address Book Screen
- * 주소록 관리 화면 (Realm 기반)
+ * 주소록 관리 화면
  */
 
 import React, { useState, useCallback, useEffect } from 'react';

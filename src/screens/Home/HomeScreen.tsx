@@ -1,6 +1,5 @@
 /**
- * Tori Wallet - Home Screen
- * 메인 홈 화면 - 실제 잔액 조회 및 토큰 전송
+ * 홈 화면 (잔액 조회, 토큰 전송)
  */
 
 import React, { useCallback, useState, useEffect } from 'react';

@@ -1,6 +1,5 @@
 /**
- * Tori Wallet - Receive Token Screen
- * 토큰 수신 화면 - QR 코드 및 주소 표시
+ * 토큰 수신 화면 (QR 코드 및 주소 표시)
  */
 
 import React, { useCallback } from 'react';

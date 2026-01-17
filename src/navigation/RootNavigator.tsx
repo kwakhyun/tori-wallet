@@ -1,5 +1,5 @@
 /**
- * Tori Wallet - Root Navigator
+ * 루트 네비게이터
  */
 
 import React from 'react';

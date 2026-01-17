@@ -1,5 +1,4 @@
 /**
- * Tori Wallet - WalletConnect Screen
  * dApp 연결 관리 화면
  */
 

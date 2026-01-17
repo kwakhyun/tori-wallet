@@ -1,5 +1,4 @@
 /**
- * Tori Wallet - Swap History Screen
  * 스왑 내역 화면
  */
 

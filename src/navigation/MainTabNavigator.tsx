@@ -1,5 +1,5 @@
 /**
- * Tori Wallet - Main Tab Navigator
+ * 메인 탭 네비게이터
  */
 
 import React from 'react';

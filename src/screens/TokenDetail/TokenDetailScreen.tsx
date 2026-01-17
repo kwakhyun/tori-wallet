@@ -1,6 +1,5 @@
 /**
- * Tori Wallet - Token Detail Screen
- * 토큰 상세 화면 - 잔액, 가격 정보, 전송/수신 기능
+ * 토큰 상세 화면 (잔액, 가격, 전송/수신)
  */
 
 import React, { useCallback } from 'react';

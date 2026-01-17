@@ -1,5 +1,5 @@
 /**
- * Tori Wallet - Welcome Screen
+ * 웰컴 화면
  */
 
 import React from 'react';

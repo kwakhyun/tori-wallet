@@ -1,6 +1,5 @@
 /**
- * Tori Wallet - Security Settings Screen
- * 보안 설정 화면 - 자동 잠금, 트랜잭션 보안 설정
+ * 보안 설정 화면 (자동 잠금, 트랜잭션 보안)
  */
 
 import React, { useState, useCallback } from 'react';

@@ -1,5 +1,4 @@
 /**
- * Tori Wallet - Backup Mnemonic Screen
  * 니모닉 백업 화면
  */
 

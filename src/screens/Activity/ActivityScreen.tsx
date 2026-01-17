@@ -1,11 +1,5 @@
 /**
- * Tori Wallet - Activity Screen
- * 트랜잭션 내역 조회 (Realm 캐시 기반)
- *
- * 개선사항:
- * - Realm 캐시에서 먼저 로드 (빠른 초기 로딩)
- * - 백그라운드에서 API 동기화
- * - 오프라인에서도 캐시된 데이터 표시
+ * 트랜잭션 내역 화면 (Realm 캐시 기반, 오프라인 지원)
  */
 
 import React, { useCallback, useEffect, useState } from 'react';

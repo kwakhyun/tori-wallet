@@ -1,5 +1,4 @@
 /**
- * Tori Wallet - Swap Screen
  * 토큰 스왑 화면
  */
 

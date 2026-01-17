@@ -1,6 +1,5 @@
 /**
- * Tori Wallet - Logo Preview Screen
- * 로고 컴포넌트 미리보기 (개발용)
+ * 로고 미리보기 화면 (개발용)
  */
 
 import React from 'react';

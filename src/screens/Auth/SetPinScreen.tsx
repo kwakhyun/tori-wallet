@@ -1,5 +1,4 @@
 /**
- * Tori Wallet - Set Pin Screen
  * PIN 설정 및 지갑 생성 완료 화면
  */
 

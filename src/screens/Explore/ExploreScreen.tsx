@@ -1,6 +1,5 @@
 /**
- * Tori Wallet - Explore Screen
- * 코인 탐색 화면 - 인기 코인 목록, 검색 기능
+ * 코인 탐색 화면 (인기 코인 목록, 검색)
  */
 
 import React, { useState, useCallback, useEffect } from 'react';

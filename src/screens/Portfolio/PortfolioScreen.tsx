@@ -1,6 +1,5 @@
 /**
- * Tori Wallet - Portfolio Screen
- * 토큰 목록 및 자산 현황 (차트/분석 포함)
+ * 포트폴리오 화면 (토큰 목록, 자산 현황, 차트)
  */
 
 import React, { useState, useEffect, useCallback } from 'react';

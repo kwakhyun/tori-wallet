@@ -1,6 +1,5 @@
 /**
- * Tori Wallet - Import Wallet Screen
- * 니모닉으로 기존 지갑 가져오기
+ * 지갑 가져오기 화면 (니모닉 복원)
  */
 
 import React, { useState, useCallback, useRef, useMemo } from 'react';
