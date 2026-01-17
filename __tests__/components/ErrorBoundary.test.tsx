@@ -1,5 +1,5 @@
 /**
- * Tori Wallet - ErrorBoundary Component Tests
+ * 에러 경계 컴포넌트 테스트
  */
 
 import React from 'react';

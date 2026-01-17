@@ -1,5 +1,5 @@
 /**
- * Tori Wallet - ExploreScreen Tests
+ * ExploreScreen 테스트
  */
 
 import React from 'react';

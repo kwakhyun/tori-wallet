@@ -1,5 +1,5 @@
 /**
- * Tori Wallet - MSW Mock Handlers
+ * MSW Mock 핸들러
  * API 모킹을 위한 핸들러 정의
  */
 
@@ -69,7 +69,7 @@ interface ErrorResponse {
   error: string;
 }
 
-// Mock wallet data
+// 모킹 지갑 데이터
 const mockWalletBalance: WalletBalance = {
   balance: '1.5',
   balanceWei: '1500000000000000000',
@@ -125,29 +125,29 @@ const mockGasEstimate: GasEstimate = {
 };
 
 export const handlers = [
-  // Balance API
+  // 잔액 API
   http.get('*/api/v1/balance/:address', () =>
     HttpResponse.json<WalletBalance>(mockWalletBalance),
   ),
 
-  // Tokens API
+  // 토큰 API
   http.get('*/api/v1/tokens/:address', () =>
     HttpResponse.json<{ tokens: Token[] }>({ tokens: mockTokens }),
   ),
 
-  // Transactions API
+  // 트랜잭션 API
   http.get('*/api/v1/transactions/:address', () =>
     HttpResponse.json<{ transactions: Transaction[] }>({
       transactions: mockTransactions,
     }),
   ),
 
-  // Gas Estimate API
+  // 가스 예측 API
   http.post('*/api/v1/gas/estimate', () =>
     HttpResponse.json<GasEstimate>(mockGasEstimate),
   ),
 
-  // Send Transaction API
+  // 트랜잭션 전송 API
   http.post('*/api/v1/transactions/send', async ({ request }) => {
     const body = (await request.json()) as SendTxRequest;
     return HttpResponse.json<SendTxResponse>({
@@ -159,7 +159,7 @@ export const handlers = [
     });
   }),
 
-  // Price API (CoinGecko-like)
+  // 가격 API (CoinGecko 스타일)
   http.get('*/api/v3/simple/price', () =>
     HttpResponse.json<PriceResponse>({
       ethereum: {
@@ -169,7 +169,7 @@ export const handlers = [
     }),
   ),
 
-  // ENS Resolution API
+  // ENS 해석 API
   http.get<{ name: string }>('*/api/v1/ens/resolve/:name', ({ params }) => {
     const { name } = params;
     if (name === 'vitalik.eth') {
@@ -185,7 +185,7 @@ export const handlers = [
   }),
 ];
 
-// Error handlers for testing error scenarios
+// 에러 시나리오 테스트용 핸들러
 export const errorHandlers = [
   http.get('*/api/v1/balance/:address', () =>
     HttpResponse.json<ErrorResponse>(
@@ -202,7 +202,7 @@ export const errorHandlers = [
   ),
 ];
 
-// Slow response handlers for testing loading states
+// 로딩 상태 테스트용 느린 응답 핸들러
 export const slowHandlers = [
   http.get('*/api/v1/balance/:address', async () => {
     await new Promise(resolve => setTimeout(resolve, 3000));

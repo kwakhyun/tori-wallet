@@ -1,5 +1,5 @@
 /**
- * Tori Wallet - Address Utils Tests
+ * 주소 유틸 테스트
  * 주소 관련 유틸리티 함수 테스트
  */
 

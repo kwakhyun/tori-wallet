@@ -1,5 +1,5 @@
 /**
- * Tori Wallet - SecuritySettingsScreen Tests
+ * SecuritySettingsScreen 테스트
  * 보안 설정 화면 테스트
  */
 

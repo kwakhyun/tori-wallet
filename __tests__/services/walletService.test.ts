@@ -1,11 +1,10 @@
 /**
- * Tori Wallet - Wallet Service Tests
- * 지갑 서비스 핵심 기능 테스트
+ * 지갑 서비스 테스트
  */
 
 import { walletService } from '../../src/services/walletService';
 
-// Mock react-native-keychain
+// react-native-keychain 모킹
 jest.mock('react-native-keychain', () => ({
   setGenericPassword: jest.fn().mockResolvedValue(true),
   getGenericPassword: jest.fn().mockResolvedValue({
@@ -23,7 +22,7 @@ jest.mock('react-native-keychain', () => ({
   },
 }));
 
-// Mock react-native-encrypted-storage
+// react-native-encrypted-storage 모킹
 jest.mock('react-native-encrypted-storage', () => ({
   setItem: jest.fn().mockResolvedValue(true),
   getItem: jest.fn().mockResolvedValue(null),

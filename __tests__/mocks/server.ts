@@ -1,5 +1,5 @@
 /**
- * Tori Wallet - MSW Server Setup
+ * MSW 서버 설정
  * React Native 테스트용 MSW 서버 설정
  *
  * 참고: MSW 2.x에서 React Native는 msw/native를 사용해야 하지만,

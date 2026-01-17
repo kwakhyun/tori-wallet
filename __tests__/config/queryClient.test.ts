@@ -1,5 +1,5 @@
 /**
- * Tori Wallet - Query Client Tests
+ * Query Client 테스트
  * React Query 클라이언트 설정 테스트
  */
 
@@ -7,6 +7,9 @@ const mockAddEventListener = jest.fn(() => jest.fn());
 const mockSetOnline = jest.fn();
 const mockSetFocused = jest.fn();
 const mockAppStateAddEventListener = jest.fn(() => ({ remove: jest.fn() }));
+
+// QueryClient 호출 추적하여 옵션 캡처
+let capturedQueryClientOptions: any = null;
 
 jest.mock('@react-native-community/netinfo', () => ({
   addEventListener: mockAddEventListener,
@@ -19,15 +22,18 @@ jest.mock('react-native', () => ({
 }));
 
 jest.mock('@tanstack/react-query', () => ({
-  QueryClient: jest.fn().mockImplementation(() => ({
-    setDefaultOptions: jest.fn(),
-    getQueryCache: jest.fn(() => ({
-      subscribe: jest.fn(() => jest.fn()),
-    })),
-    getMutationCache: jest.fn(() => ({
-      subscribe: jest.fn(() => jest.fn()),
-    })),
-  })),
+  QueryClient: jest.fn().mockImplementation(options => {
+    capturedQueryClientOptions = options;
+    return {
+      setDefaultOptions: jest.fn(),
+      getQueryCache: jest.fn(() => ({
+        subscribe: jest.fn(() => jest.fn()),
+      })),
+      getMutationCache: jest.fn(() => ({
+        subscribe: jest.fn(() => jest.fn()),
+      })),
+    };
+  }),
   onlineManager: {
     setOnline: mockSetOnline,
   },
@@ -36,9 +42,15 @@ jest.mock('@tanstack/react-query', () => ({
   },
 }));
 
+// errorReporter 모킹
+jest.mock('../../src/utils/errorReporter', () => ({
+  captureException: jest.fn(),
+}));
+
 describe('QueryClient Configuration', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    capturedQueryClientOptions = null;
   });
 
   describe('setupNetworkListener', () => {
@@ -166,27 +178,335 @@ describe('QueryClient Configuration', () => {
     });
   });
 
+  describe('createQueryClient - retry logic', () => {
+    beforeEach(() => {
+      jest.resetModules();
+    });
+
+    it('should configure retry to return false after 3 failures', () => {
+      const module = require('../../src/config/queryClient');
+      module.createQueryClient();
+
+      expect(capturedQueryClientOptions).toBeDefined();
+      const retryFn = capturedQueryClientOptions.defaultOptions.queries.retry;
+
+      // After 3 failures, should return false
+      expect(retryFn(3, new Error('network error'))).toBe(false);
+      expect(retryFn(4, new Error('network error'))).toBe(false);
+    });
+
+    it('should retry on network errors', () => {
+      const module = require('../../src/config/queryClient');
+      module.createQueryClient();
+
+      const retryFn = capturedQueryClientOptions.defaultOptions.queries.retry;
+
+      // 네트워크 에러는 재시도해야 함
+      expect(retryFn(0, new Error('network error'))).toBe(true);
+      expect(retryFn(1, new Error('Network connection failed'))).toBe(true);
+      expect(retryFn(2, new Error('fetch failed'))).toBe(true);
+    });
+
+    it('should retry on timeout errors', () => {
+      const module = require('../../src/config/queryClient');
+      module.createQueryClient();
+
+      const retryFn = capturedQueryClientOptions.defaultOptions.queries.retry;
+
+      expect(retryFn(0, new Error('Request timeout'))).toBe(true);
+      expect(retryFn(1, new Error('ETIMEDOUT'))).toBe(true);
+    });
+
+    it('should retry on connection errors', () => {
+      const module = require('../../src/config/queryClient');
+      module.createQueryClient();
+
+      const retryFn = capturedQueryClientOptions.defaultOptions.queries.retry;
+
+      expect(retryFn(0, new Error('ECONNREFUSED'))).toBe(true);
+      expect(retryFn(1, new Error('connection refused'))).toBe(true);
+    });
+
+    it('should retry on rate limit errors', () => {
+      const module = require('../../src/config/queryClient');
+      module.createQueryClient();
+
+      const retryFn = capturedQueryClientOptions.defaultOptions.queries.retry;
+
+      expect(retryFn(0, new Error('rate limit exceeded'))).toBe(true);
+      expect(retryFn(1, new Error('Error 429: Too Many Requests'))).toBe(true);
+    });
+
+    it('should retry on 5xx server errors', () => {
+      const module = require('../../src/config/queryClient');
+      module.createQueryClient();
+
+      const retryFn = capturedQueryClientOptions.defaultOptions.queries.retry;
+
+      expect(retryFn(0, new Error('500 Internal Server Error'))).toBe(true);
+      expect(retryFn(1, new Error('502 Bad Gateway'))).toBe(true);
+      expect(retryFn(2, new Error('503 Service Unavailable'))).toBe(true);
+    });
+
+    it('should retry on HTTP status object with 5xx', () => {
+      const module = require('../../src/config/queryClient');
+      module.createQueryClient();
+
+      const retryFn = capturedQueryClientOptions.defaultOptions.queries.retry;
+
+      expect(retryFn(0, { status: 500 })).toBe(true);
+      expect(retryFn(1, { status: 502 })).toBe(true);
+      expect(retryFn(2, { status: 503 })).toBe(true);
+    });
+
+    it('should retry on HTTP status 429', () => {
+      const module = require('../../src/config/queryClient');
+      module.createQueryClient();
+
+      const retryFn = capturedQueryClientOptions.defaultOptions.queries.retry;
+
+      expect(retryFn(0, { status: 429 })).toBe(true);
+    });
+
+    it('should NOT retry on 4xx client errors (except 429)', () => {
+      const module = require('../../src/config/queryClient');
+      module.createQueryClient();
+
+      const retryFn = capturedQueryClientOptions.defaultOptions.queries.retry;
+
+      expect(retryFn(0, { status: 400 })).toBe(false);
+      expect(retryFn(0, { status: 401 })).toBe(false);
+      expect(retryFn(0, { status: 403 })).toBe(false);
+      expect(retryFn(0, { status: 404 })).toBe(false);
+    });
+
+    it('should NOT retry on non-retryable errors', () => {
+      const module = require('../../src/config/queryClient');
+      module.createQueryClient();
+
+      const retryFn = capturedQueryClientOptions.defaultOptions.queries.retry;
+
+      expect(retryFn(0, new Error('Invalid input'))).toBe(false);
+      expect(retryFn(0, new Error('User not found'))).toBe(false);
+      expect(retryFn(0, new Error('Permission denied'))).toBe(false);
+    });
+
+    it('should NOT retry on non-Error objects without status', () => {
+      const module = require('../../src/config/queryClient');
+      module.createQueryClient();
+
+      const retryFn = capturedQueryClientOptions.defaultOptions.queries.retry;
+
+      expect(retryFn(0, 'string error')).toBe(false);
+      expect(retryFn(0, 123)).toBe(false);
+      expect(retryFn(0, null)).toBe(false);
+      expect(retryFn(0, undefined)).toBe(false);
+      expect(retryFn(0, { message: 'no status' })).toBe(false);
+    });
+
+    it('should configure mutation retry to return false after 2 failures', () => {
+      const module = require('../../src/config/queryClient');
+      module.createQueryClient();
+
+      const retryFn = capturedQueryClientOptions.defaultOptions.mutations.retry;
+
+      expect(retryFn(2, new Error('network error'))).toBe(false);
+      expect(retryFn(3, new Error('network error'))).toBe(false);
+    });
+
+    it('should retry mutations on retryable errors', () => {
+      const module = require('../../src/config/queryClient');
+      module.createQueryClient();
+
+      const retryFn = capturedQueryClientOptions.defaultOptions.mutations.retry;
+
+      expect(retryFn(0, new Error('network error'))).toBe(true);
+      expect(retryFn(1, new Error('timeout'))).toBe(true);
+    });
+  });
+
+  describe('createQueryClient - retryDelay logic', () => {
+    beforeEach(() => {
+      jest.resetModules();
+    });
+
+    it('should return delay with exponential backoff', () => {
+      const module = require('../../src/config/queryClient');
+      module.createQueryClient();
+
+      const retryDelayFn =
+        capturedQueryClientOptions.defaultOptions.queries.retryDelay;
+
+      // 기본 딜레이 1000ms, 지수적 증가
+      const delay0 = retryDelayFn(0);
+      const delay1 = retryDelayFn(1);
+      const delay2 = retryDelayFn(2);
+
+      // 1차 시도: 기본 1000 * 2^0 = 1000, 지터 추가 (0-25%)
+      expect(delay0).toBeGreaterThanOrEqual(1000);
+      expect(delay0).toBeLessThanOrEqual(1250);
+
+      // 2차 시도: 기본 1000 * 2^1 = 2000, 지터 추가
+      expect(delay1).toBeGreaterThanOrEqual(2000);
+      expect(delay1).toBeLessThanOrEqual(2500);
+
+      // 3차 시도: 기본 1000 * 2^2 = 4000, 지터 추가
+      expect(delay2).toBeGreaterThanOrEqual(4000);
+      expect(delay2).toBeLessThanOrEqual(5000);
+    });
+
+    it('should cap delay at 30 seconds', () => {
+      const module = require('../../src/config/queryClient');
+      module.createQueryClient();
+
+      const retryDelayFn =
+        capturedQueryClientOptions.defaultOptions.queries.retryDelay;
+
+      // 높은 시도 횟수에서는 딜레이가 30000으로 제한되어야 함
+      const delay10 = retryDelayFn(10);
+
+      // 최대 딜레이 30000 + 25% 지터 = 최대 37500
+      expect(delay10).toBeLessThanOrEqual(37500);
+      expect(delay10).toBeGreaterThanOrEqual(30000);
+    });
+
+    it('should apply jitter to prevent thundering herd', () => {
+      const module = require('../../src/config/queryClient');
+      module.createQueryClient();
+
+      const retryDelayFn =
+        capturedQueryClientOptions.defaultOptions.queries.retryDelay;
+
+      // 랜덤성 확인을 위해 여러 번 실행
+      const delays = Array.from({ length: 10 }, () => retryDelayFn(1));
+
+      // 지터로 인해 약간의 변동이 있어야 함 (모두 동일하지 않음)
+      // 드물게 모두 같을 수 있으므로 범위만 확인
+      delays.forEach(d => {
+        expect(d).toBeGreaterThanOrEqual(2000);
+        expect(d).toBeLessThanOrEqual(2500);
+      });
+    });
+
+    it('should configure mutation retryDelay the same way', () => {
+      const module = require('../../src/config/queryClient');
+      module.createQueryClient();
+
+      const retryDelayFn =
+        capturedQueryClientOptions.defaultOptions.mutations.retryDelay;
+
+      const delay0 = retryDelayFn(0);
+      expect(delay0).toBeGreaterThanOrEqual(1000);
+      expect(delay0).toBeLessThanOrEqual(1250);
+    });
+  });
+
+  describe('createQueryClient - default options', () => {
+    beforeEach(() => {
+      jest.resetModules();
+    });
+
+    it('should set staleTime to 30 seconds', () => {
+      const module = require('../../src/config/queryClient');
+      module.createQueryClient();
+
+      expect(capturedQueryClientOptions.defaultOptions.queries.staleTime).toBe(
+        30000,
+      );
+    });
+
+    it('should set gcTime to 5 minutes', () => {
+      const module = require('../../src/config/queryClient');
+      module.createQueryClient();
+
+      expect(capturedQueryClientOptions.defaultOptions.queries.gcTime).toBe(
+        300000,
+      );
+    });
+
+    it('should enable refetchOnWindowFocus', () => {
+      const module = require('../../src/config/queryClient');
+      module.createQueryClient();
+
+      expect(
+        capturedQueryClientOptions.defaultOptions.queries.refetchOnWindowFocus,
+      ).toBe(true);
+    });
+
+    it('should enable refetchOnReconnect', () => {
+      const module = require('../../src/config/queryClient');
+      module.createQueryClient();
+
+      expect(
+        capturedQueryClientOptions.defaultOptions.queries.refetchOnReconnect,
+      ).toBe(true);
+    });
+
+    it('should enable refetchOnMount', () => {
+      const module = require('../../src/config/queryClient');
+      module.createQueryClient();
+
+      expect(
+        capturedQueryClientOptions.defaultOptions.queries.refetchOnMount,
+      ).toBe(true);
+    });
+
+    it('should set networkMode to offlineFirst for queries', () => {
+      const module = require('../../src/config/queryClient');
+      module.createQueryClient();
+
+      expect(
+        capturedQueryClientOptions.defaultOptions.queries.networkMode,
+      ).toBe('offlineFirst');
+    });
+
+    it('should set networkMode to offlineFirst for mutations', () => {
+      const module = require('../../src/config/queryClient');
+      module.createQueryClient();
+
+      expect(
+        capturedQueryClientOptions.defaultOptions.mutations.networkMode,
+      ).toBe('offlineFirst');
+    });
+  });
+
   describe('handleQueryError', () => {
-    it('should be exported as a function', () => {
-      const module = require('../../src/config/queryClient');
-      expect(typeof module.handleQueryError).toBe('function');
+    beforeEach(() => {
+      jest.resetModules();
     });
 
-    it('should handle Error instances', () => {
+    it('should call captureException for Error instances', () => {
+      const mockCaptureException = jest.fn();
+      jest.doMock('../../src/utils/errorReporter', () => ({
+        captureException: mockCaptureException,
+      }));
+
+      // Re-require after mocking
+      jest.resetModules();
       const module = require('../../src/config/queryClient');
-      expect(() => module.handleQueryError(new Error('Test'))).not.toThrow();
+
+      const testError = new Error('Test error');
+      module.handleQueryError(testError);
+
+      expect(mockCaptureException).toHaveBeenCalledWith(testError, {
+        action: 'QueryError',
+      });
     });
 
-    it('should handle non-Error objects', () => {
-      const module = require('../../src/config/queryClient');
-      expect(() =>
-        module.handleQueryError({ message: 'Object error' }),
-      ).not.toThrow();
-    });
+    it('should NOT call captureException for non-Error objects', () => {
+      const mockCaptureException = jest.fn();
+      jest.doMock('../../src/utils/errorReporter', () => ({
+        captureException: mockCaptureException,
+      }));
 
-    it('should handle string errors', () => {
+      jest.resetModules();
       const module = require('../../src/config/queryClient');
-      expect(() => module.handleQueryError('String error')).not.toThrow();
+
+      module.handleQueryError('string error');
+      module.handleQueryError({ message: 'object error' });
+      module.handleQueryError(123);
+
+      expect(mockCaptureException).not.toHaveBeenCalled();
     });
   });
 

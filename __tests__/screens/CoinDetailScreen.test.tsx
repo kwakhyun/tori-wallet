@@ -1,5 +1,5 @@
 /**
- * Tori Wallet - CoinDetailScreen Tests
+ * 코인 상세 스크린 테스트
  */
 
 import CoinDetailScreen from '../../src/screens/CoinDetail/CoinDetailScreen';

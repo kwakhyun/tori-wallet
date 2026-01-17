@@ -1,5 +1,5 @@
 /**
- * Tori Wallet - SwapHistoryScreen Tests
+ * SwapHistoryScreen 테스트
  * 스왑 히스토리 화면 테스트
  */
 
@@ -9,7 +9,6 @@ import { ThemeProvider } from 'styled-components/native';
 import SwapHistoryScreen from '../../src/screens/Swap/SwapHistoryScreen';
 import { theme } from '../../src/styles/theme';
 
-// CI 환경에서 cleanup 타임아웃 방지
 afterEach(() => {
   cleanup();
 });

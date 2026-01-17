@@ -1,12 +1,11 @@
 /**
- * Tori Wallet - Transaction Service Tests
- * 트랜잭션 서비스 핵심 기능 테스트
+ * 트랜잭션 서비스 테스트
  */
 
 import { txService } from '../../src/services/txService';
 import { parseEther } from 'viem';
 
-// Mock chainClient
+// chainClient 모킹
 jest.mock('../../src/services/chainClient', () => ({
   chainClient: {
     getClient: jest.fn(() => ({
@@ -194,7 +193,7 @@ describe('TxService - Transaction Operations', () => {
 
       const data = txService.encodeERC20Transfer(to, amount);
 
-      expect(data).toMatch(/^0xa9059cbb/); // transfer function selector
+      expect(data).toMatch(/^0xa9059cbb/); // transfer 함수 셀렉터
       expect(data.length).toBe(138); // 0x + 8 (selector) + 64 (address) + 64 (amount)
     });
 
@@ -398,7 +397,7 @@ describe('TxService - Error Handling', () => {
         to,
         tokenAddress,
         '100',
-        6, // USDC decimals
+        6, // USDC 소수점
         1,
       );
 

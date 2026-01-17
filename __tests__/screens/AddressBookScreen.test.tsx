@@ -1,5 +1,5 @@
 /**
- * Tori Wallet - AddressBookScreen Tests
+ * AddressBookScreen 테스트
  */
 
 import React from 'react';

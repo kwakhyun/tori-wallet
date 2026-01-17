@@ -1,5 +1,5 @@
 /**
- * Tori Wallet - SignRequestModal Tests
+ * 서명 요청 모달 테스트
  */
 
 import React from 'react';

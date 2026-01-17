@@ -1,5 +1,4 @@
 /**
- * Tori Wallet - Security Store Tests
  * 보안 스토어 테스트
  */
 

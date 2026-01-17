@@ -1,5 +1,4 @@
 /**
- * Tori Wallet - Swap Store Tests
  * 스왑 스토어 테스트
  */
 
@@ -101,7 +100,7 @@ describe('SwapStore', () => {
     it('should get history by chain', () => {
       const { addHistoryItem, getHistoryByChain } = useSwapStore.getState();
 
-      // Ethereum mainnet history
+      // Ethereum 메인넷 히스토리
       addHistoryItem({
         timestamp: Date.now(),
         chainId: 1,
@@ -112,7 +111,7 @@ describe('SwapStore', () => {
         rate: '1:2000',
       });
 
-      // Polygon history
+      // Polygon 히스토리
       addHistoryItem({
         timestamp: Date.now(),
         chainId: 137,

@@ -1,5 +1,4 @@
 /**
- * Tori Wallet - SettingsScreen Tests
  * 설정 스크린 테스트
  */
 

@@ -1,5 +1,4 @@
 /**
- * Tori Wallet - LogoPreviewScreen Tests
  * 로고 미리보기 화면 테스트
  */
 

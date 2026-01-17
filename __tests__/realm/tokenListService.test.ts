@@ -1,11 +1,11 @@
 /**
- * Tori Wallet - Token List Service Tests
+ * 토큰 목록 서비스 테스트
  */
 
 import { tokenListService } from '../../src/realm/services/tokenListService';
 import { realmDB } from '../../src/realm/database';
 
-// Realm mock
+// Realm 모킹
 jest.mock('../../src/realm/database', () => {
   const mockTokens: any[] = [];
 

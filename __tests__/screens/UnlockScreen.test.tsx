@@ -1,5 +1,5 @@
 /**
- * Tori Wallet - UnlockScreen Tests
+ * UnlockScreen 테스트
  * 잠금 해제 스크린 테스트
  */
 

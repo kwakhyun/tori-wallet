@@ -1,5 +1,4 @@
 /**
- * Tori Wallet - SigningService Tests
  * 서명 서비스 테스트
  */
 
@@ -7,7 +6,7 @@ const TEST_ADDRESS = '0x1234567890123456789012345678901234567890';
 const TEST_MNEMONIC =
   'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about';
 
-// Mock for walletService
+// walletService 모킹
 const mockRetrieveMnemonic = jest.fn();
 
 jest.mock('../../src/services/walletService', () => ({
@@ -16,7 +15,7 @@ jest.mock('../../src/services/walletService', () => ({
   },
 }));
 
-// Mock viem
+// viem 모킹
 jest.mock('viem', () => ({
   createWalletClient: jest.fn().mockImplementation(() => ({
     sendTransaction: jest.fn().mockResolvedValue('0xmocktxhash'),
@@ -30,7 +29,7 @@ jest.mock('viem', () => ({
   }),
 }));
 
-// Mock viem/accounts
+// viem/accounts 모킹
 jest.mock('viem/accounts', () => ({
   privateKeyToAccount: jest.fn().mockImplementation(() => ({
     address: TEST_ADDRESS,

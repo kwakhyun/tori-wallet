@@ -1,5 +1,4 @@
 /**
- * Tori Wallet - useBalance Hook Tests
  * 잔액 조회 훅 테스트
  */
 
@@ -20,16 +19,14 @@ const mockReadContract = jest.fn().mockResolvedValue(BigInt('5000000'));
 
 jest.mock('../../src/services/chainClient', () => ({
   chainClient: {
-    getBalance: (...args: unknown[]) => mockGetBalance(...args),
     getClient: jest.fn(() => ({
-      getBalance: (...args: unknown[]) => mockGetBalance(...args),
-      readContract: (...args: unknown[]) => mockReadContract(...args),
+      getBalance: (params: { address: string }) => mockGetBalance(params),
+      readContract: (params: unknown) => mockReadContract(params),
     })),
   },
 }));
 
-// CI 환경에서의 타임아웃 설정
-const WAIT_TIMEOUT = process.env.CI ? 15000 : 5000;
+const WAIT_TIMEOUT = 10000;
 
 const createTestQueryClient = () =>
   new QueryClient({

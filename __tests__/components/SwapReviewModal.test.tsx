@@ -1,5 +1,5 @@
 /**
- * Tori Wallet - SwapReviewModal Tests
+ * 스왑 확인 모달 테스트
  */
 
 import React from 'react';
@@ -12,7 +12,6 @@ import type {
   SwapToken,
 } from '../../src/services/enhancedSwapService';
 
-// CI 환경에서 cleanup 타임아웃 방지
 afterEach(() => {
   cleanup();
 });

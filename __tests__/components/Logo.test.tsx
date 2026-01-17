@@ -1,5 +1,5 @@
 /**
- * Tori Wallet - Logo Component Tests
+ * 로고 컴포넌트 테스트
  */
 
 import React from 'react';

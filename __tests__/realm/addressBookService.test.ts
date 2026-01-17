@@ -1,5 +1,5 @@
 /**
- * Tori Wallet - Address Book Service Tests
+ * 주소록 서비스 테스트
  */
 
 import { AddressBookSchema } from '../../src/realm/schemas';

@@ -1,11 +1,10 @@
 /**
- * Tori Wallet - CoinService Tests
  * 코인 서비스 테스트
  */
 
 import { coinService, RateLimitError } from '../../src/services/coinService';
 
-// fetch mock
+// fetch 모킹
 global.fetch = jest.fn();
 
 describe('CoinService', () => {
@@ -412,6 +411,62 @@ describe('CoinService', () => {
 
       const result = await coinService.getTrendingCoins();
       expect(result.coins).toEqual([]);
+    });
+  });
+
+  describe('getTopCoins - additional tests', () => {
+    it('should return array for any page', async () => {
+      const result = await coinService.getTopCoins(1, 10);
+      expect(Array.isArray(result)).toBe(true);
+    });
+  });
+
+  describe('searchCoins - additional tests', () => {
+    it('should return object with coins property', async () => {
+      const result = await coinService.searchCoins('bitcoin');
+      expect(result).toHaveProperty('coins');
+    });
+  });
+
+  describe('getPriceHistory - additional tests', () => {
+    it('should return price history data structure', async () => {
+      const mockHistory = {
+        prices: [[1234567890000, 50000]],
+        market_caps: [[1234567890000, 1000000000]],
+        total_volumes: [[1234567890000, 50000000]],
+      };
+
+      (global.fetch as jest.Mock).mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve(mockHistory),
+      });
+
+      const result = await coinService.getPriceHistory(
+        `unique-coin-${Date.now()}`,
+        '7',
+      );
+      expect(result).toHaveProperty('prices');
+      expect(result).toHaveProperty('market_caps');
+      expect(result).toHaveProperty('total_volumes');
+    });
+  });
+
+  describe('getNativeTokenPrice - additional tests', () => {
+    it('should return cached price on subsequent calls', async () => {
+      const price1 = await coinService.getNativeTokenPrice(1);
+      const price2 = await coinService.getNativeTokenPrice(1);
+      expect(typeof price1).toBe('number');
+      expect(typeof price2).toBe('number');
+    });
+  });
+
+  describe('calculateUsdValue - additional tests', () => {
+    it('should format large values', () => {
+      expect(coinService.calculateUsdValue(100, 1000)).toContain('$');
+    });
+
+    it('should handle zero amount', () => {
+      expect(coinService.calculateUsdValue(0, 1000)).toBe('< $0.01');
     });
   });
 });

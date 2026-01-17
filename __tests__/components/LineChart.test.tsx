@@ -1,5 +1,5 @@
 /**
- * Tori Wallet - LineChart Component Tests
+ * 라인 차트 컴포넌트 테스트
  */
 
 import { LineChart } from '../../src/components/charts/LineChart';

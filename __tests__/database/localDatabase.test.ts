@@ -1,5 +1,5 @@
 /**
- * Tori Wallet - Local Database Tests
+ * 로컬 데이터베이스 테스트
  * 로컬 데이터베이스 기능 테스트
  */
 
@@ -12,7 +12,7 @@ import {
   SwapRecord,
 } from '../../src/database/localDatabase';
 
-// AsyncStorage mock 초기화
+// AsyncStorage 모킹 초기화
 jest.mock('@react-native-async-storage/async-storage', () => ({
   setItem: jest.fn(() => Promise.resolve()),
   getItem: jest.fn(() => Promise.resolve(null)),
@@ -308,7 +308,7 @@ describe('LocalDatabase', () => {
         new Error('Write error'),
       );
 
-      // Should not throw
+      // 에러가 발생하면 안 됨
       await expect(
         localDatabase.addTransaction({
           id: 'test',

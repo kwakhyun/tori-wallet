@@ -1,5 +1,4 @@
 /**
- * Tori Wallet - Wallet Store Tests
  * 지갑 스토어 테스트
  */
 

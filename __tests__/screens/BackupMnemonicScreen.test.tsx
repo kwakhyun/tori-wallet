@@ -1,5 +1,5 @@
 /**
- * Tori Wallet - BackupMnemonicScreen Tests
+ * BackupMnemonicScreen 테스트
  */
 
 import React from 'react';

@@ -1,5 +1,4 @@
 /**
- * Tori Wallet - TransactionHistoryService Tests
  * 트랜잭션 히스토리 서비스 테스트
  */
 
@@ -18,7 +17,7 @@ describe('TransactionHistoryService', () => {
     it('should return empty array for unsupported chain', async () => {
       const transactions = await transactionHistoryService.getTransactions(
         '0x1234567890123456789012345678901234567890',
-        999999, // unsupported chain
+        999999, // 지원하지 않는 체인
       );
       expect(transactions).toEqual([]);
     });

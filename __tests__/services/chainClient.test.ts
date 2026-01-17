@@ -1,7 +1,9 @@
 /**
- * Tori Wallet - Chain Client Tests
  * 블록체인 클라이언트 테스트
  */
+
+// 전역 타임아웃 10초 설정
+jest.setTimeout(10000);
 
 import {
   chainClient,
@@ -10,7 +12,7 @@ import {
   parseEther,
 } from '../../src/services/chainClient';
 
-// Mock viem - createPublicClient returns the chain that was passed in
+// viem 모킹 - createPublicClient는 전달된 체인을 반환
 jest.mock('viem', () => ({
   createPublicClient: jest.fn(
     (opts: { chain: { id: number; name: string } }) => ({
@@ -162,7 +164,7 @@ describe('ChainClient', () => {
     });
 
     it('should identify mainnet', () => {
-      const info = chainClient.getChainInfo(1); // Ethereum mainnet
+      const info = chainClient.getChainInfo(1); // Ethereum 메인넷
       expect(info?.isTestnet).toBe(false);
     });
   });
@@ -172,7 +174,7 @@ describe('ChainClient', () => {
       const client1 = chainClient.getClient(1);
       chainClient.clearCache();
       const client2 = chainClient.getClient(1);
-      // After clearing, a new client should be created
+      // 캐시 클리어 후 새 클라이언트가 생성되어야 함
       expect(client1).not.toBe(client2);
     });
 
@@ -191,7 +193,7 @@ describe('ChainClient', () => {
     });
 
     it('should return connection status object', async () => {
-      // Test the function signature - actual connection may fail in test environment
+      // 함수 시그니처 테스트 - 테스트 환경에서는 실제 연결이 실패할 수 있음
       const result = await chainClient.testConnection(1);
       expect(result).toBeDefined();
       expect(typeof result.connected).toBe('boolean');

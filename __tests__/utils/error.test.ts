@@ -1,5 +1,5 @@
 /**
- * Tori Wallet - Error Utils Tests
+ * 에러 유틸 테스트
  * 에러 유틸리티 함수 테스트
  */
 

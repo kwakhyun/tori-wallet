@@ -1,5 +1,5 @@
 /**
- * Tori Wallet - WalletConnect Service Tests
+ * WalletConnect 서비스 테스트
  *
  * WalletConnect 기능의 서비스 레이어 테스트
  *

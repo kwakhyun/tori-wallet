@@ -1,5 +1,5 @@
 /**
- * Tori Wallet - ReceiveTokenScreen Tests
+ * ReceiveTokenScreen 테스트
  */
 
 import React from 'react';

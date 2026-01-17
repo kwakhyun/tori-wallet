@@ -1,5 +1,5 @@
 /**
- * Tori Wallet - Card Component Tests
+ * 카드 컴포넌트 테스트
  */
 
 import React from 'react';

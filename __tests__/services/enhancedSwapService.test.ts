@@ -1,6 +1,5 @@
 /**
- * Tori Wallet - EnhancedSwapService Tests
- * 고도화된 스왑 서비스 테스트
+ * 멀티 DEX 스왑 서비스 테스트
  */
 
 import {
@@ -11,7 +10,7 @@ import {
   SwapQuote,
 } from '../../src/services/enhancedSwapService';
 
-// fetch mock
+// fetch 모킹
 global.fetch = jest.fn();
 
 describe('EnhancedSwapService', () => {
@@ -189,7 +188,7 @@ describe('EnhancedSwapService', () => {
     it('should not exceed 5%', () => {
       // priceImpact > 5 gives 3.0, volatility > 5 adds 0.5 = 3.5, max is 5.0
       expect(enhancedSwapService.calculateAutoSlippage(10, 20)).toBe(3.5);
-      // Verify max cap behavior
+      // 최대 캡 동작 확인
       expect(
         enhancedSwapService.calculateAutoSlippage(10, 20),
       ).toBeLessThanOrEqual(5.0);
@@ -548,6 +547,85 @@ describe('EnhancedSwapService', () => {
     it('should filter out empty ids', async () => {
       const result = await enhancedSwapService.getTokenPrices(['', '', '']);
       expect(result).toEqual({});
+    });
+  });
+
+  describe('getQuote - full flow tests', () => {
+    it('should return enhanced quote with all fields', async () => {
+      const mockQuote = {
+        price: '1.5',
+        buyAmount: '1500000000',
+        sellAmount: '1000000000000000000',
+        gas: '200000',
+        gasPrice: '50000000000',
+        sources: [
+          { name: 'Uniswap', proportion: '0.7' },
+          { name: 'SushiSwap', proportion: '0.3' },
+        ],
+        to: '0xdef1c0ded9bec7f1a1670819833240f027b25eff',
+        data: '0x1234',
+        estimatedPriceImpact: '0.01',
+      };
+
+      // getQuote 호출
+      (global.fetch as jest.Mock).mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve(mockQuote),
+      });
+
+      // getTokenPrice 호출 (enhanceQuote 내에서)
+      (global.fetch as jest.Mock).mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ ethereum: { usd: 2500 } }),
+      });
+
+      const result = await enhancedSwapService.getQuote(
+        {
+          sellToken: SWAP_TOKENS[1][0],
+          buyToken: SWAP_TOKENS[1][1],
+          sellAmount: '1',
+          takerAddress: '0x1234567890123456789012345678901234567890',
+          slippagePercentage: 0.5,
+        },
+        1,
+      );
+
+      expect(result).not.toBeNull();
+      expect(result?.price).toBe('1.5');
+      expect(result?.route).toBeDefined();
+    });
+  });
+
+  describe('getQuote - error handling', () => {
+    it('should throw on network error', async () => {
+      (global.fetch as jest.Mock).mockRejectedValueOnce(new Error('Network'));
+
+      await expect(
+        enhancedSwapService.getQuote(
+          {
+            sellToken: SWAP_TOKENS[1][0],
+            buyToken: SWAP_TOKENS[1][1],
+            sellAmount: '1',
+            takerAddress: '0x1234567890123456789012345678901234567890',
+          },
+          1,
+        ),
+      ).rejects.toThrow();
+    });
+  });
+
+  describe('calculateAutoSlippage - edge cases', () => {
+    it('should handle boundary conditions', () => {
+      expect(enhancedSwapService.calculateAutoSlippage(0)).toBe(0.5);
+      expect(enhancedSwapService.calculateAutoSlippage(0.5)).toBe(0.5);
+      expect(enhancedSwapService.calculateAutoSlippage(2)).toBe(0.5);
+      expect(enhancedSwapService.calculateAutoSlippage(2.1)).toBe(1.0);
+    });
+
+    it('should cap at maximum 5%', () => {
+      expect(
+        enhancedSwapService.calculateAutoSlippage(100, 100),
+      ).toBeLessThanOrEqual(5.0);
     });
   });
 });

@@ -1,5 +1,5 @@
 /**
- * Tori Wallet - Test Utilities
+ * 테스트 유틸리티
  * 테스트를 위한 유틸리티 함수들
  */
 
@@ -15,9 +15,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ThemeProvider } from 'styled-components/native';
 import { lightTheme, darkTheme } from '../src/styles/theme';
 
-// CI 환경에서 cleanup 타임아웃 방지를 위한 afterEach 설정
 afterEach(() => {
-  // cleanup을 동기적으로 실행
   cleanup();
 });
 

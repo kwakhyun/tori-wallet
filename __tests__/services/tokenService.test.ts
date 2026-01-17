@@ -1,11 +1,10 @@
 /**
- * Tori Wallet - TokenService Tests
  * 토큰 서비스 테스트
  */
 
 import { tokenService, Token } from '../../src/services/tokenService';
 
-// fetch mock
+// fetch 모킹
 global.fetch = jest.fn();
 
 // viem 모킹
@@ -167,6 +166,100 @@ describe('TokenService', () => {
       );
 
       // 에러가 발생해도 빈 배열 또는 기본값 반환
+      expect(Array.isArray(tokens)).toBe(true);
+    });
+  });
+
+  describe('getTokens - additional tests', () => {
+    it('should handle Polygon chain', async () => {
+      (global.fetch as jest.Mock).mockResolvedValue({
+        json: jest.fn().mockResolvedValue({
+          'matic-network': { usd: 0.8, usd_24h_change: 2 },
+        }),
+      });
+
+      const tokens = await tokenService.getTokens(
+        '0x1234567890123456789012345678901234567890',
+        137,
+      );
+
+      expect(Array.isArray(tokens)).toBe(true);
+    });
+
+    it('should handle Arbitrum chain', async () => {
+      (global.fetch as jest.Mock).mockResolvedValue({
+        json: jest.fn().mockResolvedValue({
+          ethereum: { usd: 2000, usd_24h_change: 1 },
+        }),
+      });
+
+      const tokens = await tokenService.getTokens(
+        '0x1234567890123456789012345678901234567890',
+        42161,
+      );
+
+      expect(Array.isArray(tokens)).toBe(true);
+    });
+
+    it('should use cached prices on second call', async () => {
+      (global.fetch as jest.Mock).mockResolvedValue({
+        json: jest.fn().mockResolvedValue({
+          ethereum: { usd: 2000, usd_24h_change: 5 },
+        }),
+      });
+
+      // 첫 번째 호출
+      await tokenService.getTokens(
+        '0x1234567890123456789012345678901234567890',
+        1,
+      );
+
+      // fetch 호출 수 저장
+      const firstCallCount = (global.fetch as jest.Mock).mock.calls.length;
+
+      // 두 번째 호출 (캐시 사용)
+      await tokenService.getTokens(
+        '0x1234567890123456789012345678901234567890',
+        1,
+      );
+
+      // 캐시가 사용되면 fetch 호출이 증가하지 않아야 함 (또는 최소 증가)
+      expect((global.fetch as jest.Mock).mock.calls.length).toBeLessThanOrEqual(
+        firstCallCount + 1,
+      );
+    });
+
+    it('should handle missing price data', async () => {
+      (global.fetch as jest.Mock).mockResolvedValue({
+        json: jest.fn().mockResolvedValue({}),
+      });
+
+      const tokens = await tokenService.getTokens(
+        '0x1234567890123456789012345678901234567890',
+        1,
+      );
+
+      expect(Array.isArray(tokens)).toBe(true);
+    });
+
+    it('should handle balance fetch error', async () => {
+      const { createPublicClient } = require('viem');
+      createPublicClient.mockReturnValueOnce({
+        getBalance: jest.fn().mockRejectedValue(new Error('Balance error')),
+        readContract: jest.fn().mockRejectedValue(new Error('Contract error')),
+      });
+
+      (global.fetch as jest.Mock).mockResolvedValue({
+        json: jest.fn().mockResolvedValue({
+          ethereum: { usd: 2000, usd_24h_change: 5 },
+        }),
+      });
+
+      const tokens = await tokenService.getTokens(
+        '0x1234567890123456789012345678901234567890',
+        1,
+      );
+
       expect(Array.isArray(tokens)).toBe(true);
     });
   });

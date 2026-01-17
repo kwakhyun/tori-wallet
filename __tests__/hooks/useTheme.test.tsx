@@ -1,5 +1,4 @@
 /**
- * Tori Wallet - useTheme Hook Tests
  * 테마 훅 테스트
  */
 

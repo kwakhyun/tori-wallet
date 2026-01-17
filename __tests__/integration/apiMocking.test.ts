@@ -1,5 +1,5 @@
 /**
- * Tori Wallet - API Mocking 통합 테스트
+ * API Mocking 통합 테스트
  * MSW를 사용한 API 모킹 테스트
  */
 

@@ -1,5 +1,4 @@
 /**
- * Tori Wallet - useWallet Hook Tests
  * 지갑 훅 테스트
  */
 

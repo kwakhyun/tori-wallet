@@ -1,5 +1,4 @@
 /**
- * Tori Wallet - Button Component Tests
  * 버튼 컴포넌트 테스트
  */
 

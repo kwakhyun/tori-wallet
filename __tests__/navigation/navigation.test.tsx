@@ -1,5 +1,5 @@
 /**
- * Tori Wallet - Navigation Tests
+ * 네비게이션 테스트
  */
 
 import React from 'react';

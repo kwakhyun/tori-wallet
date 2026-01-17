@@ -1,5 +1,4 @@
 /**
- * Tori Wallet - useAppState Hook Tests
  * 앱 상태 훅 테스트
  */
 

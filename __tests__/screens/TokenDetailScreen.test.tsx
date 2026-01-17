@@ -1,5 +1,5 @@
 /**
- * Tori Wallet - TokenDetailScreen Tests
+ * TokenDetailScreen 테스트
  * 토큰 상세 화면 테스트
  */
 

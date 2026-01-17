@@ -1,5 +1,5 @@
 /**
- * Tori Wallet - SetPinScreen Tests
+ * SetPinScreen 테스트
  * PIN 설정 화면 테스트 - 보안 핵심 테스트
  */
 

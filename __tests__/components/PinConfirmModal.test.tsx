@@ -1,5 +1,5 @@
 /**
- * Tori Wallet - PinConfirmModal Tests
+ * PIN 확인 모달 테스트
  */
 
 import React from 'react';

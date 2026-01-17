@@ -1,5 +1,5 @@
 /**
- * Tori Wallet - ImportWalletScreen Tests
+ * 지갑 가져오기 스크린 테스트
  */
 
 import React from 'react';

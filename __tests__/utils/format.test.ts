@@ -1,5 +1,5 @@
 /**
- * Tori Wallet - Format Utils Tests
+ * 포맷 유틸 테스트
  * 포맷 유틸리티 함수 테스트
  */
 

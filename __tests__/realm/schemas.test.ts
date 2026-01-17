@@ -1,5 +1,5 @@
 /**
- * Tori Wallet - Realm Schemas Tests
+ * Realm 스키마 테스트
  */
 
 import {

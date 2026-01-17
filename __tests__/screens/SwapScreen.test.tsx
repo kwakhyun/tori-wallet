@@ -1,5 +1,5 @@
 /**
- * Tori Wallet - SwapScreen Tests
+ * SwapScreen 테스트
  * 스왑 스크린 테스트
  */
 

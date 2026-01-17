@@ -1,7 +1,8 @@
 /**
- * Tori Wallet - Utils Tests
  * 유틸리티 함수 테스트
  */
+
+jest.setTimeout(10000);
 
 import { shortenAddress, isValidAddress } from '../src/utils/address';
 import {
@@ -17,6 +18,18 @@ import {
   getUserMessage,
   ErrorCode,
 } from '../src/utils/error';
+
+// 모든 테스트 전역 정리
+beforeEach(() => {
+  jest.clearAllMocks();
+  jest.clearAllTimers();
+});
+
+afterEach(() => {
+  jest.clearAllMocks();
+  jest.clearAllTimers();
+  jest.restoreAllMocks();
+});
 
 describe('Address Utils', () => {
   describe('shortenAddress', () => {

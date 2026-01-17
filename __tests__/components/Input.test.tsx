@@ -1,5 +1,4 @@
 /**
- * Tori Wallet - Input Component Tests
  * 인풋 컴포넌트 테스트
  */
 

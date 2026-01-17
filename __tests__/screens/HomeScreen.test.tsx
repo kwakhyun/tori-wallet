@@ -1,5 +1,5 @@
 /**
- * Tori Wallet - HomeScreen Tests
+ * HomeScreen 테스트
  * 홈 스크린 테스트
  */
 

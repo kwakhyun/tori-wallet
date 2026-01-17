@@ -1,5 +1,5 @@
 /**
- * Tori Wallet - SendTransactionScreen Tests
+ * SendTransactionScreen 테스트
  * 전송 스크린 테스트
  */
 

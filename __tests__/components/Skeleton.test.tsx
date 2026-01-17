@@ -1,5 +1,5 @@
 /**
- * Tori Wallet - Skeleton Component Tests
+ * 스켈레톤 컴포넌트 테스트
  */
 
 import React from 'react';

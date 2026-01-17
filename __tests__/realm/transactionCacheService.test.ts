@@ -1,11 +1,11 @@
 /**
- * Tori Wallet - Transaction Cache Service Tests
+ * 트랜잭션 캐시 서비스 테스트
  */
 
 import { transactionCacheService } from '../../src/realm/services/transactionCacheService';
 import { realmDB } from '../../src/realm/database';
 
-// Realm mock
+// Realm 모킹
 jest.mock('../../src/realm/database', () => {
   const mockTransactions: any[] = [];
 

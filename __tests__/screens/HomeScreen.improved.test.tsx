@@ -1,5 +1,5 @@
 /**
- * Tori Wallet - HomeScreen Tests (Improved)
+ * HomeScreen 테스트 (개선)
  * 홈 스크린 테스트 - 개선된 버전
  */
 

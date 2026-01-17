@@ -1,5 +1,5 @@
 /**
- * Tori Wallet - Logger Utils Tests
+ * 로거 유틸 테스트
  * 로거 유틸리티 테스트
  */
 

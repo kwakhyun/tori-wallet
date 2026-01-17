@@ -1,7 +1,9 @@
 /**
- * Tori Wallet - SwapService Tests
  * 스왑 서비스 테스트
  */
+
+// 테스트 타임아웃 5초 설정 (이 테스트는 빠르게 완료되어야 함)
+jest.setTimeout(5000);
 
 import {
   swapService,
@@ -9,12 +11,19 @@ import {
   SWAP_TOKENS,
 } from '../../src/services/swapService';
 
-// fetch mock
+// fetch 모킹
 global.fetch = jest.fn();
 
 describe('SwapService', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    (global.fetch as jest.Mock).mockReset();
+  });
+
+  afterEach(() => {
+    jest.clearAllMocks();
+    jest.clearAllTimers();
+    jest.restoreAllMocks();
   });
 
   describe('getTokens', () => {
@@ -209,7 +218,7 @@ describe('SwapService', () => {
 
       (global.fetch as jest.Mock).mockResolvedValueOnce({
         ok: true,
-        json: () => Promise.resolve(mockResponse),
+        json: jest.fn().mockResolvedValueOnce(mockResponse),
       });
 
       const result = await swapService.getPrice(
@@ -285,7 +294,9 @@ describe('SwapService', () => {
     it('should throw on API error', async () => {
       (global.fetch as jest.Mock).mockResolvedValueOnce({
         ok: false,
-        json: () => Promise.resolve({ reason: 'Insufficient liquidity' }),
+        json: jest
+          .fn()
+          .mockResolvedValueOnce({ reason: 'Insufficient liquidity' }),
       });
 
       await expect(
@@ -317,7 +328,7 @@ describe('SwapService', () => {
     });
 
     it('should have native token as first token', () => {
-      // Most chains should have native token first
+      // 대부분의 체인은 네이티브 토큰이 첫 번째여야 함
       expect(SWAP_TOKENS[1][0].symbol).toBe('ETH');
       expect(SWAP_TOKENS[137][0].symbol).toBe('MATIC');
     });

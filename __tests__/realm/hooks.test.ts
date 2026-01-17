@@ -1,13 +1,10 @@
 /**
- * Tori Wallet - Realm Hooks Tests
- *
- * 이 테스트는 Realm hooks의 인터페이스와 타입을 검증합니다.
- * Jest mock hoisting 문제를 해결하기 위해 jest.mock 내부에서 mock을 정의합니다.
+ * Realm 훅 테스트 (인터페이스 및 타입 검증)
  */
 
 import { renderHook, waitFor, act } from '@testing-library/react-native';
 
-// Jest mock - hoisting 문제를 해결하기 위해 factory 함수 내부에서 mock 정의
+// Jest 모킹 - hoisting 문제를 해결하기 위해 factory 함수 내부에서 mock 정의
 jest.mock('../../src/realm/services', () => {
   const mockAddressBookServiceInternal = {
     getAll: jest.fn(() =>

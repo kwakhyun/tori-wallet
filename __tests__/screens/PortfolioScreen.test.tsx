@@ -1,5 +1,5 @@
 /**
- * Tori Wallet - PortfolioScreen Tests
+ * PortfolioScreen 테스트
  * 포트폴리오 스크린 테스트
  */
 

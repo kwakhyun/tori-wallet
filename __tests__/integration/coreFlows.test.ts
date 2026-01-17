@@ -1,5 +1,5 @@
 /**
- * Tori Wallet - Core User Flows Integration Tests
+ * 핵심 사용자 플로우 통합 테스트
  * 핵심 사용자 플로우 통합 테스트
  */
 
@@ -45,6 +45,12 @@ jest.mock('react-native-encrypted-storage', () => ({
 describe('Core User Flows', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    jest.resetModules();
+  });
+
+  afterEach(() => {
+    // 모든 타이머와 비동기 작업 정리
+    jest.clearAllTimers();
   });
 
   describe('Wallet Creation Flow', () => {
@@ -183,6 +189,15 @@ describe('Core User Flows', () => {
 });
 
 describe('Store Integration', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    jest.resetModules();
+  });
+
+  afterEach(() => {
+    jest.clearAllTimers();
+  });
+
   describe('WalletStore', () => {
     it('should manage wallet state', () => {
       const { useWalletStore } = require('../../src/store/walletStore');
@@ -271,6 +286,10 @@ describe('Store Integration', () => {
 });
 
 describe('Utility Functions', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
   describe('Address Utils', () => {
     it('should shorten addresses', () => {
       const { shortenAddress } = require('../../src/utils/address');

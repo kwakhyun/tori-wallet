@@ -1,5 +1,4 @@
 /**
- * Tori Wallet - useDebounce Hook Tests
  * 디바운스 훅 테스트
  */
 

@@ -1,5 +1,4 @@
 /**
- * Tori Wallet - BuyService Tests
  * 암호화폐 구매 서비스 테스트
  */
 
@@ -202,6 +201,42 @@ describe('BuyService', () => {
       showBuyProviderAlert('ETH', walletAddress);
 
       expect(Alert.alert).toHaveBeenCalled();
+    });
+
+    it('should call openBuyUrl with moonpay when MoonPay is pressed', async () => {
+      (Linking.canOpenURL as jest.Mock).mockResolvedValue(true);
+      (Linking.openURL as jest.Mock).mockResolvedValue(undefined);
+
+      const walletAddress = '0x1234567890123456789012345678901234567890';
+      showBuyProviderAlert('ETH', walletAddress);
+
+      // MoonPay 버튼 찾아서 누르기
+      const alertCall = (Alert.alert as jest.Mock).mock.calls[0];
+      const moonpayButton = alertCall[2].find(
+        (btn: { text: string; onPress?: () => void }) => btn.text === 'MoonPay',
+      );
+
+      await moonpayButton.onPress();
+
+      expect(Linking.canOpenURL).toHaveBeenCalled();
+    });
+
+    it('should call openBuyUrl with banxa when Banxa is pressed', async () => {
+      (Linking.canOpenURL as jest.Mock).mockResolvedValue(true);
+      (Linking.openURL as jest.Mock).mockResolvedValue(undefined);
+
+      const walletAddress = '0x1234567890123456789012345678901234567890';
+      showBuyProviderAlert('ETH', walletAddress);
+
+      // Banxa 버튼 찾아서 누르기
+      const alertCall = (Alert.alert as jest.Mock).mock.calls[0];
+      const banxaButton = alertCall[2].find(
+        (btn: { text: string; onPress?: () => void }) => btn.text === 'Banxa',
+      );
+
+      await banxaButton.onPress();
+
+      expect(Linking.canOpenURL).toHaveBeenCalled();
     });
   });
 

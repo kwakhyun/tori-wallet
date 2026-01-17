@@ -1,5 +1,5 @@
 /**
- * Tori Wallet - Error Reporter Tests
+ * 에러 리포터 테스트
  * 에러 리포팅 서비스 테스트
  */
 
@@ -208,7 +208,7 @@ describe('ErrorReporter', () => {
 
   describe('Integration with error.ts', () => {
     it('should work with logError function', () => {
-      // logError internally uses errorReporter
+      // logError는 내부적으로 errorReporter를 사용
       const { logError } = require('../../src/utils/error');
 
       expect(() => {

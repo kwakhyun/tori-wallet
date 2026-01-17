@@ -1,5 +1,5 @@
 /**
- * Tori Wallet - WelcomeScreen Tests
+ * WelcomeScreen 테스트
  * 웰컴 스크린 테스트
  */
 
