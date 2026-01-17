@@ -1,6 +1,5 @@
 /**
- * Tori Wallet - useTheme Hook
- * 테마 접근 및 변경을 위한 훅
+ * 테마 접근 및 변경 훅
  */
 
 import { useCallback, useEffect } from 'react';
@@ -77,7 +76,7 @@ export const themeUtils = {
    * 투명도가 적용된 색상 반환
    */
   withOpacity: (color: string, opacity: number): string => {
-    // Hex to RGBA 변환
+    // Hex → RGBA 변환
     const hex = color.replace('#', '');
     const r = parseInt(hex.substring(0, 2), 16);
     const g = parseInt(hex.substring(2, 4), 16);

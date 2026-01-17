@@ -1,6 +1,5 @@
 /**
- * Tori Wallet - Swap Store
- * 스왑 상태 관리 (히스토리, 즐겨찾기, 설정)
+ * 스왑 상태 관리 스토어 (히스토리, 즐겨찾기, 설정)
  */
 
 import { create } from 'zustand';

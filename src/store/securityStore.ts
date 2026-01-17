@@ -1,6 +1,5 @@
 /**
- * Tori Wallet - Security Store
- * 보안 설정 및 주소록 관리
+ * 보안 설정 및 주소록 관리 스토어
  */
 
 import { create } from 'zustand';

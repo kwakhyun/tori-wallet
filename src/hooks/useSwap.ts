@@ -1,6 +1,5 @@
 /**
- * Tori Wallet - useSwap Hook
- * 토큰 스왑 기능을 위한 커스텀 훅
+ * 토큰 스왑 훅
  */
 
 import { useState, useCallback, useMemo, useEffect } from 'react';

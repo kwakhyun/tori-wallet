@@ -1,6 +1,5 @@
 /**
- * Tori Wallet - Theme Store
- * 라이트/다크 모드 테마 상태 관리
+ * 테마 상태 관리 스토어 (라이트/다크 모드)
  */
 
 import { create } from 'zustand';

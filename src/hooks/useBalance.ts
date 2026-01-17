@@ -1,5 +1,4 @@
 /**
- * Tori Wallet - useBalance Hook
  * 토큰 잔액 조회 훅
  */
 
@@ -18,13 +17,13 @@ interface BalanceData {
  * 체인별 네이티브 토큰 심볼 매핑
  */
 const NATIVE_TOKEN_SYMBOLS: Record<number, string> = {
-  1: 'ETH', // Ethereum Mainnet
-  11155111: 'ETH', // Sepolia Testnet
+  1: 'ETH', // Ethereum 메인넷
+  11155111: 'ETH', // Sepolia 테스트넷
   137: 'MATIC', // Polygon
   42161: 'ETH', // Arbitrum One
   10: 'ETH', // Optimism
   8453: 'ETH', // Base
-  56: 'BNB', // BNB Chain
+  56: 'BNB', // BNB 체인
   43114: 'AVAX', // Avalanche
 };
 

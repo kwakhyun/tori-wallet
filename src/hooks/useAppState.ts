@@ -1,6 +1,5 @@
 /**
- * Tori Wallet - App State Hook
- * 앱 생명주기 관리 및 자동 잠금 처리
+ * 앱 생명주기 관리 및 자동 잠금 훅
  */
 
 import { useEffect, useRef, useCallback } from 'react';

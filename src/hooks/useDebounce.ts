@@ -1,6 +1,5 @@
 /**
- * Tori Wallet - useDebounce Hook
- * 입력 디바운싱을 위한 커스텀 훅
+ * 입력 디바운싱 훅
  */
 
 import { useState, useEffect } from 'react';

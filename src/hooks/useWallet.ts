@@ -1,5 +1,4 @@
 /**
- * Tori Wallet - useWallet Hook
  * 지갑 상태 및 액션 접근 훅
  */
 

@@ -1,5 +1,5 @@
 /**
- * Tori Wallet - Wallet Store (Zustand)
+ * 지갑 상태 관리 스토어
  */
 
 import { create } from 'zustand';
