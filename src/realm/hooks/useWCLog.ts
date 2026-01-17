@@ -1,5 +1,5 @@
 /**
- * Tori Wallet - Realm Hooks for WalletConnect Logs
+ * WalletConnect 로그 관리 훅
  */
 
 import { useState, useEffect, useCallback } from 'react';

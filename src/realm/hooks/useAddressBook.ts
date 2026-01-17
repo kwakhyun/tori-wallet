@@ -1,5 +1,5 @@
 /**
- * Tori Wallet - Realm Hooks for Address Book
+ * 주소록 관리 훅
  */
 
 import { useState, useEffect, useCallback } from 'react';

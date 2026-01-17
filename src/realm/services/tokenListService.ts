@@ -1,6 +1,5 @@
 /**
- * Tori Wallet - Token List Service (Realm)
- * 토큰 목록 관리 (숨김/스팸/사용자 정의)
+ * 토큰 목록 관리 서비스 (숨김/스팸/사용자 정의)
  */
 
 import { realmDB } from '../database';

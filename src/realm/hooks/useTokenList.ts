@@ -1,5 +1,5 @@
 /**
- * Tori Wallet - Realm Hooks for Token List
+ * 토큰 목록 관리 훅
  */
 
 import { useState, useEffect, useCallback } from 'react';

@@ -1,6 +1,5 @@
 /**
- * Tori Wallet - Transaction Cache Service (Realm)
- * 트랜잭션 내역 로컬 캐싱 및 상태 관리
+ * 트랜잭션 내역 로컬 캐싱 서비스
  */
 
 import { realmDB } from '../database';

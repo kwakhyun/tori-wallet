@@ -1,13 +1,11 @@
 /**
- * Tori Wallet - Realm Schemas
- * 로컬 데이터베이스 스키마 정의
+ * Realm 로컬 데이터베이스 스키마 정의
  */
 
 import Realm from 'realm';
 
 // ============================================================================
-// Address Book Schema
-// 주소록 관리를 위한 스키마
+// 주소록 스키마
 // ============================================================================
 export const AddressBookSchema: Realm.ObjectSchema = {
   name: 'AddressBook',
@@ -36,8 +34,7 @@ export interface AddressBookEntry {
 }
 
 // ============================================================================
-// Transaction Cache Schema
-// 트랜잭션 내역 캐싱 및 상태 추적
+// 트랜잭션 캐시 스키마
 // ============================================================================
 export const TransactionCacheSchema: Realm.ObjectSchema = {
   name: 'TransactionCache',
@@ -100,8 +97,8 @@ export interface TransactionCacheEntry {
 }
 
 // ============================================================================
-// Token List Schema
-// 토큰 목록 관리 (숨김/스팸 표시)
+// ============================================================================
+// 토큰 목록 스키마
 // ============================================================================
 export const TokenListSchema: Realm.ObjectSchema = {
   name: 'TokenList',
@@ -152,8 +149,7 @@ export interface TokenListEntry {
 }
 
 // ============================================================================
-// WalletConnect Session Log Schema
-// WalletConnect 세션 및 요청 로그
+// WalletConnect 세션 로그 스키마
 // ============================================================================
 export const WCSessionLogSchema: Realm.ObjectSchema = {
   name: 'WCSessionLog',
@@ -199,10 +195,10 @@ export const WCRequestLogSchema: Realm.ObjectSchema = {
     sessionTopic: { type: 'string', indexed: true },
     requestId: 'int',
     method: 'string', // eth_sendTransaction, personal_sign, etc.
-    params: 'string', // JSON stringified params
+    params: 'string', // JSON 문자열
     chainId: { type: 'int', optional: true },
-    status: 'string', // pending | approved | rejected | failed
-    result: { type: 'string', optional: true }, // JSON stringified result
+    status: 'string',
+    result: { type: 'string', optional: true }, // JSON 문자열
     errorMessage: { type: 'string', optional: true },
     dappName: { type: 'string', optional: true },
     requestedAt: 'date',
@@ -228,8 +224,7 @@ export interface WCRequestLogEntry {
 }
 
 // ============================================================================
-// Sync Status Schema
-// 동기화 상태 및 오프라인 UX
+// 동기화 상태 스키마
 // ============================================================================
 export const SyncStatusSchema: Realm.ObjectSchema = {
   name: 'SyncStatus',
@@ -242,7 +237,7 @@ export const SyncStatusSchema: Realm.ObjectSchema = {
     lastSyncAt: 'date',
     status: 'string', // synced | syncing | error
     errorMessage: { type: 'string', optional: true },
-    data: { type: 'string', optional: true }, // JSON stringified snapshot
+    data: { type: 'string', optional: true }, // JSON 문자열
   },
 };
 
@@ -258,8 +253,7 @@ export interface SyncStatusEntry {
 }
 
 // ============================================================================
-// Balance Snapshot Schema
-// 잔액 스냅샷 (오프라인 표시용)
+// 잔액 스냅샷 스키마
 // ============================================================================
 export const BalanceSnapshotSchema: Realm.ObjectSchema = {
   name: 'BalanceSnapshot',
@@ -288,15 +282,14 @@ export interface BalanceSnapshotEntry {
 }
 
 // ============================================================================
-// User Preferences Schema
-// 사용자 설정 (앱 설정과 별도로 지갑 관련 설정)
+// 사용자 설정 스키마
 // ============================================================================
 export const UserPreferencesSchema: Realm.ObjectSchema = {
   name: 'UserPreferences',
   primaryKey: 'key',
   properties: {
     key: 'string',
-    value: 'string', // JSON stringified
+    value: 'string', // JSON 문자열
     updatedAt: 'date',
   },
 };

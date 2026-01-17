@@ -1,5 +1,5 @@
 /**
- * Tori Wallet - Realm Hooks for Sync Status
+ * 동기화 상태 관리 훅
  */
 
 import { useState, useEffect, useCallback } from 'react';

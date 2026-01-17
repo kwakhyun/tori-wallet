@@ -1,6 +1,5 @@
 /**
- * Tori Wallet - User Preferences Service (Realm)
- * 사용자 설정 관리 (JSON 기반 key-value 저장)
+ * 사용자 설정 관리 서비스 (JSON 기반 key-value 저장)
  */
 
 import { realmDB } from '../database';

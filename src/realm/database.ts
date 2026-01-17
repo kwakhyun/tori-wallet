@@ -1,5 +1,4 @@
 /**
- * Tori Wallet - Realm Database Configuration
  * Realm 데이터베이스 초기화 및 관리
  */
 

@@ -1,8 +1,8 @@
 /**
- * Tori Wallet - Realm Hooks Index
+ * Realm 훅 내보내기
  */
 
-// Address Book
+// 주소록
 export {
   useAddressBook,
   useFavoriteAddresses,
@@ -10,7 +10,7 @@ export {
   useAddressName,
 } from './useAddressBook';
 
-// Transaction Cache
+// 트랜잭션 캐시
 export {
   useTransactions,
   usePendingTransactions,
@@ -20,7 +20,7 @@ export {
   useRecentTransactions,
 } from './useTransactionCache';
 
-// Token List
+// 토큰 목록
 export {
   useTokenList,
   useHiddenTokens,
@@ -30,7 +30,7 @@ export {
   useTokenUpdate,
 } from './useTokenList';
 
-// Sync Status
+// 동기화 상태
 export {
   useSyncStatus,
   useBalanceSnapshot,
@@ -39,7 +39,7 @@ export {
   useOfflineData,
 } from './useSyncStatus';
 
-// User Preferences
+// 사용자 설정
 export {
   usePreference,
   useCurrency,
@@ -55,7 +55,7 @@ export {
   PREFERENCE_KEYS,
 } from './usePreferences';
 
-// WalletConnect Logs
+// WalletConnect 로그
 export {
   useWCActiveSessions,
   useWCSessionHistory,

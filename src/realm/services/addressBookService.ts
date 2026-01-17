@@ -1,5 +1,4 @@
 /**
- * Tori Wallet - Address Book Service (Realm)
  * 주소록 CRUD 서비스
  */
 

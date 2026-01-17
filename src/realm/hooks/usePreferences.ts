@@ -1,5 +1,5 @@
 /**
- * Tori Wallet - Realm Hooks for User Preferences
+ * 사용자 설정 관리 훅
  */
 
 import { useState, useEffect, useCallback } from 'react';

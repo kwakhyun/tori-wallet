@@ -1,5 +1,5 @@
 /**
- * Tori Wallet - Realm Hooks for Transaction Cache
+ * 트랜잭션 캐시 관리 훅
  */
 
 import { useState, useEffect, useCallback } from 'react';
