@@ -1,5 +1,5 @@
 /**
- * Tori Wallet - E2E Test Setup
+ * E2E 테스트 설정
  */
 
 import { beforeAll, afterAll, beforeEach } from '@jest/globals';

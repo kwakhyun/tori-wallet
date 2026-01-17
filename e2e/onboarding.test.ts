@@ -1,5 +1,5 @@
 /**
- * Tori Wallet - Onboarding E2E Tests
+ * 온보딩 E2E 테스트
  */
 
 import { by, device, element, expect } from 'detox';

@@ -1,9 +1,6 @@
 /**
- * Tori Wallet - Wallet Lock/Unlock E2E Tests
- *
- * 지갑 잠금/해제 플로우 테스트:
+ * 지갑 잠금/해제 E2E 테스트
  * 앱 잠금 → 앱 재시작 → PIN 입력 → 홈 진입
- * 생체인증 → 홈 진입
  */
 
 import { by, device, element, expect, waitFor } from 'detox';

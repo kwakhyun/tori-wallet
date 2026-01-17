@@ -1,7 +1,5 @@
 /**
- * Tori Wallet - Send Transaction E2E Tests
- *
- * 토큰 전송 플로우 테스트:
+ * 토큰 전송 E2E 테스트
  * 주소 입력 → 금액 입력 → 가스 확인 → PIN 입력 → 전송 → 완료
  */
 
