@@ -1,6 +1,5 @@
 /**
- * Tori Wallet - Logger Utility
- * 프로덕션 환경에서 민감한 로그를 숨기는 로거
+ * 로거 유틸리티 (프로덕션 환경에서 민감 로그 숨김)
  */
 
 const isDev = __DEV__;

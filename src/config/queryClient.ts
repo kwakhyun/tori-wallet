@@ -1,5 +1,4 @@
 /**
- * Tori Wallet - Query Client Configuration
  * React Query 클라이언트 설정 (에러 처리, 재시도, 오프라인 대응)
  */
 

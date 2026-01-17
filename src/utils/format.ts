@@ -1,5 +1,5 @@
 /**
- * Tori Wallet - Number/Currency Formatting Utilities
+ * 숫자/통화 포맷팅 유틸리티
  */
 
 import { formatEther, parseEther, formatUnits, parseUnits } from 'viem';

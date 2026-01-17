@@ -1,6 +1,5 @@
 /**
- * Tori Wallet - Polyfills
- * React Native 환경에서 필요한 polyfill 설정
+ * React Native 환경 Polyfill 설정
  */
 
 // crypto.getRandomValues polyfill (니모닉 생성 등에 필요)
@@ -19,7 +18,7 @@ if (typeof globalThis.TextDecoder === 'undefined') {
     TextDecoder;
 }
 
-// Buffer polyfill
+// Buffer 폴리필
 import { Buffer as BufferPolyfill } from 'buffer';
 
 // 글로벌 Buffer 설정

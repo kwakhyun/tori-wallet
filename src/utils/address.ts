@@ -1,5 +1,5 @@
 /**
- * Tori Wallet - Address Utilities
+ * 주소 관련 유틸리티
  */
 
 /**

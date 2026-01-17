@@ -1,4 +1,6 @@
-// Tori Wallet - Styled Components Theme Type Declaration
+/**
+ * styled-components 테마 타입 정의
+ */
 import 'styled-components/native';
 import { Theme } from './theme';
 

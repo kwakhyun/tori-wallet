@@ -1,6 +1,5 @@
 /**
- * Tori Wallet - Error Handling Utilities
- * 에러 처리 및 사용자 친화적 메시지 변환
+ * 에러 처리 유틸리티
  */
 
 export enum ErrorCode {

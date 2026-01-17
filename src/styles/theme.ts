@@ -1,13 +1,12 @@
 /**
- * Tori Wallet Theme Configuration
- * 라이트/다크 모드 지원
+ * 테마 설정 (라이트/다크 모드)
  */
 
 // ============================================
-// Color Palette (공통 색상 팔레트)
+// 공통 색상 팔레트
 // ============================================
 const palette = {
-  // Primary Colors
+  // 기본 색상
   indigo: {
     50: '#EEF2FF',
     100: '#E0E7FF',
@@ -21,7 +20,7 @@ const palette = {
     900: '#312E81',
   },
 
-  // Cyan Colors
+  // 시안 색상
   cyan: {
     50: '#ECFEFF',
     100: '#CFFAFE',
@@ -35,7 +34,7 @@ const palette = {
     900: '#164E63',
   },
 
-  // Gray Colors
+  // 회색
   gray: {
     50: '#FAFAFA',
     100: '#F4F4F5',
@@ -49,7 +48,7 @@ const palette = {
     900: '#18181B',
   },
 
-  // Semantic Colors
+  // 시맨틱 색상
   green: {
     50: '#ECFDF5',
     100: '#D1FAE5',
@@ -82,11 +81,11 @@ const palette = {
     600: '#2563EB',
   },
 
-  // Base Colors
+  // 기본 색상
   white: '#FFFFFF',
   black: '#000000',
 
-  // Background Colors (Dark Theme Base)
+  // 배경 색상 (다크 테마 기준)
   background: {
     dark: '#0F0F23',
     secondary: '#1A1A2E',
@@ -96,7 +95,7 @@ const palette = {
 };
 
 // ============================================
-// Dark Theme Colors
+// 다크 테마 색상
 // ============================================
 const darkColors = {
   // Primary
@@ -162,7 +161,7 @@ const darkColors = {
 };
 
 // ============================================
-// Light Theme Colors
+// 라이트 테마 색상
 // ============================================
 const lightColors = {
   // Primary
@@ -231,7 +230,7 @@ const lightColors = {
 };
 
 // ============================================
-// Shared Theme Properties
+// 공통 테마 속성
 // ============================================
 const sharedTheme = {
   spacing: {
@@ -316,7 +315,7 @@ const sharedTheme = {
 };
 
 // ============================================
-// Theme Definitions
+// 테마 정의
 // ============================================
 export const darkTheme = {
   ...sharedTheme,
@@ -330,13 +329,13 @@ export const lightTheme = {
   isDark: false,
 };
 
-// Default theme (dark)
+// 기본 테마 (다크)
 export const theme = darkTheme;
 
-// Theme type
+// 테마 타입
 export type Theme = typeof darkTheme;
 export type ThemeColors = typeof darkColors;
 export type ThemeMode = 'light' | 'dark' | 'system';
 
-// Color palette export for direct access
+// 색상 팔레트 export
 export { palette };

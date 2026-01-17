@@ -1,9 +1,6 @@
 /**
- * Tori Wallet - Error Reporter
  * 에러 리포팅 서비스 추상화 레이어
- *
- * 프로덕션에서는 Sentry, Crashlytics 등 실제 서비스와 연동
- * 개발 환경에서는 콘솔 로깅으로 대체
+ * 프로덕션: Sentry/Crashlytics 연동, 개발: 콘솔 로깅
  */
 
 import { createLogger } from './logger';

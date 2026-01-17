@@ -1,9 +1,5 @@
 /**
- * Tori Wallet - Local Database
- * 트랜잭션 히스토리 및 로컬 데이터 저장소
- *
- * 현재는 AsyncStorage 기반으로 구현
- * Realm 도입 시 이 인터페이스를 유지하며 구현체만 교체
+ * 로컬 데이터베이스 (트랜잭션 히스토리, 로컬 데이터 저장소)
  */
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -16,7 +12,7 @@ import { logger } from '../utils/logger';
  * Realm 도입 시: @realm/react의 Realm.Object로 변환
  */
 export interface TransactionRecord {
-  id: string; // Primary Key
+  id: string; // 기본 키
   hash: string;
   from: string;
   to: string;
@@ -39,7 +35,7 @@ export interface TransactionRecord {
  * 토큰 정보 스키마
  */
 export interface TokenInfo {
-  address: string; // Primary Key
+  address: string; // 기본 키
   chainId: number;
   symbol: string;
   name: string;
@@ -53,7 +49,7 @@ export interface TokenInfo {
  * dApp 연결 정보 스키마
  */
 export interface DAppConnection {
-  topic: string; // Primary Key
+  topic: string; // 기본 키
   name: string;
   url: string;
   iconUrl?: string;
@@ -66,7 +62,7 @@ export interface DAppConnection {
  * 스왑 히스토리 스키마
  */
 export interface SwapRecord {
-  id: string; // Primary Key
+  id: string; // 기본 키
   txHash: string;
   fromToken: string;
   toToken: string;
