@@ -1,5 +1,5 @@
 /**
- * Tori Wallet - App Tests
+ * App 컴포넌트 테스트
  * 앱 진입점 테스트
  */
 
@@ -27,6 +27,14 @@ jest.mock('@react-navigation/bottom-tabs', () => ({
     Navigator: ({ children }: { children: React.ReactNode }) => children,
     Screen: () => null,
   }),
+}));
+
+// RootNavigator mock - 이것이 핵심!
+jest.mock('../../src/navigation/RootNavigator', () => () => null);
+
+// useAppState mock - 구독 방지
+jest.mock('../../src/hooks/useAppState', () => ({
+  useAppState: jest.fn(),
 }));
 
 // Store mock
@@ -81,23 +89,30 @@ jest.mock('../../src/realm', () => ({
   },
 }));
 
-// Theme store mock
-jest.mock('../../src/store/themeStore', () => ({
-  useThemeStore: () => ({
-    activeTheme: {
-      colors: {
-        primary: '#7B61FF',
-        background: '#0D0D0D',
-        surface: '#1A1A1A',
-        textPrimary: '#FFFFFF',
-        border: '#333333',
-        success: '#22C55E',
-        error: '#EF4444',
-      },
+// Theme store mock - subscribe와 getState 포함
+const mockThemeState = {
+  activeTheme: {
+    colors: {
+      primary: '#7B61FF',
+      background: '#0D0D0D',
+      surface: '#1A1A1A',
+      textPrimary: '#FFFFFF',
+      border: '#333333',
+      success: '#22C55E',
+      error: '#EF4444',
     },
-    isDarkMode: true,
-    updateSystemTheme: jest.fn(),
-  }),
+  },
+  isDarkMode: true,
+  updateSystemTheme: jest.fn(),
+};
+
+const mockUseThemeStore = Object.assign(() => mockThemeState, {
+  subscribe: jest.fn(() => jest.fn()), // unsubscribe 함수 반환
+  getState: jest.fn(() => mockThemeState),
+});
+
+jest.mock('../../src/store/themeStore', () => ({
+  useThemeStore: mockUseThemeStore,
 }));
 
 import App from '../../App';
