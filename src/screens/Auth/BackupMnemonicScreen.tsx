@@ -10,6 +10,7 @@ import {
   ScrollView,
   Alert,
   Clipboard,
+  StyleSheet,
 } from 'react-native';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -21,6 +22,10 @@ type NavigationProp = NativeStackNavigationProp<
   'BackupMnemonic'
 >;
 type BackupMnemonicRouteProp = RouteProp<AuthStackParamList, 'BackupMnemonic'>;
+
+const styles = StyleSheet.create({
+  scrollContent: { flexGrow: 1 },
+});
 
 function BackupMnemonicScreen(): React.JSX.Element {
   const navigation = useNavigation<NavigationProp>();
@@ -76,7 +81,7 @@ function BackupMnemonicScreen(): React.JSX.Element {
   return (
     <Container>
       <StatusBar barStyle="light-content" />
-      <ScrollView contentContainerStyle={{ flexGrow: 1 }}>
+      <ScrollView contentContainerStyle={styles.scrollContent}>
         <Content>
           <Header>
             <BackButton onPress={() => navigation.goBack()}>

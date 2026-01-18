@@ -233,7 +233,7 @@ export function PieChart({
         <LegendContainer>
           {validData.slice(0, 5).map((item, index) => (
             <LegendItem key={index}>
-              <LegendDot style={{ backgroundColor: item.color || '#666' }} />
+              <LegendDot $color={item.color} />
               <LegendText>{item.symbol || 'Unknown'}</LegendText>
               <LegendPercentage>
                 {safeNumber(item.percentage, 0).toFixed(1)}%
@@ -242,7 +242,7 @@ export function PieChart({
           ))}
           {validData.length > 5 && (
             <LegendItem>
-              <LegendDot style={{ backgroundColor: '#666' }} />
+              <LegendDot $color="#666" />
               <LegendText>기타</LegendText>
               <LegendPercentage>
                 {validData
@@ -317,11 +317,12 @@ const LegendItem = styled.View`
   border-radius: ${({ theme }) => theme.borderRadius.sm}px;
 `;
 
-const LegendDot = styled.View`
+const LegendDot = styled.View<{ $color?: string }>`
   width: 10px;
   height: 10px;
   border-radius: 5px;
   margin-right: ${({ theme }) => theme.spacing.xs}px;
+  background-color: ${({ $color }) => $color || '#666'};
 `;
 
 const LegendText = styled.Text`

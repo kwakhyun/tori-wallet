@@ -4,7 +4,7 @@
 
 import React from 'react';
 import styled from 'styled-components/native';
-import { Modal, ScrollView } from 'react-native';
+import { Modal } from 'react-native';
 import { formatEther } from 'viem';
 
 interface SignRequestModalProps {
@@ -176,7 +176,7 @@ export function SignRequestModal({
             </DAppInfoSection>
 
             {/* 상세 정보 */}
-            <ScrollView style={{ maxHeight: 250 }}>
+            <DetailsScrollView>
               {info.type === 'transaction' && info.details && (
                 <DetailsSection>
                   <DetailRow>
@@ -245,7 +245,7 @@ export function SignRequestModal({
                   </MessageBox>
                 </DetailsSection>
               )}
-            </ScrollView>
+            </DetailsScrollView>
 
             {/* 버튼 */}
             <ButtonSection>
@@ -426,6 +426,10 @@ const MessageContent = styled.Text`
   font-size: 14px;
   font-family: monospace;
   line-height: 20px;
+`;
+
+const DetailsScrollView = styled.ScrollView`
+  max-height: 250px;
 `;
 
 const ButtonSection = styled.View`

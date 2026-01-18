@@ -112,7 +112,6 @@ function generateContentsJSON() {
           : size === 1024
           ? 'ios-marketing'
           : 'iphone';
-      const actualSize = size * scale;
       images.push({
         filename: `icon-${size}@${scale}x.png`,
         idiom: idiom === 'ios-marketing' ? 'ios-marketing' : idiom,

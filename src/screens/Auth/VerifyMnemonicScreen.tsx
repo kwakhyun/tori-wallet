@@ -4,7 +4,13 @@
 
 import React, { useState, useMemo, useCallback } from 'react';
 import styled from 'styled-components/native';
-import { SafeAreaView, StatusBar, ScrollView, Alert } from 'react-native';
+import {
+  SafeAreaView,
+  StatusBar,
+  ScrollView,
+  Alert,
+  StyleSheet,
+} from 'react-native';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import type { RouteProp } from '@react-navigation/native';
@@ -16,6 +22,10 @@ type NavigationProp = NativeStackNavigationProp<
   'VerifyMnemonic'
 >;
 type VerifyMnemonicRouteProp = RouteProp<AuthStackParamList, 'VerifyMnemonic'>;
+
+const styles = StyleSheet.create({
+  scrollContent: { flexGrow: 1 },
+});
 
 function VerifyMnemonicScreen(): React.JSX.Element {
   const navigation = useNavigation<NavigationProp>();
@@ -79,7 +89,7 @@ function VerifyMnemonicScreen(): React.JSX.Element {
   return (
     <Container>
       <StatusBar barStyle="light-content" />
-      <ScrollView contentContainerStyle={{ flexGrow: 1 }}>
+      <ScrollView contentContainerStyle={styles.scrollContent}>
         <Content>
           <Header>
             <BackButton onPress={() => navigation.goBack()}>

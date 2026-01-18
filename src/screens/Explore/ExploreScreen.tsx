@@ -12,11 +12,17 @@ import {
   ActivityIndicator,
   Image,
   Alert,
+  StyleSheet,
 } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '@/navigation/RootNavigator';
 import { coinService, Coin } from '@/services/coinService';
+
+const styles = StyleSheet.create({
+  searchList: { paddingHorizontal: 16 },
+  coinList: { paddingHorizontal: 16, paddingBottom: 20 },
+});
 
 // 간단한 디바운스 구현
 function useDebounce<T>(value: T, delay: number): T {
@@ -234,7 +240,7 @@ function ExploreScreen(): React.JSX.Element {
               data={searchResults}
               keyExtractor={item => item.id}
               renderItem={renderSearchItem}
-              contentContainerStyle={{ paddingHorizontal: 16 }}
+              contentContainerStyle={styles.searchList}
             />
           ) : (
             <EmptyContainer>
@@ -256,7 +262,7 @@ function ExploreScreen(): React.JSX.Element {
                 tintColor={theme.colors.primary}
               />
             }
-            contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: 20 }}
+            contentContainerStyle={styles.coinList}
             showsVerticalScrollIndicator={false}
           />
         </>

@@ -1,7 +1,9 @@
 /**
  * 로고 미리보기 화면 (개발용)
+ * 다양한 크기와 배경에서 로고를 테스트하기 위한 레이아웃 스타일 필요
  */
 
+/* eslint-disable react-native/no-inline-styles */
 import React from 'react';
 import { ScrollView, StyleSheet } from 'react-native';
 import styled from 'styled-components/native';

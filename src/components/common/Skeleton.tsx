@@ -1,7 +1,9 @@
 /**
  * 로딩 스켈레톤 UI 컴포넌트 (Shimmer 애니메이션)
+ * Animated 스타일이 동적으로 적용되어 인라인 스타일 필요
  */
 
+/* eslint-disable react-native/no-inline-styles */
 import React, { useEffect, useRef } from 'react';
 import { Animated, DimensionValue, View } from 'react-native';
 import styled, { useTheme } from 'styled-components/native';

@@ -5,6 +5,6 @@ import 'styled-components/native';
 import { Theme } from './theme';
 
 declare module 'styled-components/native' {
-  // eslint-disable-next-line @typescript-eslint/no-empty-interface
+  // DefaultTheme를 Theme로 확장하여 타입 안전성 제공
   export interface DefaultTheme extends Theme {}
 }

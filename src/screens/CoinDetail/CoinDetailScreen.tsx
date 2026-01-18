@@ -1,7 +1,9 @@
 /**
  * 코인 상세 화면 (가격, 시세 그래프, 구매)
+ * 차트 요소의 위치가 동적으로 계산되어 인라인 스타일 필요
  */
 
+/* eslint-disable react-native/no-inline-styles */
 import React, { useState, useCallback, useEffect } from 'react';
 import styled, { useTheme } from 'styled-components/native';
 import {
