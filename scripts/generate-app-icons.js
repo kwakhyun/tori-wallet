@@ -1,15 +1,9 @@
 #!/usr/bin/env node
 /**
- * Tori Wallet - App Icon Generator
- *
- * 이 스크립트는 앱 아이콘을 생성합니다.
- * SVG를 PNG로 변환하여 iOS/Android 앱 아이콘으로 사용합니다.
- *
- * 사전 요구사항:
- *   npm install -D sharp
- *
- * 사용법:
- *   node scripts/generate-app-icons.js
+ * 앱 아이콘 생성 스크립트
+ * SVG를 PNG로 변환하여 iOS/Android 앱 아이콘 생성
+ * 사전 요구사항: yarn add -D sharp
+ * 사용법: node scripts/generate-app-icons.js
  */
 
 const fs = require('fs');
@@ -166,7 +160,7 @@ async function main() {
   } catch {
     console.log('\n⚠️  sharp 패키지가 설치되지 않았습니다.');
     console.log('   PNG 아이콘을 생성하려면 다음 명령어를 실행하세요:');
-    console.log('   npm install -D sharp');
+    console.log('   yarn add -D sharp');
     console.log('\n   SVG 파일은 생성되었습니다. 다음 도구로 PNG 변환 가능:');
     console.log('   - https://cloudconvert.com/svg-to-png');
     console.log('   - https://www.appicon.co/');
