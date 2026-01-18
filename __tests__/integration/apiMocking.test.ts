@@ -6,6 +6,9 @@
 import { server } from '../mocks/server';
 import { http, HttpResponse } from 'msw';
 
+// 기본 URL 상수
+const BASE_URL = 'http://localhost:3000';
+
 // 타입 정의
 interface BalanceResponse {
   balance: string;
@@ -78,7 +81,7 @@ describe('MSW Integration', () => {
 
   describe('Balance API', () => {
     it('should return mock balance', async () => {
-      const response = await fetch('/api/v1/balance/0x123');
+      const response = await fetch(`${BASE_URL}/api/v1/balance/0x123`);
       const data = (await response.json()) as BalanceResponse;
 
       expect(data).toEqual({
@@ -99,7 +102,7 @@ describe('MSW Integration', () => {
         ),
       );
 
-      const response = await fetch('/api/v1/balance/0x123');
+      const response = await fetch(`${BASE_URL}/api/v1/balance/0x123`);
       expect(response.status).toBe(500);
 
       const data = (await response.json()) as BalanceResponse;
@@ -109,7 +112,7 @@ describe('MSW Integration', () => {
 
   describe('Tokens API', () => {
     it('should return mock tokens', async () => {
-      const response = await fetch('/api/v1/tokens/0x123');
+      const response = await fetch(`${BASE_URL}/api/v1/tokens/0x123`);
       const data = (await response.json()) as TokensResponse;
 
       expect(data.tokens).toHaveLength(2);
@@ -120,7 +123,7 @@ describe('MSW Integration', () => {
 
   describe('Transactions API', () => {
     it('should return mock transactions', async () => {
-      const response = await fetch('/api/v1/transactions/0x123');
+      const response = await fetch(`${BASE_URL}/api/v1/transactions/0x123`);
       const data = (await response.json()) as TransactionsResponse;
 
       expect(data.transactions).toHaveLength(2);
@@ -129,7 +132,7 @@ describe('MSW Integration', () => {
     });
 
     it('should send transaction successfully', async () => {
-      const response = await fetch('/api/v1/transactions/send', {
+      const response = await fetch(`${BASE_URL}/api/v1/transactions/send`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -155,7 +158,7 @@ describe('MSW Integration', () => {
         ),
       );
 
-      const response = await fetch('/api/v1/transactions/send', {
+      const response = await fetch(`${BASE_URL}/api/v1/transactions/send`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -174,7 +177,9 @@ describe('MSW Integration', () => {
 
   describe('ENS Resolution API', () => {
     it('should resolve vitalik.eth', async () => {
-      const response = await fetch('/api/v1/ens/resolve/vitalik.eth');
+      const response = await fetch(
+        `${BASE_URL}/api/v1/ens/resolve/vitalik.eth`,
+      );
       const data = (await response.json()) as ENSResponse;
 
       expect(data.address).toBe('0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045');
@@ -182,14 +187,16 @@ describe('MSW Integration', () => {
     });
 
     it('should return 404 for unknown ENS names', async () => {
-      const response = await fetch('/api/v1/ens/resolve/unknown.eth');
+      const response = await fetch(
+        `${BASE_URL}/api/v1/ens/resolve/unknown.eth`,
+      );
       expect(response.status).toBe(404);
     });
   });
 
   describe('Gas Estimation API', () => {
     it('should return gas estimate', async () => {
-      const response = await fetch('/api/v1/gas/estimate', {
+      const response = await fetch(`${BASE_URL}/api/v1/gas/estimate`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -208,7 +215,7 @@ describe('MSW Integration', () => {
 
   describe('Price API', () => {
     it('should return ETH price', async () => {
-      const response = await fetch('/api/v3/simple/price');
+      const response = await fetch(`${BASE_URL}/api/v3/simple/price`);
       const data = (await response.json()) as PriceResponse;
 
       expect(data.ethereum.usd).toBe(2500);

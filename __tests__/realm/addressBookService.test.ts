@@ -4,6 +4,37 @@
 
 import { AddressBookSchema } from '../../src/realm/schemas';
 
+// uuid 모킹
+jest.mock('uuid', () => ({
+  v4: jest.fn(() => 'test-uuid'),
+}));
+
+// Realm 모킹
+jest.mock('../../src/realm/database', () => ({
+  realmDB: {
+    getRealm: jest.fn().mockResolvedValue({
+      objects: jest.fn(() => ({
+        filtered: jest.fn().mockReturnValue({
+          sorted: jest.fn().mockReturnValue([]),
+          length: 0,
+          [Symbol.iterator]: function* () {},
+        }),
+        sorted: jest.fn().mockReturnValue([]),
+        length: 0,
+        [Symbol.iterator]: function* () {},
+      })),
+      objectForPrimaryKey: jest.fn(() => null),
+      create: jest.fn((schemaName: string, obj: any) => obj),
+      write: jest.fn((callback: () => void) => callback()),
+      delete: jest.fn(),
+    }),
+    deleteAllOf: jest.fn().mockResolvedValue(undefined),
+  },
+}));
+
+// 모킹 후 서비스 import
+import { addressBookService } from '../../src/realm/services/addressBookService';
+
 describe('AddressBookService', () => {
   describe('Schema', () => {
     it('should have correct schema name', () => {
@@ -85,6 +116,56 @@ describe('AddressBookService', () => {
       };
 
       expect(updateInput.isFavorite).toBe(true);
+    });
+  });
+
+  describe('Service', () => {
+    beforeEach(() => {
+      jest.clearAllMocks();
+    });
+
+    it('should be defined', () => {
+      expect(addressBookService).toBeDefined();
+    });
+
+    it('should have create method', () => {
+      expect(typeof addressBookService.create).toBe('function');
+    });
+
+    it('should have update method', () => {
+      expect(typeof addressBookService.update).toBe('function');
+    });
+
+    it('should have delete method', () => {
+      expect(typeof addressBookService.delete).toBe('function');
+    });
+
+    it('should have getById method', () => {
+      expect(typeof addressBookService.getById).toBe('function');
+    });
+
+    it('should have getByAddress method', () => {
+      expect(typeof addressBookService.getByAddress).toBe('function');
+    });
+
+    it('should have getAll method', () => {
+      expect(typeof addressBookService.getAll).toBe('function');
+    });
+
+    it('should have getFavorites method', () => {
+      expect(typeof addressBookService.getFavorites).toBe('function');
+    });
+
+    it('should have search method', () => {
+      expect(typeof addressBookService.search).toBe('function');
+    });
+
+    it('should have toggleFavorite method', () => {
+      expect(typeof addressBookService.toggleFavorite).toBe('function');
+    });
+
+    it('should have count method', () => {
+      expect(typeof addressBookService.count).toBe('function');
     });
   });
 });
