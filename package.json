@@ -13,8 +13,10 @@
     "test:watch": "jest --watch",
     "test:coverage": "jest --coverage",
     "e2e:ios": "detox test --configuration ios.sim.debug",
+    "e2e:ios:release": "detox test --configuration ios.sim.release",
     "e2e:android": "detox test --configuration android.emu.debug",
     "e2e:build:ios": "detox build --configuration ios.sim.debug",
+    "e2e:build:ios:release": "detox build --configuration ios.sim.release",
     "e2e:build:android": "detox build --configuration android.emu.debug",
     "clean": "watchman watch-del-all && rm -rf node_modules && rm -rf $TMPDIR/metro-* && yarn install",
     "clean:android": "cd android && ./gradlew clean && cd ..",
@@ -22,7 +24,8 @@
     "pod:install": "cd ios && pod install && cd ..",
     "typecheck": "tsc --noEmit",
     "generate:icons": "node scripts/generate-app-icons.js",
-    "generate:splash": "react-native generate-bootsplash assets/bootsplash_logo.svg --platforms=android,ios --background=#1F2937 --logo-width=150"
+    "generate:splash": "react-native generate-bootsplash assets/bootsplash_logo.svg --platforms=android,ios --background=#1F2937 --logo-width=150",
+    "postinstall": "patch-package"
   },
   "dependencies": {
     "@react-native-async-storage/async-storage": "^2.2.0",
@@ -82,6 +85,7 @@
     "eslint": "^8.19.0",
     "jest": "^29.6.3",
     "msw": "^2.12.7",
+    "patch-package": "^8.0.1",
     "prettier": "2.8.8",
     "react-test-renderer": "19.2.0",
     "typescript": "^5.8.3",
