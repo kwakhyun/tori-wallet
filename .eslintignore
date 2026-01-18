@@ -1,0 +1,14 @@
+# 빌드 출력
+node_modules/
+android/build/
+ios/build/
+ios/Pods/
+
+# 테스트 커버리지 리포트
+coverage/
+
+# 번들 출력
+*.bundle
+
+# 환경 파일
+.env*
