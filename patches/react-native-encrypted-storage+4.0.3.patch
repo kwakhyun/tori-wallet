@@ -1,0 +1,13 @@
+diff --git a/node_modules/react-native-encrypted-storage/android/build.gradle b/node_modules/react-native-encrypted-storage/android/build.gradle
+index b343dc8..9b17fff 100644
+--- a/node_modules/react-native-encrypted-storage/android/build.gradle
++++ b/node_modules/react-native-encrypted-storage/android/build.gradle
+@@ -24,7 +24,7 @@ android {
+   buildToolsVersion getExtOrDefault('buildToolsVersion')
+ 
+   defaultConfig {
+-    minSdkVersion 21
++    minSdkVersion getExtOrIntegerDefault("minSdkVersion")
+     targetSdkVersion getExtOrIntegerDefault('targetSdkVersion')
+     versionCode 50
+     versionName "4.0.3"
