@@ -5,13 +5,19 @@
 import React from 'react';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { useTheme } from 'styled-components/native';
-import styled from 'styled-components/native';
 
 import HomeScreen from '@/screens/Home/HomeScreen';
 import ExploreScreen from '@/screens/Explore/ExploreScreen';
 import PortfolioScreen from '@/screens/Portfolio/PortfolioScreen';
 import ActivityScreen from '@/screens/Activity/ActivityScreen';
 import SettingsScreen from '@/screens/Settings/SettingsScreen';
+import {
+  HomeIcon,
+  ExploreIcon,
+  PortfolioIcon,
+  ActivityIcon,
+  SettingsIcon,
+} from '@/components/icons';
 
 export type MainTabParamList = {
   Home: undefined;
@@ -23,25 +29,17 @@ export type MainTabParamList = {
 
 const Tab = createBottomTabNavigator<MainTabParamList>();
 
-// 탭 아이콘 스타일 - 심플한 라인 아이콘
-const TabIconText = styled.Text<{ $focused: boolean; $color: string }>`
-  font-size: 22px;
-  color: ${({ $color }) => $color};
-  margin-bottom: 2px;
-`;
+// 아이콘 크기
+const ICON_SIZE = 24;
 
-// 아이콘 렌더링 함수들 (심플한 유니코드 심볼)
+// 아이콘 렌더링 함수들 (모던 SVG 아이콘)
 const renderHomeIcon = ({
   focused,
   color,
 }: {
   focused: boolean;
   color: string;
-}) => (
-  <TabIconText $focused={focused} $color={color}>
-    ⌂
-  </TabIconText>
-);
+}) => <HomeIcon size={ICON_SIZE} color={color} focused={focused} />;
 
 const renderExploreIcon = ({
   focused,
@@ -49,11 +47,7 @@ const renderExploreIcon = ({
 }: {
   focused: boolean;
   color: string;
-}) => (
-  <TabIconText $focused={focused} $color={color}>
-    ◎
-  </TabIconText>
-);
+}) => <ExploreIcon size={ICON_SIZE} color={color} focused={focused} />;
 
 const renderPortfolioIcon = ({
   focused,
@@ -61,11 +55,7 @@ const renderPortfolioIcon = ({
 }: {
   focused: boolean;
   color: string;
-}) => (
-  <TabIconText $focused={focused} $color={color}>
-    ◐
-  </TabIconText>
-);
+}) => <PortfolioIcon size={ICON_SIZE} color={color} focused={focused} />;
 
 const renderActivityIcon = ({
   focused,
@@ -73,11 +63,7 @@ const renderActivityIcon = ({
 }: {
   focused: boolean;
   color: string;
-}) => (
-  <TabIconText $focused={focused} $color={color}>
-    ☰
-  </TabIconText>
-);
+}) => <ActivityIcon size={ICON_SIZE} color={color} focused={focused} />;
 
 const renderSettingsIcon = ({
   focused,
@@ -85,11 +71,7 @@ const renderSettingsIcon = ({
 }: {
   focused: boolean;
   color: string;
-}) => (
-  <TabIconText $focused={focused} $color={color}>
-    ⚙
-  </TabIconText>
-);
+}) => <SettingsIcon size={ICON_SIZE} color={color} focused={focused} />;
 
 function MainTabNavigator(): React.JSX.Element {
   const theme = useTheme();

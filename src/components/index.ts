@@ -4,5 +4,6 @@
 
 export * from './common';
 export * from './charts';
+export * from './icons';
 export { SignRequestModal } from './SignRequestModal';
 export type { SignRequest } from './SignRequestModal';
