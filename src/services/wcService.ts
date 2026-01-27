@@ -6,12 +6,14 @@ import { Core } from '@walletconnect/core';
 import { Web3Wallet, IWeb3Wallet } from '@walletconnect/web3wallet';
 import { buildApprovedNamespaces, getSdkError } from '@walletconnect/utils';
 import type { SessionTypes, SignClientTypes } from '@walletconnect/types';
+import Config from 'react-native-config';
 import { createLogger } from '@/utils/logger';
 
 const logger = createLogger('WalletConnect');
 
-// WalletConnect Project ID (https://cloud.walletconnect.com 에서 발급)
-const PROJECT_ID = 'eb14faeda8b62ae100939b41cdf136d8';
+// WalletConnect Project ID (환경 변수에서 로드, 없으면 기본값 사용)
+const PROJECT_ID =
+  Config.WALLETCONNECT_PROJECT_ID || 'eb14faeda8b62ae100939b41cdf136d8';
 
 const METADATA = {
   name: 'Tori Wallet',

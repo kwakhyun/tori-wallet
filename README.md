@@ -49,8 +49,22 @@ cd ios && pod install && cd ..
 
 # 환경변수 설정
 cp .env.example .env
-# .env 파일에 WALLETCONNECT_PROJECT_ID 입력
+```
 
+### 환경 변수 설정
+
+`.env` 파일을 생성하고 다음 값들을 설정하세요:
+
+| 변수                       | 필수 | 용도                      | 발급처                                                 |
+| -------------------------- | :--: | ------------------------- | ------------------------------------------------------ |
+| `WALLETCONNECT_PROJECT_ID` |  ⚠️  | dApp 연결                 | [WalletConnect Cloud](https://cloud.walletconnect.com) |
+| `ZEROX_API_KEY`            |  ⚠️  | 토큰 스왑                 | [0x Dashboard](https://dashboard.0x.org)               |
+| `ALCHEMY_API_KEY`          | 권장 | 안정적인 RPC              | [Alchemy](https://dashboard.alchemy.com)               |
+| `COINGECKO_API_KEY`        | 선택 | 가격 조회 Rate Limit 상향 | [CoinGecko](https://www.coingecko.com/en/api)          |
+
+> ⚠️ 환경 변수 없이도 기본값으로 실행 가능하지만, Rate Limit이 발생할 수 있습니다.
+
+```bash
 # 실행
 yarn ios     # iOS
 yarn android # Android

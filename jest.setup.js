@@ -36,6 +36,14 @@ jest.mock('react-native-keychain', () => ({
   },
 }));
 
+// Mock react-native-config
+jest.mock('react-native-config', () => ({
+  WALLETCONNECT_PROJECT_ID: 'test_project_id',
+  ZEROX_API_KEY: 'test_0x_api_key',
+  ALCHEMY_API_KEY: 'test_alchemy_key',
+  COINGECKO_API_KEY: 'test_coingecko_key',
+}));
+
 // Mock react-native-encrypted-storage
 jest.mock('react-native-encrypted-storage', () => ({
   setItem: jest.fn(() => Promise.resolve()),

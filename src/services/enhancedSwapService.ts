@@ -3,6 +3,7 @@
  */
 
 import { formatUnits, parseUnits } from 'viem';
+import Config from 'react-native-config';
 
 // 체인별 0x API 엔드포인트
 const ZEROX_API_URLS: Record<number, string> = {
@@ -381,7 +382,7 @@ export interface TokenPrice {
 }
 
 class EnhancedSwapService {
-  private apiKey: string = '';
+  private apiKey: string = Config.ZEROX_API_KEY || '';
   private priceCache: Map<string, { price: TokenPrice; timestamp: number }> =
     new Map();
   private readonly PRICE_CACHE_TTL = 60000; // 1분

@@ -3,6 +3,7 @@
  */
 
 import { formatUnits, parseUnits } from 'viem';
+import Config from 'react-native-config';
 
 // 체인별 0x API 엔드포인트 (Sepolia는 미지원)
 const ZEROX_API_URLS: Record<number, string> = {
@@ -220,7 +221,7 @@ export interface SwapParams {
 }
 
 class SwapService {
-  private apiKey: string = ''; // 0x API 키 (필요시 설정)
+  private apiKey: string = Config.ZEROX_API_KEY || '';
 
   /**
    * 스왑 견적 가져오기
