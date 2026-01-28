@@ -2,14 +2,9 @@
  * 잠금 해제 PIN 입력 화면
  */
 
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect, useRef } from 'react';
 import styled from 'styled-components/native';
-import {
-  SafeAreaView,
-  StatusBar,
-  Alert,
-  ActivityIndicator,
-} from 'react-native';
+import { SafeAreaView, StatusBar, Alert, Animated } from 'react-native';
 import { useWalletStore } from '@/store/walletStore';
 import { walletService } from '@/services/walletService';
 import { ToriCatFace } from '@/components/common/Logo';
@@ -21,7 +16,38 @@ function UnlockScreen(): React.JSX.Element {
   const { unlock } = useWalletStore();
   const [pin, setPin] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [displayProgress, setDisplayProgress] = useState(0);
   const [attempts, setAttempts] = useState(0);
+
+  // 애니메이션 값
+  const animatedProgress = useRef(new Animated.Value(0)).current;
+
+  // 애니메이션 값 변화 리스너 (텍스트 동기화)
+  useEffect(() => {
+    const listenerId = animatedProgress.addListener(({ value }) => {
+      setDisplayProgress(Math.round(value));
+    });
+    return () => {
+      animatedProgress.removeListener(listenerId);
+    };
+  }, [animatedProgress]);
+
+  // 구간별 진행률 표시 (부드러운 애니메이션)
+  const setProgress = useCallback(
+    (value: number) => {
+      Animated.timing(animatedProgress, {
+        toValue: value,
+        duration: 300,
+        useNativeDriver: false,
+      }).start();
+    },
+    [animatedProgress],
+  );
+
+  // 컴포넌트 언마운트 시 정리
+  useEffect(() => {
+    // cleanup if needed
+  }, []);
 
   // 생체인증 시도
   const tryBiometric = useCallback(async () => {
@@ -64,13 +90,30 @@ function UnlockScreen(): React.JSX.Element {
 
       if (newPin.length === 6) {
         setIsLoading(true);
+        setProgress(10);
+
+        // 진행률 업데이트 간 딜레이
+        await new Promise(resolve => setTimeout(resolve, 200));
+        setProgress(30);
+        await new Promise(resolve => setTimeout(resolve, 200));
+        setProgress(50);
+
         try {
           const mnemonic = await walletService.retrieveMnemonicWithPin(newPin);
+
+          await new Promise(resolve => setTimeout(resolve, 150));
+          setProgress(70);
+          await new Promise(resolve => setTimeout(resolve, 150));
+          setProgress(85);
+
           if (mnemonic && walletService.validateMnemonic(mnemonic)) {
+            await new Promise(resolve => setTimeout(resolve, 100));
+            setProgress(100);
             unlock();
             setPin('');
             setAttempts(0);
           } else {
+            setProgress(0);
             setAttempts(prev => prev + 1);
             setPin('');
             if (attempts >= 4) {
@@ -85,6 +128,7 @@ function UnlockScreen(): React.JSX.Element {
             }
           }
         } catch {
+          setProgress(0);
           setPin('');
           Alert.alert('오류', 'PIN 확인에 실패했습니다.');
         } finally {
@@ -92,7 +136,7 @@ function UnlockScreen(): React.JSX.Element {
         }
       }
     },
-    [pin, unlock, attempts],
+    [pin, unlock, attempts, setProgress],
   );
 
   const handleDelete = useCallback(() => {
@@ -170,7 +214,18 @@ function UnlockScreen(): React.JSX.Element {
 
         {isLoading ? (
           <LoadingContainer>
-            <ActivityIndicator size="large" color="#6366F1" />
+            <LoadingPercentText>{displayProgress}%</LoadingPercentText>
+            <LoadingBarContainer>
+              <AnimatedLoadingBarFill
+                style={{
+                  width: animatedProgress.interpolate({
+                    inputRange: [0, 100],
+                    outputRange: ['0%', '100%'],
+                  }),
+                }}
+              />
+            </LoadingBarContainer>
+            <LoadingText>잠금 해제 중...</LoadingText>
           </LoadingContainer>
         ) : (
           renderPinDots()
@@ -221,9 +276,39 @@ const Subtitle = styled.Text`
 `;
 
 const LoadingContainer = styled.View`
-  height: 60px;
+  height: 100px;
   justify-content: center;
   align-items: center;
+  margin-bottom: ${({ theme }) => theme.spacing.lg}px;
+`;
+
+const LoadingPercentText = styled.Text`
+  color: ${({ theme }) => theme.colors.primary};
+  font-size: 32px;
+  font-weight: 700;
+  margin-bottom: ${({ theme }) => theme.spacing.sm}px;
+`;
+
+const LoadingBarContainer = styled.View`
+  width: 200px;
+  height: 6px;
+  background-color: ${({ theme }) => theme.colors.surface};
+  border-radius: 3px;
+  overflow: hidden;
+`;
+
+const LoadingBarFill = styled.View`
+  height: 100%;
+  background-color: ${({ theme }) => theme.colors.primary};
+  border-radius: 3px;
+`;
+
+const AnimatedLoadingBarFill = Animated.createAnimatedComponent(LoadingBarFill);
+
+const LoadingText = styled.Text`
+  color: ${({ theme }) => theme.colors.textSecondary};
+  font-size: 14px;
+  margin-top: ${({ theme }) => theme.spacing.sm}px;
 `;
 
 const PinDotsContainer = styled.View`

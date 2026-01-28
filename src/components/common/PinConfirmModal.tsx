@@ -2,9 +2,9 @@
  * 트랜잭션 전 PIN 확인 모달
  */
 
-import React, { useState, useCallback, useEffect } from 'react';
+import React, { useState, useCallback, useEffect, useRef } from 'react';
 import styled from 'styled-components/native';
-import { Modal, Alert, ActivityIndicator, Vibration } from 'react-native';
+import { Modal, Alert, Vibration, Animated } from 'react-native';
 import { walletService } from '@/services/walletService';
 
 interface Props {
@@ -24,17 +24,45 @@ export function PinConfirmModal({
 }: Props) {
   const [pin, setPin] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [displayProgress, setDisplayProgress] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [attempts, setAttempts] = useState(0);
 
   const MAX_ATTEMPTS = 5;
 
+  // 애니메이션 값
+  const animatedProgress = useRef(new Animated.Value(0)).current;
+
+  // 애니메이션 값 변화 리스너 (텍스트 동기화)
+  useEffect(() => {
+    const listenerId = animatedProgress.addListener(({ value }) => {
+      setDisplayProgress(Math.round(value));
+    });
+    return () => {
+      animatedProgress.removeListener(listenerId);
+    };
+  }, [animatedProgress]);
+
+  // 구간별 진행률 표시 (부드러운 애니메이션)
+  const setProgress = useCallback(
+    (value: number) => {
+      Animated.timing(animatedProgress, {
+        toValue: value,
+        duration: 300,
+        useNativeDriver: false,
+      }).start();
+    },
+    [animatedProgress],
+  );
+
   useEffect(() => {
     if (visible) {
       setPin('');
+      animatedProgress.setValue(0);
+      setDisplayProgress(0);
       setError(null);
     }
-  }, [visible]);
+  }, [visible, animatedProgress]);
 
   const handleVerify = useCallback(
     async (pinToVerify: string) => {
@@ -54,16 +82,31 @@ export function PinConfirmModal({
 
       setIsLoading(true);
       setError(null);
+      setProgress(10);
+
+      // 진행률 업데이트 간 딜레이
+      await new Promise(resolve => setTimeout(resolve, 200));
+      setProgress(30);
+      await new Promise(resolve => setTimeout(resolve, 200));
+      setProgress(50);
 
       try {
         const mnemonic = await walletService.retrieveMnemonicWithPin(
           pinToVerify,
         );
 
+        await new Promise(resolve => setTimeout(resolve, 150));
+        setProgress(70);
+        await new Promise(resolve => setTimeout(resolve, 150));
+        setProgress(85);
+
         if (mnemonic && walletService.validateMnemonic(mnemonic)) {
+          await new Promise(resolve => setTimeout(resolve, 100));
+          setProgress(100);
           setAttempts(0);
           onConfirm();
         } else {
+          setProgress(0);
           const remainingAttempts = MAX_ATTEMPTS - attempts - 1;
           setAttempts(prev => prev + 1);
           setError(`PIN이 올바르지 않습니다. (${remainingAttempts}회 남음)`);
@@ -71,13 +114,14 @@ export function PinConfirmModal({
           setPin('');
         }
       } catch {
+        setProgress(0);
         setError('PIN 확인에 실패했습니다.');
         setPin('');
       } finally {
         setIsLoading(false);
       }
     },
-    [attempts, onConfirm, onCancel],
+    [attempts, onConfirm, onCancel, setProgress],
   );
 
   const handleKeyPress = useCallback(
@@ -126,7 +170,18 @@ export function PinConfirmModal({
 
           {isLoading ? (
             <LoadingContainer>
-              <ActivityIndicator size="large" color="#7B61FF" />
+              <LoadingPercentText>{displayProgress}%</LoadingPercentText>
+              <LoadingBarContainer>
+                <AnimatedLoadingBarFill
+                  style={{
+                    width: animatedProgress.interpolate({
+                      inputRange: [0, 100],
+                      outputRange: ['0%', '100%'],
+                    }),
+                  }}
+                />
+              </LoadingBarContainer>
+              <LoadingText>확인 중...</LoadingText>
             </LoadingContainer>
           ) : (
             <>
@@ -226,6 +281,36 @@ const ErrorText = styled.Text`
 
 const LoadingContainer = styled.View`
   padding: ${({ theme }) => theme.spacing.xl}px;
+  align-items: center;
+`;
+
+const LoadingPercentText = styled.Text`
+  color: ${({ theme }) => theme.colors.primary};
+  font-size: 32px;
+  font-weight: 700;
+  margin-bottom: ${({ theme }) => theme.spacing.sm}px;
+`;
+
+const LoadingBarContainer = styled.View`
+  width: 180px;
+  height: 6px;
+  background-color: ${({ theme }) => theme.colors.border};
+  border-radius: 3px;
+  overflow: hidden;
+`;
+
+const LoadingBarFill = styled.View`
+  height: 100%;
+  background-color: ${({ theme }) => theme.colors.primary};
+  border-radius: 3px;
+`;
+
+const AnimatedLoadingBarFill = Animated.createAnimatedComponent(LoadingBarFill);
+
+const LoadingText = styled.Text`
+  color: ${({ theme }) => theme.colors.textSecondary};
+  font-size: 14px;
+  margin-top: ${({ theme }) => theme.spacing.sm}px;
 `;
 
 const Keypad = styled.View`

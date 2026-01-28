@@ -2,7 +2,7 @@
  * 설정 화면 (네트워크 전환, 지갑 관리)
  */
 
-import React, { useCallback, useState, useEffect } from 'react';
+import React, { useCallback, useState, useEffect, useRef } from 'react';
 import styled, { useTheme, ThemeProvider } from 'styled-components/native';
 import {
   SafeAreaView,
@@ -11,8 +11,8 @@ import {
   ScrollView,
   Modal,
   Switch,
-  ActivityIndicator,
   Linking,
+  Animated,
 } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -71,8 +71,34 @@ function SettingsScreen(): React.JSX.Element {
     'verify',
   );
   const [isLoading, setIsLoading] = useState(false);
+  const [displayProgress, setDisplayProgress] = useState(0);
   const [biometricEnabled, setBiometricEnabled] = useState(false);
   const [biometricSupported, setBiometricSupported] = useState(false);
+
+  // 애니메이션 값
+  const animatedProgress = useRef(new Animated.Value(0)).current;
+
+  // 애니메이션 값 변화 리스너 (텍스트 동기화)
+  useEffect(() => {
+    const listenerId = animatedProgress.addListener(({ value }) => {
+      setDisplayProgress(Math.round(value));
+    });
+    return () => {
+      animatedProgress.removeListener(listenerId);
+    };
+  }, [animatedProgress]);
+
+  // 구간별 진행률 표시 (부드러운 애니메이션)
+  const setProgress = useCallback(
+    (value: number) => {
+      Animated.timing(animatedProgress, {
+        toValue: value,
+        duration: 300,
+        useNativeDriver: false,
+      }).start();
+    },
+    [animatedProgress],
+  );
 
   // 생체인증 지원 여부 및 설정 확인
   useEffect(() => {
@@ -162,24 +188,42 @@ function SettingsScreen(): React.JSX.Element {
     }
 
     setIsLoading(true);
+    setProgress(10);
+
+    // 진행률 업데이트 간 딜레이
+    await new Promise(resolve => setTimeout(resolve, 200));
+    setProgress(30);
+    await new Promise(resolve => setTimeout(resolve, 200));
+    setProgress(50);
+
     try {
       const retrievedMnemonic = await walletService.retrieveMnemonicWithPin(
         pinInput,
       );
+
+      await new Promise(resolve => setTimeout(resolve, 150));
+      setProgress(70);
+      await new Promise(resolve => setTimeout(resolve, 150));
+      setProgress(85);
+
       if (
         retrievedMnemonic &&
         walletService.validateMnemonic(retrievedMnemonic)
       ) {
+        await new Promise(resolve => setTimeout(resolve, 100));
+        setProgress(100);
         setMnemonic(retrievedMnemonic);
       } else {
+        setProgress(0);
         Alert.alert('오류', 'PIN이 올바르지 않습니다.');
       }
     } catch {
+      setProgress(0);
       Alert.alert('오류', 'PIN 확인에 실패했습니다.');
     } finally {
       setIsLoading(false);
     }
-  }, [pinInput]);
+  }, [pinInput, setProgress]);
 
   // PIN 변경
   const handleChangePin = useCallback(() => {
@@ -198,21 +242,39 @@ function SettingsScreen(): React.JSX.Element {
       }
 
       setIsLoading(true);
+      setProgress(10);
+
+      // 진행률 업데이트 간 딜레이
+      await new Promise(resolve => setTimeout(resolve, 200));
+      setProgress(30);
+      await new Promise(resolve => setTimeout(resolve, 200));
+      setProgress(50);
+
       try {
         const retrievedMnemonic = await walletService.retrieveMnemonicWithPin(
           pinInput,
         );
+
+        await new Promise(resolve => setTimeout(resolve, 150));
+        setProgress(70);
+        await new Promise(resolve => setTimeout(resolve, 150));
+        setProgress(85);
+
         if (
           retrievedMnemonic &&
           walletService.validateMnemonic(retrievedMnemonic)
         ) {
+          await new Promise(resolve => setTimeout(resolve, 100));
+          setProgress(100);
           setMnemonic(retrievedMnemonic);
           setPinStep('new');
           setPinInput('');
         } else {
+          setProgress(0);
           Alert.alert('오류', '현재 PIN이 올바르지 않습니다.');
         }
       } catch {
+        setProgress(0);
         Alert.alert('오류', 'PIN 확인에 실패했습니다.');
       } finally {
         setIsLoading(false);
@@ -235,18 +297,34 @@ function SettingsScreen(): React.JSX.Element {
       }
 
       setIsLoading(true);
+      setProgress(10);
+
+      // 진행률 업데이트 간 딜레이
+      await new Promise(resolve => setTimeout(resolve, 200));
+      setProgress(30);
+      await new Promise(resolve => setTimeout(resolve, 200));
+      setProgress(50);
+
       try {
         await walletService.storeMnemonic(mnemonic, newPin);
+
+        await new Promise(resolve => setTimeout(resolve, 150));
+        setProgress(70);
+        await new Promise(resolve => setTimeout(resolve, 150));
+        setProgress(85);
+        await new Promise(resolve => setTimeout(resolve, 100));
+        setProgress(100);
         Alert.alert('완료', 'PIN이 변경되었습니다.');
         setShowPinChangeModal(false);
       } catch {
+        setProgress(0);
         Alert.alert('오류', 'PIN 변경에 실패했습니다.');
       } finally {
         setIsLoading(false);
         setMnemonic(null);
       }
     }
-  }, [pinStep, pinInput, newPin, confirmPin, mnemonic]);
+  }, [pinStep, pinInput, newPin, confirmPin, mnemonic, setProgress]);
 
   // 생체인증 토글
   const handleToggleBiometric = useCallback(
@@ -277,28 +355,46 @@ function SettingsScreen(): React.JSX.Element {
     }
 
     setIsLoading(true);
+    setProgress(10);
+
+    // 진행률 업데이트 간 딜레이
+    await new Promise(resolve => setTimeout(resolve, 200));
+    setProgress(30);
+    await new Promise(resolve => setTimeout(resolve, 200));
+    setProgress(50);
+
     try {
       const retrievedMnemonic = await walletService.retrieveMnemonicWithPin(
         pinInput,
       );
+
+      await new Promise(resolve => setTimeout(resolve, 150));
+      setProgress(70);
+      await new Promise(resolve => setTimeout(resolve, 150));
+      setProgress(85);
+
       if (
         retrievedMnemonic &&
         walletService.validateMnemonic(retrievedMnemonic)
       ) {
+        await new Promise(resolve => setTimeout(resolve, 100));
+        setProgress(100);
         await EncryptedStorage.setItem(BIOMETRIC_ENABLED_KEY, 'true');
         setBiometricEnabled(true);
         setShowBiometricPinModal(false);
         Alert.alert('완료', '생체인증이 활성화되었습니다.');
       } else {
+        setProgress(0);
         Alert.alert('오류', 'PIN이 올바르지 않습니다.');
       }
     } catch {
+      setProgress(0);
       Alert.alert('오류', '생체인증 활성화에 실패했습니다.');
     } finally {
       setIsLoading(false);
       setPinInput('');
     }
-  }, [pinInput]);
+  }, [pinInput, setProgress]);
 
   const closeBiometricPinModal = () => {
     setShowBiometricPinModal(false);
@@ -752,16 +848,31 @@ function SettingsScreen(): React.JSX.Element {
                     maxLength={6}
                     secureTextEntry
                   />
-                  <PrimaryButton
-                    onPress={handleVerifyPinForMnemonic}
-                    disabled={isLoading}
-                  >
-                    {isLoading ? (
-                      <ActivityIndicator color={theme.colors.textPrimary} />
-                    ) : (
+                  {isLoading ? (
+                    <LoadingProgressContainer>
+                      <LoadingPercentText>
+                        {displayProgress}%
+                      </LoadingPercentText>
+                      <LoadingBarContainer>
+                        <AnimatedLoadingBarFill
+                          style={{
+                            width: animatedProgress.interpolate({
+                              inputRange: [0, 100],
+                              outputRange: ['0%', '100%'],
+                            }),
+                          }}
+                        />
+                      </LoadingBarContainer>
+                      <LoadingStatusText>확인 중...</LoadingStatusText>
+                    </LoadingProgressContainer>
+                  ) : (
+                    <PrimaryButton
+                      onPress={handleVerifyPinForMnemonic}
+                      disabled={isLoading}
+                    >
                       <PrimaryButtonText>확인</PrimaryButtonText>
-                    )}
-                  </PrimaryButton>
+                    </PrimaryButton>
+                  )}
                 </PinSection>
               ) : (
                 <MnemonicSection>
@@ -851,18 +962,31 @@ function SettingsScreen(): React.JSX.Element {
                   <StepDot $active={pinStep === 'new'} />
                   <StepDot $active={pinStep === 'confirm'} />
                 </PinStepIndicator>
-                <PrimaryButton
-                  onPress={handlePinChangeStep}
-                  disabled={isLoading}
-                >
-                  {isLoading ? (
-                    <ActivityIndicator color={theme.colors.textPrimary} />
-                  ) : (
+                {isLoading ? (
+                  <LoadingProgressContainer>
+                    <LoadingPercentText>{displayProgress}%</LoadingPercentText>
+                    <LoadingBarContainer>
+                      <AnimatedLoadingBarFill
+                        style={{
+                          width: animatedProgress.interpolate({
+                            inputRange: [0, 100],
+                            outputRange: ['0%', '100%'],
+                          }),
+                        }}
+                      />
+                    </LoadingBarContainer>
+                    <LoadingStatusText>처리 중...</LoadingStatusText>
+                  </LoadingProgressContainer>
+                ) : (
+                  <PrimaryButton
+                    onPress={handlePinChangeStep}
+                    disabled={isLoading}
+                  >
                     <PrimaryButtonText>
                       {pinStep === 'confirm' ? '완료' : '다음'}
                     </PrimaryButtonText>
-                  )}
-                </PrimaryButton>
+                  </PrimaryButton>
+                )}
               </PinSection>
             </ModalContent>
           </ModalContainer>
@@ -898,16 +1022,29 @@ function SettingsScreen(): React.JSX.Element {
                   maxLength={6}
                   secureTextEntry
                 />
-                <PrimaryButton
-                  onPress={handleVerifyPinForBiometric}
-                  disabled={isLoading}
-                >
-                  {isLoading ? (
-                    <ActivityIndicator color={theme.colors.textPrimary} />
-                  ) : (
+                {isLoading ? (
+                  <LoadingProgressContainer>
+                    <LoadingPercentText>{displayProgress}%</LoadingPercentText>
+                    <LoadingBarContainer>
+                      <AnimatedLoadingBarFill
+                        style={{
+                          width: animatedProgress.interpolate({
+                            inputRange: [0, 100],
+                            outputRange: ['0%', '100%'],
+                          }),
+                        }}
+                      />
+                    </LoadingBarContainer>
+                    <LoadingStatusText>확인 중...</LoadingStatusText>
+                  </LoadingProgressContainer>
+                ) : (
+                  <PrimaryButton
+                    onPress={handleVerifyPinForBiometric}
+                    disabled={isLoading}
+                  >
                     <PrimaryButtonText>확인</PrimaryButtonText>
-                  )}
-                </PrimaryButton>
+                  </PrimaryButton>
+                )}
               </PinSection>
             </ModalContent>
           </ModalContainer>
@@ -1240,6 +1377,40 @@ const StepDot = styled.View<{ $active: boolean }>`
     $active ? theme.colors.primary : theme.colors.textMuted};
   margin-left: ${({ theme }) => theme.spacing.xs}px;
   margin-right: ${({ theme }) => theme.spacing.xs}px;
+`;
+
+const LoadingProgressContainer = styled.View`
+  align-items: center;
+  padding: ${({ theme }) => theme.spacing.lg}px;
+`;
+
+const LoadingPercentText = styled.Text`
+  color: ${({ theme }) => theme.colors.primary};
+  font-size: 32px;
+  font-weight: 700;
+  margin-bottom: ${({ theme }) => theme.spacing.sm}px;
+`;
+
+const LoadingBarContainer = styled.View`
+  width: 100%;
+  height: 6px;
+  background-color: ${({ theme }) => theme.colors.border};
+  border-radius: 3px;
+  overflow: hidden;
+`;
+
+const LoadingBarFill = styled.View`
+  height: 100%;
+  background-color: ${({ theme }) => theme.colors.primary};
+  border-radius: 3px;
+`;
+
+const AnimatedLoadingBarFill = Animated.createAnimatedComponent(LoadingBarFill);
+
+const LoadingStatusText = styled.Text`
+  color: ${({ theme }) => theme.colors.textSecondary};
+  font-size: 14px;
+  margin-top: ${({ theme }) => theme.spacing.sm}px;
 `;
 
 const ThemeItem = styled.TouchableOpacity<{ $isActive: boolean }>`
