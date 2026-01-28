@@ -62,28 +62,14 @@ export const useThemeStore = create<ThemeState>()((set, get) => ({
 
   setThemeMode: (mode: ThemeMode) => {
     const activeTheme = resolveTheme(mode);
-    console.log('🎨 setThemeMode:', mode, 'isDark:', activeTheme.isDark);
 
-    // 상태 업데이트
     set({
       themeMode: mode,
       activeTheme,
       isDarkMode: activeTheme.isDark,
     });
 
-    // 디버깅: set 호출 후 상태 확인
-    const newState = get();
-    console.log(
-      '🎨 After set - state:',
-      newState.themeMode,
-      newState.isDarkMode,
-    );
-    console.log('🎨 Listeners count:', useThemeStore.getState() === newState);
-
-    // AsyncStorage에 저장 (비동기, 에러 무시)
-    AsyncStorage.setItem(THEME_STORAGE_KEY, mode).catch(err => {
-      console.warn('Failed to save theme mode:', err);
-    });
+    AsyncStorage.setItem(THEME_STORAGE_KEY, mode).catch(() => {});
   },
 
   toggleTheme: () => {
@@ -118,8 +104,7 @@ export const useThemeStore = create<ThemeState>()((set, get) => ({
       } else {
         set({ isHydrated: true });
       }
-    } catch (err) {
-      console.warn('Failed to load theme mode:', err);
+    } catch {
       set({ isHydrated: true });
     }
   },

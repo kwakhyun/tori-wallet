@@ -4,13 +4,7 @@
 
 import React, { useState, useCallback, useRef } from 'react';
 import styled from 'styled-components/native';
-import {
-  SafeAreaView,
-  StatusBar,
-  Alert,
-  ActivityIndicator,
-  Vibration,
-} from 'react-native';
+import { SafeAreaView, StatusBar, Alert, Vibration } from 'react-native';
 import {
   useRoute,
   CommonActions,
@@ -36,6 +30,8 @@ function SetPinScreen(): React.JSX.Element {
   const [pin, setPin] = useState('');
   const [confirmPin, setConfirmPin] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [loadingProgress, setLoadingProgress] = useState(0);
+  const [loadingMessage, setLoadingMessage] = useState('');
   const firstPin = useRef('');
 
   const { addWallet, setHasWallet, unlock } = useWalletStore();
@@ -52,9 +48,17 @@ function SetPinScreen(): React.JSX.Element {
       }
 
       setIsLoading(true);
+      setLoadingProgress(0);
+      setLoadingMessage('지갑 생성 중...');
+
       try {
+        // 니모닉 저장
+        setLoadingProgress(20);
         await walletService.storeMnemonic(mnemonic, confirmedPin);
 
+        // 계정 저장
+        setLoadingProgress(50);
+        setLoadingMessage('계정 정보 저장 중...');
         await walletService.storeAccounts([
           {
             address: walletAddress,
@@ -63,12 +67,17 @@ function SetPinScreen(): React.JSX.Element {
           },
         ]);
 
+        // 스토어 업데이트
+        setLoadingProgress(80);
         addWallet({
           address: walletAddress,
           name: 'Account 1',
           isHD: true,
           derivationPath: "m/44'/60'/0'/0/0",
         });
+
+        setLoadingProgress(100);
+        setLoadingMessage('완료!');
 
         unlock();
         setHasWallet(true);
@@ -88,6 +97,8 @@ function SetPinScreen(): React.JSX.Element {
         firstPin.current = '';
       } finally {
         setIsLoading(false);
+        setLoadingProgress(0);
+        setLoadingMessage('');
       }
     },
     [mnemonic, walletAddress, addWallet, unlock, setHasWallet, navigation],
@@ -157,8 +168,15 @@ function SetPinScreen(): React.JSX.Element {
 
         {isLoading ? (
           <LoadingContainer>
-            <ActivityIndicator size="large" color="#6366F1" />
-            <LoadingText>지갑을 생성하는 중...</LoadingText>
+            <LoadingPercentText>
+              {Math.floor(loadingProgress)}%
+            </LoadingPercentText>
+            <LoadingBarContainer>
+              <LoadingBarFill
+                style={{ width: `${Math.floor(loadingProgress)}%` }}
+              />
+            </LoadingBarContainer>
+            <LoadingText>{loadingMessage}</LoadingText>
           </LoadingContainer>
         ) : (
           <KeypadContainer>
@@ -253,6 +271,27 @@ const LoadingContainer = styled.View`
   flex: 1;
   justify-content: center;
   align-items: center;
+`;
+
+const LoadingPercentText = styled.Text`
+  color: ${({ theme }) => theme.colors.primary};
+  font-size: 48px;
+  font-weight: 700;
+  margin-bottom: ${({ theme }) => theme.spacing.lg}px;
+`;
+
+const LoadingBarContainer = styled.View`
+  width: 80%;
+  height: 8px;
+  background-color: ${({ theme }) => theme.colors.border};
+  border-radius: 4px;
+  overflow: hidden;
+`;
+
+const LoadingBarFill = styled.View`
+  height: 100%;
+  background-color: ${({ theme }) => theme.colors.primary};
+  border-radius: 4px;
 `;
 
 const LoadingText = styled.Text`

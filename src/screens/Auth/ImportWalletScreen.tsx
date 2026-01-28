@@ -333,9 +333,13 @@ function ImportWalletScreen(): React.JSX.Element {
       {isLoading && (
         <LoadingOverlay>
           <LoadingContainer>
-            <LoadingPercentText>{loadingProgress}%</LoadingPercentText>
+            <LoadingPercentText>
+              {Math.floor(loadingProgress)}%
+            </LoadingPercentText>
             <LoadingBarContainer>
-              <LoadingBarFill style={{ width: `${loadingProgress}%` }} />
+              <LoadingBarFill
+                style={{ width: `${Math.floor(loadingProgress)}%` }}
+              />
             </LoadingBarContainer>
             <LoadingText>{loadingMessage}</LoadingText>
             <LoadingSubText>잠시만 기다려주세요</LoadingSubText>
