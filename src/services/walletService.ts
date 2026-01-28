@@ -2,12 +2,12 @@
  * 니모닉/키 관리 서비스 (보안 저장소 연동)
  */
 
-import { Buffer } from '../utils/polyfills';
 import * as Keychain from 'react-native-keychain';
 import EncryptedStorage from 'react-native-encrypted-storage';
 import { generateMnemonic, english, mnemonicToAccount } from 'viem/accounts';
 import type { HDAccount } from 'viem/accounts';
 import { createLogger } from '@/utils/logger';
+import { encrypt, decrypt } from '@/utils/crypto';
 
 const logger = createLogger('Wallet');
 
@@ -205,33 +205,23 @@ class WalletService {
     }
   }
 
-  // 간단한 PIN 기반 암호화 (실제 서비스에서는 더 강력한 암호화 사용 권장)
-  /* eslint-disable no-bitwise */
+  /**
+   * AES-256 기반 암호화
+   */
   private encryptWithPin(data: string, pin: string): string {
-    // XOR 기반 간단한 암호화 (데모용)
-    const pinBuffer = Buffer.from(pin.repeat(data.length));
-    const dataBuffer = Buffer.from(data);
-    const encrypted = Buffer.alloc(data.length);
-
-    for (let i = 0; i < data.length; i++) {
-      encrypted[i] = dataBuffer[i]! ^ pinBuffer[i]!;
-    }
-
-    return encrypted.toString('base64');
+    return encrypt(data, pin);
   }
 
+  /**
+   * AES-256 기반 복호화 (레거시 XOR 데이터도 자동 마이그레이션)
+   */
   private decryptWithPin(encrypted: string, pin: string): string {
-    const encryptedBuffer = Buffer.from(encrypted, 'base64');
-    const pinBuffer = Buffer.from(pin.repeat(encryptedBuffer.length));
-    const decrypted = Buffer.alloc(encryptedBuffer.length);
-
-    for (let i = 0; i < encryptedBuffer.length; i++) {
-      decrypted[i] = encryptedBuffer[i]! ^ pinBuffer[i]!;
+    const result = decrypt(encrypted, pin);
+    if (result === null) {
+      throw new Error('Decryption failed');
     }
-
-    return decrypted.toString();
+    return result;
   }
-  /* eslint-enable no-bitwise */
 }
 
 export const walletService = new WalletService();

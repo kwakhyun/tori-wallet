@@ -11,9 +11,8 @@ import { createLogger } from '@/utils/logger';
 
 const logger = createLogger('WalletConnect');
 
-// WalletConnect Project ID (환경 변수에서 로드, 없으면 기본값 사용)
-const PROJECT_ID =
-  Config.WALLETCONNECT_PROJECT_ID || 'eb14faeda8b62ae100939b41cdf136d8';
+// WalletConnect Project ID (환경 변수에서 로드 - 필수)
+const PROJECT_ID = Config.WALLETCONNECT_PROJECT_ID || '';
 
 const METADATA = {
   name: 'Tori Wallet',
