@@ -3,13 +3,15 @@
  */
 
 import React, { useCallback } from 'react';
-import styled from 'styled-components/native';
+import styled, { useTheme } from 'styled-components/native';
 import { SafeAreaView, StatusBar, Alert, Share, Clipboard } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import { useWalletStore } from '@/store/walletStore';
+import QRCode from 'react-native-qrcode-svg';
 
 function ReceiveTokenScreen(): React.JSX.Element {
   const navigation = useNavigation();
+  const theme = useTheme();
   const { wallets, activeWalletIndex, networks, activeNetworkChainId } =
     useWalletStore();
 
@@ -60,11 +62,14 @@ function ReceiveTokenScreen(): React.JSX.Element {
         </Header>
 
         <QRContainer>
-          {/* 간단한 QR 코드 대체 UI */}
-          <QRPlaceholder>
-            <QRText>📱</QRText>
-            <QRSubText>QR 코드</QRSubText>
-          </QRPlaceholder>
+          <QRCodeWrapper>
+            <QRCode
+              value={activeWallet.address}
+              size={180}
+              backgroundColor={theme.colors.surface}
+              color={theme.colors.textPrimary}
+            />
+          </QRCodeWrapper>
         </QRContainer>
 
         <InfoSection>
@@ -149,23 +154,14 @@ const QRContainer = styled.View`
   margin-bottom: ${({ theme }) => theme.spacing.xl}px;
 `;
 
-const QRPlaceholder = styled.View`
+const QRCodeWrapper = styled.View`
   width: 200px;
   height: 200px;
   background-color: ${({ theme }) => theme.colors.surface};
   border-radius: ${({ theme }) => theme.borderRadius.lg}px;
   justify-content: center;
   align-items: center;
-`;
-
-const QRText = styled.Text`
-  font-size: 64px;
-`;
-
-const QRSubText = styled.Text`
-  color: ${({ theme }) => theme.colors.textSecondary};
-  font-size: ${({ theme }) => theme.typography.caption.fontSize}px;
-  margin-top: ${({ theme }) => theme.spacing.sm}px;
+  padding: ${({ theme }) => theme.spacing.sm}px;
 `;
 
 const InfoSection = styled.View`
