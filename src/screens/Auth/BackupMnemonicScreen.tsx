@@ -44,10 +44,14 @@ function BackupMnemonicScreen(): React.JSX.Element {
     setHasCopied(true);
     Alert.alert(
       '복사 완료',
-      '복구 구문이 클립보드에 복사되었습니다.\n\n⚠️ 안전한 곳에 붙여넣기 후 클립보드를 비워주세요.',
+      '복구 구문이 클립보드에 복사되었습니다.\n\n⚠️ 60초 후 클립보드가 자동으로 비워집니다.',
     );
     // 3초 후 복사 상태 리셋
     setTimeout(() => setIsCopied(false), 3000);
+    // 60초 후 클립보드 자동 삭제 (보안)
+    setTimeout(() => {
+      Clipboard.setString('');
+    }, 60000);
   }, [mnemonic]);
 
   const handleReveal = () => {
