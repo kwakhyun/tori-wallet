@@ -12,23 +12,34 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import styled from 'styled-components/native';
+import { useTheme } from '@/hooks/useTheme';
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
-import { formatUnits, parseUnits, erc20Abi } from 'viem';
+import {
+  encodeFunctionData,
+  erc20Abi,
+  formatUnits,
+  isAddress,
+  parseUnits,
+} from 'viem';
 
 import type { RootStackParamList } from '@/navigation/RootNavigator';
 import { useWalletStore } from '@/store/walletStore';
 import { useSwapStore } from '@/store/swapStore';
+import { useSecurityStore } from '@/store/securityStore';
 import { useBalance, useTokenBalance } from '@/hooks/useBalance';
 import { swapService, SwapToken, SwapQuote } from '@/services/swapService';
 import { enhancedSwapService } from '@/services/enhancedSwapService';
 import { signingService } from '@/services/signingService';
 import { chainClient } from '@/services/chainClient';
+import { transactionCacheService } from '@/realm/services';
 import { SwapReviewModal, SwapSettingsModal } from '@/components/swap';
+import PinConfirmModal from '@/components/common/PinConfirmModal';
 
 type NavigationProp = NativeStackNavigationProp<RootStackParamList>;
 
 function SwapScreen(): React.JSX.Element {
+  const { isDarkMode } = useTheme();
   const navigation = useNavigation<NavigationProp>();
   const { wallets, activeWalletIndex, activeNetworkChainId, networks } =
     useWalletStore();
@@ -59,6 +70,7 @@ function SwapScreen(): React.JSX.Element {
     'sell' | 'buy' | null
   >(null);
   const [showReviewModal, setShowReviewModal] = useState(false);
+  const [showPinConfirmModal, setShowPinConfirmModal] = useState(false);
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [priceImpact, setPriceImpact] = useState<{
     percent: string;
@@ -66,12 +78,9 @@ function SwapScreen(): React.JSX.Element {
   }>({ percent: '0', level: 'low' });
 
   // 스왑 스토어
-  const {
-    settings: swapSettings,
-    addHistoryItem,
-    addFavoritePair,
-    getTopPairs,
-  } = useSwapStore();
+  const { addHistoryItem, updateHistoryStatus, addFavoritePair, getTopPairs } =
+    useSwapStore();
+  const { requiresTransactionPin } = useSecurityStore();
 
   // 잔액 조회 (네이티브 토큰)
   const { data: nativeBalance } = useBalance(
@@ -160,6 +169,11 @@ function SwapScreen(): React.JSX.Element {
       );
 
       setQuote(quoteData);
+      if (quoteData) {
+        setBuyAmount(
+          formatUnits(BigInt(quoteData.buyAmount), buyToken.decimals),
+        );
+      }
       return quoteData;
     } catch (error) {
       console.error('Quote fetch error:', error);
@@ -219,43 +233,57 @@ function SwapScreen(): React.JSX.Element {
   const handleSwap = async () => {
     if (!sellToken || !buyToken || !sellAmount || !activeWallet) return;
 
-    // 가격 영향 계산
-    if (quote) {
-      const impact = enhancedSwapService.calculatePriceImpact(quote);
+    setIsLoadingQuote(true);
+    try {
+      const latestQuote = await fetchQuote();
+      if (!latestQuote) return;
+
+      const impact = enhancedSwapService.calculatePriceImpact(latestQuote);
       setPriceImpact(impact);
-
-      // 가격 영향이 높고 전문가 모드가 아니면 경고
-      if (
-        (impact.level === 'high' || impact.level === 'critical') &&
-        !swapSettings.expertMode &&
-        swapSettings.showPriceImpactWarning
-      ) {
-        setShowReviewModal(true);
-        return;
-      }
+      setShowReviewModal(true);
+    } finally {
+      setIsLoadingQuote(false);
     }
-
-    await executeSwapTransaction();
   };
 
   // 리뷰 모달에서 확인 후 실행
-  const handleConfirmSwap = async () => {
+  const handleConfirmSwap = () => {
     setShowReviewModal(false);
-    await executeSwapTransaction();
+    if (requiresTransactionPin()) {
+      setShowPinConfirmModal(true);
+      return;
+    }
+    executeSwapTransaction();
+  };
+
+  const handlePinConfirmed = () => {
+    setShowPinConfirmModal(false);
+    executeSwapTransaction();
   };
 
   // 실제 스왑 트랜잭션 실행
   const executeSwapTransaction = async () => {
-    if (!sellToken || !buyToken || !sellAmount || !activeWallet) return;
+    if (!sellToken || !buyToken || !sellAmount || !activeWallet || !quote) {
+      return;
+    }
 
     setIsSwapping(true);
     try {
-      // 1. 견적 가져오기
-      const swapQuote = await fetchQuote();
-      if (!swapQuote) {
-        setIsSwapping(false);
-        return;
-      }
+      // 사용자가 검토한 견적과 현재 의도를 다시 바인딩한다. 승인 후 새 견적을
+      // 조용히 받아 실행하지 않으며, 변경/만료 시 처음부터 다시 검토한다.
+      const swapQuote = quote;
+      const currentIntent = {
+        sellToken,
+        buyToken,
+        sellAmount,
+        slippagePercentage: slippage,
+        takerAddress: activeWallet.address,
+      };
+      swapService.assertQuoteMatchesIntent(
+        swapQuote,
+        currentIntent,
+        activeNetworkChainId,
+      );
 
       // 2. ERC-20 토큰인 경우 승인 필요 여부 확인
       if (swapService.needsApproval(sellToken)) {
@@ -267,14 +295,22 @@ function SwapScreen(): React.JSX.Element {
       }
 
       // 3. 스왑 트랜잭션 실행
+      swapService.assertQuoteMatchesIntent(
+        swapQuote,
+        currentIntent,
+        activeNetworkChainId,
+      );
       const txHash = await executeSwap(swapQuote);
 
       if (txHash) {
-        // 히스토리에 저장
-        const rate = (parseFloat(buyAmount) / parseFloat(sellAmount)).toFixed(
-          6,
+        const confirmedBuyAmount = formatUnits(
+          BigInt(swapQuote.buyAmount),
+          buyToken.decimals,
         );
-        addHistoryItem({
+        const rate = (
+          parseFloat(confirmedBuyAmount) / parseFloat(sellAmount)
+        ).toFixed(6);
+        const historyId = addHistoryItem({
           timestamp: Date.now(),
           chainId: activeNetworkChainId,
           sellToken: {
@@ -285,27 +321,79 @@ function SwapScreen(): React.JSX.Element {
           buyToken: {
             symbol: buyToken.symbol,
             address: buyToken.address,
-            amount: buyAmount,
+            amount: confirmedBuyAmount,
           },
           txHash,
-          status: 'success',
+          status: 'pending',
           rate,
         });
 
-        // 즐겨찾기 페어에 추가
-        addFavoritePair({
-          chainId: activeNetworkChainId,
-          sellTokenAddress: sellToken.address,
-          sellTokenSymbol: sellToken.symbol,
-          buyTokenAddress: buyToken.address,
-          buyTokenSymbol: buyToken.symbol,
-        });
+        try {
+          await transactionCacheService.createLocalTransaction({
+            hash: txHash,
+            chainId: activeNetworkChainId,
+            from: activeWallet.address,
+            to: swapQuote.to,
+            value: swapQuote.value,
+            valueWei: swapQuote.value,
+            gasPrice: swapQuote.gasPrice,
+            gasLimit: swapQuote.gas,
+            type: 'swap',
+            tokenSymbol: sellToken.symbol,
+            tokenAmount: sellAmount,
+          });
+        } catch (cacheError) {
+          console.warn('Failed to cache pending swap:', cacheError);
+        }
+
+        const client = chainClient.getClient(activeNetworkChainId);
+        client
+          .waitForTransactionReceipt({ hash: txHash as `0x${string}` })
+          .then(async receipt => {
+            const succeeded = receipt.status === 'success';
+            updateHistoryStatus(historyId, succeeded ? 'success' : 'failed');
+            await transactionCacheService.updateStatus(
+              txHash,
+              activeNetworkChainId,
+              succeeded
+                ? {
+                    status: 'confirmed',
+                    blockNumber: receipt.blockNumber.toString(),
+                    gasUsed: receipt.gasUsed.toString(),
+                    confirmedAt: new Date(),
+                  }
+                : { status: 'failed' },
+            );
+
+            if (succeeded) {
+              addFavoritePair({
+                chainId: activeNetworkChainId,
+                sellTokenAddress: sellToken.address,
+                sellTokenSymbol: sellToken.symbol,
+                buyTokenAddress: buyToken.address,
+                buyTokenSymbol: buyToken.symbol,
+              });
+            }
+          })
+          .catch(async error => {
+            updateHistoryStatus(historyId, 'failed');
+            await transactionCacheService.updateStatus(
+              txHash,
+              activeNetworkChainId,
+              {
+                status: 'failed',
+                errorMessage:
+                  error instanceof Error ? error.message : 'Receipt failed',
+              },
+            );
+          });
 
         Alert.alert(
-          '스왑 완료',
-          `${sellAmount} ${sellToken.symbol}을(를) ${buyAmount} ${
-            buyToken.symbol
-          }(으)로 스왑했습니다.\n\n트랜잭션: ${txHash.slice(0, 10)}...`,
+          '스왑 제출 완료',
+          `트랜잭션이 네트워크에 제출되었습니다. 체인 확정 전까지는 대기 상태로 표시됩니다.\n\n트랜잭션: ${txHash.slice(
+            0,
+            10,
+          )}...`,
           [
             {
               text: '확인',
@@ -336,6 +424,10 @@ function SwapScreen(): React.JSX.Element {
     try {
       const client = chainClient.getClient(activeNetworkChainId);
 
+      if (!isAddress(swapQuote.allowanceTarget)) {
+        throw new Error('유효하지 않은 승인 대상 주소입니다.');
+      }
+
       // 현재 승인량 확인
       const allowance = await client.readContract({
         address: sellToken.address as `0x${string}`,
@@ -358,7 +450,7 @@ function SwapScreen(): React.JSX.Element {
       const approveConfirmed = await new Promise<boolean>(resolve => {
         Alert.alert(
           '토큰 승인 필요',
-          `${sellToken.symbol} 토큰을 스왑하려면 먼저 승인이 필요합니다.`,
+          `${sellAmount} ${sellToken.symbol}만 승인합니다.\n\n승인 대상:\n${swapQuote.allowanceTarget}`,
           [
             { text: '취소', onPress: () => resolve(false), style: 'cancel' },
             { text: '승인', onPress: () => resolve(true) },
@@ -368,23 +460,51 @@ function SwapScreen(): React.JSX.Element {
 
       if (!approveConfirmed) return false;
 
-      // 승인 트랜잭션 실행
+      const approvalData = encodeFunctionData({
+        abi: erc20Abi,
+        functionName: 'approve',
+        args: [swapQuote.allowanceTarget as `0x${string}`, requiredAmount],
+      });
       const approveTxHash = await signingService.sendTransaction(
         {
           from: activeWallet.address,
           to: sellToken.address,
-          data: `0x095ea7b3${swapQuote.allowanceTarget
-            .slice(2)
-            .padStart(64, '0')}${'f'.repeat(64)}`,
+          data: approvalData,
         },
         activeNetworkChainId,
       );
 
       if (approveTxHash) {
-        // 승인 트랜잭션 완료 대기
+        await transactionCacheService.createLocalTransaction({
+          hash: approveTxHash,
+          chainId: activeNetworkChainId,
+          from: activeWallet.address,
+          to: sellToken.address,
+          value: '0',
+          valueWei: '0',
+          gasPrice: '0',
+          type: 'approve',
+          tokenSymbol: sellToken.symbol,
+          tokenAmount: sellAmount,
+          tokenAddress: sellToken.address,
+          method: 'approve',
+        });
+
         const receipt = await client.waitForTransactionReceipt({
           hash: approveTxHash as `0x${string}`,
         });
+        await transactionCacheService.updateStatus(
+          approveTxHash,
+          activeNetworkChainId,
+          receipt.status === 'success'
+            ? {
+                status: 'confirmed',
+                blockNumber: receipt.blockNumber.toString(),
+                gasUsed: receipt.gasUsed.toString(),
+                confirmedAt: new Date(),
+              }
+            : { status: 'failed' },
+        );
         return receipt.status === 'success';
       }
 
@@ -401,6 +521,18 @@ function SwapScreen(): React.JSX.Element {
     if (!activeWallet) return null;
 
     try {
+      if (!isAddress(swapQuote.to) || !swapQuote.data.startsWith('0x')) {
+        throw new Error('스왑 견적에 유효하지 않은 트랜잭션이 포함되었습니다.');
+      }
+
+      const client = chainClient.getClient(activeNetworkChainId);
+      await client.estimateGas({
+        account: activeWallet.address as `0x${string}`,
+        to: swapQuote.to as `0x${string}`,
+        data: swapQuote.data as `0x${string}`,
+        value: BigInt(swapQuote.value || '0'),
+      });
+
       const txHash = await signingService.sendTransaction(
         {
           from: activeWallet.address,
@@ -487,7 +619,7 @@ function SwapScreen(): React.JSX.Element {
   if (!isSwapSupported) {
     return (
       <Container>
-        <StatusBar barStyle="light-content" />
+        <StatusBar barStyle={isDarkMode ? 'light-content' : 'dark-content'} />
         <SafeContainer>
           <Header>
             <BackButton onPress={() => navigation.goBack()}>
@@ -515,7 +647,7 @@ function SwapScreen(): React.JSX.Element {
 
   return (
     <Container>
-      <StatusBar barStyle="light-content" />
+      <StatusBar barStyle={isDarkMode ? 'light-content' : 'dark-content'} />
       <SafeContainer>
         <Header>
           <BackButton onPress={() => navigation.goBack()}>
@@ -743,6 +875,14 @@ function SwapScreen(): React.JSX.Element {
         <SwapSettingsModal
           visible={showSettingsModal}
           onClose={() => setShowSettingsModal(false)}
+        />
+
+        <PinConfirmModal
+          visible={showPinConfirmModal}
+          onConfirm={handlePinConfirmed}
+          onCancel={() => setShowPinConfirmModal(false)}
+          title="스왑 PIN 확인"
+          message="토큰 승인과 스왑을 실행하려면 PIN을 입력하세요."
         />
       </SafeContainer>
     </Container>

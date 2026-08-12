@@ -2,10 +2,12 @@ import UIKit
 import React
 import React_RCTAppDelegate
 import ReactAppDependencyProvider
+import RNBootSplash
 
 @main
 class AppDelegate: UIResponder, UIApplicationDelegate {
   var window: UIWindow?
+  private let privacyViewTag = 9_204_817
 
   var reactNativeDelegate: ReactNativeDelegate?
   var reactNativeFactory: RCTReactNativeFactory?
@@ -31,9 +33,39 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
 
     return true
   }
+
+  func applicationWillResignActive(_ application: UIApplication) {
+    guard let window, window.viewWithTag(privacyViewTag) == nil else { return }
+
+    let privacyView = UIView(frame: window.bounds)
+    privacyView.tag = privacyViewTag
+    privacyView.backgroundColor = .systemBackground
+
+    let title = UILabel()
+    title.text = "Tori Wallet"
+    title.font = .boldSystemFont(ofSize: 22)
+    title.textColor = .label
+    title.translatesAutoresizingMaskIntoConstraints = false
+    privacyView.addSubview(title)
+
+    NSLayoutConstraint.activate([
+      title.centerXAnchor.constraint(equalTo: privacyView.centerXAnchor),
+      title.centerYAnchor.constraint(equalTo: privacyView.centerYAnchor),
+    ])
+    window.addSubview(privacyView)
+  }
+
+  func applicationDidBecomeActive(_ application: UIApplication) {
+    window?.viewWithTag(privacyViewTag)?.removeFromSuperview()
+  }
 }
 
 class ReactNativeDelegate: RCTDefaultReactNativeFactoryDelegate {
+  override func customize(_ rootView: RCTRootView) {
+    super.customize(rootView)
+    RNBootSplash.initWithStoryboard("BootSplash", rootView: rootView)
+  }
+
   override func sourceURL(for bridge: RCTBridge) -> URL? {
     self.bundleURL()
   }

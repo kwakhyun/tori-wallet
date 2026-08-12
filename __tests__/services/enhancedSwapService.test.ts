@@ -553,18 +553,36 @@ describe('EnhancedSwapService', () => {
   describe('getQuote - full flow tests', () => {
     it('should return enhanced quote with all fields', async () => {
       const mockQuote = {
-        price: '1.5',
-        buyAmount: '1500000000',
+        allowanceTarget: '0x0000000000001fF3684f28c67538d4D072C22734',
+        buyAmount: '1500000',
+        buyToken: SWAP_TOKENS[1][1].address,
         sellAmount: '1000000000000000000',
-        gas: '200000',
-        gasPrice: '50000000000',
-        sources: [
-          { name: 'Uniswap', proportion: '0.7' },
-          { name: 'SushiSwap', proportion: '0.3' },
-        ],
-        to: '0xdef1c0ded9bec7f1a1670819833240f027b25eff',
-        data: '0x1234',
-        estimatedPriceImpact: '0.01',
+        sellToken: SWAP_TOKENS[1][0].address,
+        minBuyAmount: '1490000',
+        liquidityAvailable: true,
+        issues: {
+          allowance: null,
+          balance: null,
+          simulationIncomplete: false,
+          invalidSourcesPassed: [],
+        },
+        route: {
+          fills: [
+            {
+              from: SWAP_TOKENS[1][0].address,
+              to: SWAP_TOKENS[1][1].address,
+              source: 'Uniswap',
+              proportionBps: '10000',
+            },
+          ],
+        },
+        transaction: {
+          to: '0xdef1c0ded9bec7f1a1670819833240f027b25eff',
+          data: '0x12345678',
+          gas: '200000',
+          gasPrice: '50000000000',
+          value: '1000000000000000000',
+        },
       };
 
       // getQuote 호출

@@ -3,7 +3,8 @@
  */
 
 import React, { useState, useCallback, useEffect } from 'react';
-import styled, { useTheme } from 'styled-components/native';
+import styled from 'styled-components/native';
+import { useTheme } from '@/hooks/useTheme';
 import {
   SafeAreaView,
   StatusBar,
@@ -44,7 +45,7 @@ function useDebounce<T>(value: T, delay: number): T {
 type NavigationProp = NativeStackNavigationProp<RootStackParamList>;
 
 function ExploreScreen(): React.JSX.Element {
-  const theme = useTheme();
+  const { theme, isDarkMode } = useTheme();
   const navigation = useNavigation<NavigationProp>();
   const [coins, setCoins] = useState<Coin[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
@@ -201,7 +202,7 @@ function ExploreScreen(): React.JSX.Element {
 
   return (
     <Container>
-      <StatusBar barStyle="light-content" />
+      <StatusBar barStyle={isDarkMode ? 'light-content' : 'dark-content'} />
       <Header>
         <Title>탐색</Title>
       </Header>

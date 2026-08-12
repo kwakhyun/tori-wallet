@@ -3,7 +3,8 @@
  */
 
 import React, { useCallback } from 'react';
-import styled, { useTheme } from 'styled-components/native';
+import styled from 'styled-components/native';
+import { useTheme } from '@/hooks/useTheme';
 import { SafeAreaView, StatusBar, Alert, Share, Clipboard } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import { useWalletStore } from '@/store/walletStore';
@@ -11,7 +12,7 @@ import QRCode from 'react-native-qrcode-svg';
 
 function ReceiveTokenScreen(): React.JSX.Element {
   const navigation = useNavigation();
-  const theme = useTheme();
+  const { theme, isDarkMode } = useTheme();
   const { wallets, activeWalletIndex, networks, activeNetworkChainId } =
     useWalletStore();
 
@@ -41,7 +42,7 @@ function ReceiveTokenScreen(): React.JSX.Element {
   if (!activeWallet) {
     return (
       <Container>
-        <StatusBar barStyle="light-content" />
+        <StatusBar barStyle={isDarkMode ? 'light-content' : 'dark-content'} />
         <Content>
           <EmptyText>지갑이 없습니다</EmptyText>
         </Content>
@@ -51,7 +52,7 @@ function ReceiveTokenScreen(): React.JSX.Element {
 
   return (
     <Container>
-      <StatusBar barStyle="light-content" />
+      <StatusBar barStyle={isDarkMode ? 'light-content' : 'dark-content'} />
       <Content>
         <Header>
           <BackButton onPress={() => navigation.goBack()}>

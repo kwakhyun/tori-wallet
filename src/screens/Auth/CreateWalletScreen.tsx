@@ -4,6 +4,7 @@
 
 import React, { useState, useCallback } from 'react';
 import styled from 'styled-components/native';
+import { useTheme } from '@/hooks/useTheme';
 import {
   SafeAreaView,
   StatusBar,
@@ -14,6 +15,7 @@ import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import type { AuthStackParamList } from '@/navigation/AuthNavigator';
 import { walletService } from '@/services/walletService';
+import { onboardingVault } from '@/services/onboardingVault';
 
 type NavigationProp = NativeStackNavigationProp<
   AuthStackParamList,
@@ -21,6 +23,7 @@ type NavigationProp = NativeStackNavigationProp<
 >;
 
 function CreateWalletScreen(): React.JSX.Element {
+  const { isDarkMode } = useTheme();
   const navigation = useNavigation<NavigationProp>();
   const [isLoading, setIsLoading] = useState(false);
   const [wordCount, setWordCount] = useState<12 | 24>(12);
@@ -30,9 +33,10 @@ function CreateWalletScreen(): React.JSX.Element {
     try {
       // 니모닉 생성
       const mnemonic = walletService.generateMnemonic(wordCount);
+      onboardingVault.start(mnemonic);
 
       // 백업 화면으로 이동
-      navigation.navigate('BackupMnemonic', { mnemonic });
+      navigation.navigate('BackupMnemonic');
     } catch (error) {
       console.error('Failed to create wallet:', error);
       Alert.alert('오류', '지갑 생성에 실패했습니다. 다시 시도해주세요.');
@@ -43,7 +47,7 @@ function CreateWalletScreen(): React.JSX.Element {
 
   return (
     <Container>
-      <StatusBar barStyle="light-content" />
+      <StatusBar barStyle={isDarkMode ? 'light-content' : 'dark-content'} />
       <Content>
         <Header>
           <BackButton onPress={() => navigation.goBack()}>

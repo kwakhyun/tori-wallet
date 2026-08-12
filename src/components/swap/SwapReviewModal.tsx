@@ -138,6 +138,18 @@ export function SwapReviewModal({
               </DetailValue>
             </DetailRow>
 
+            <Divider />
+
+            <AddressDetail>
+              <DetailLabel>토큰 승인 대상</DetailLabel>
+              <AddressValue selectable>{quote.allowanceTarget}</AddressValue>
+            </AddressDetail>
+
+            <AddressDetail>
+              <DetailLabel>스왑 실행 대상</DetailLabel>
+              <AddressValue selectable>{quote.to}</AddressValue>
+            </AddressDetail>
+
             {/* 경로 표시 */}
             {quote.route && quote.route.length > 0 && (
               <>
@@ -304,6 +316,18 @@ const DetailRow = styled.View`
   justify-content: space-between;
   align-items: center;
   padding: ${({ theme }) => theme.spacing.xs}px 0;
+`;
+
+const AddressDetail = styled.View`
+  padding: ${({ theme }) => theme.spacing.sm}px 0;
+  gap: 4px;
+`;
+
+const AddressValue = styled.Text`
+  color: ${({ theme }) => theme.colors.textPrimary};
+  font-family: monospace;
+  font-size: 12px;
+  line-height: 17px;
 `;
 
 const DetailLabel = styled.Text`

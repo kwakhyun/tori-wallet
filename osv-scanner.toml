@@ -1,0 +1,9 @@
+[[IgnoredVulns]]
+id = "GHSA-5p2g-fcmc-qvqq"
+ignoreUntil = 2026-10-01
+reason = "No upstream release is available. image-size@1.2.1 is a Metro build-time dependency and patches/image-size+1.2.1.patch rejects zero-length JXL/HEIF boxes; a child-process regression test enforces termination."
+
+[[IgnoredVulns]]
+id = "GHSA-w3rx-r6r6-pgpr"
+ignoreUntil = 2026-10-01
+reason = "No upstream release is available. image-size@1.2.1 is a Metro build-time dependency and patches/image-size+1.2.1.patch rejects zero-length ICNS entries; a child-process regression test enforces termination."

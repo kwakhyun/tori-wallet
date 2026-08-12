@@ -3,7 +3,8 @@
  */
 
 import React, { useState, useEffect, useCallback } from 'react';
-import styled, { useTheme } from 'styled-components/native';
+import styled from 'styled-components/native';
+import { useTheme } from '@/hooks/useTheme';
 import {
   SafeAreaView,
   StatusBar,
@@ -32,7 +33,7 @@ type ViewMode = 'overview' | 'tokens';
 type TimeRange = '7d' | '30d' | '90d';
 
 function PortfolioScreen(): React.JSX.Element {
-  const theme = useTheme();
+  const { theme, isDarkMode } = useTheme();
   const { wallets, activeWalletIndex, activeNetworkChainId, networks } =
     useWalletStore();
 
@@ -310,7 +311,7 @@ function PortfolioScreen(): React.JSX.Element {
   if (!activeWallet) {
     return (
       <Container>
-        <StatusBar barStyle="light-content" />
+        <StatusBar barStyle={isDarkMode ? 'light-content' : 'dark-content'} />
         <Content>
           <Title>포트폴리오</Title>
           <EmptyState>
@@ -323,7 +324,7 @@ function PortfolioScreen(): React.JSX.Element {
 
   return (
     <Container>
-      <StatusBar barStyle="light-content" />
+      <StatusBar barStyle={isDarkMode ? 'light-content' : 'dark-content'} />
       <Content>
         <Header>
           <Title>포트폴리오</Title>

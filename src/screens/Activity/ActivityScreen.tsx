@@ -3,7 +3,8 @@
  */
 
 import React, { useCallback, useEffect, useState } from 'react';
-import styled, { useTheme } from 'styled-components/native';
+import styled from 'styled-components/native';
+import { useTheme } from '@/hooks/useTheme';
 import {
   SafeAreaView,
   StatusBar,
@@ -23,7 +24,7 @@ import { transactionCacheService } from '@/realm/services';
 import { ActivityScreenSkeleton } from '@/components/common/Skeleton';
 
 function ActivityScreen(): React.JSX.Element {
-  const theme = useTheme();
+  const { theme, isDarkMode } = useTheme();
   const { wallets, activeWalletIndex, activeNetworkChainId, networks } =
     useWalletStore();
 
@@ -253,7 +254,7 @@ function ActivityScreen(): React.JSX.Element {
   if (!activeWallet) {
     return (
       <Container>
-        <StatusBar barStyle="light-content" />
+        <StatusBar barStyle={isDarkMode ? 'light-content' : 'dark-content'} />
         <Content>
           <Title>활동</Title>
           <EmptyState>
@@ -269,7 +270,7 @@ function ActivityScreen(): React.JSX.Element {
 
   return (
     <Container>
-      <StatusBar barStyle="light-content" />
+      <StatusBar barStyle={isDarkMode ? 'light-content' : 'dark-content'} />
       <Content>
         <Header>
           <Title>활동</Title>

@@ -4,6 +4,7 @@
 
 import React, { useState, useCallback, useEffect } from 'react';
 import styled from 'styled-components/native';
+import { useTheme } from '@/hooks/useTheme';
 import {
   SafeAreaView,
   StatusBar,
@@ -17,10 +18,16 @@ import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import type { RouteProp } from '@react-navigation/native';
 import type { RootStackParamList } from '@/navigation/RootNavigator';
 import { useWalletStore } from '@/store/walletStore';
-import { wcService, DAppSession } from '@/services/wcService';
+import { useSecurityStore } from '@/store/securityStore';
+import { wcService, DAppSession, DAppVerification } from '@/services/wcService';
 import { signingService } from '@/services/signingService';
+import {
+  analyzeSigningRequest,
+  assertSigningIntentUnchanged,
+} from '@/services/signingIntentService';
 import { useWCActiveSessions, useWCRequestLog } from '@/realm/hooks';
 import { SignRequestModal, SignRequest } from '@/components/SignRequestModal';
+import PinConfirmModal from '@/components/common/PinConfirmModal';
 import { createLogger } from '@/utils/logger';
 
 const logger = createLogger('WalletConnect');
@@ -31,21 +38,46 @@ type NavigationProp = NativeStackNavigationProp<
 >;
 type WalletConnectRouteProp = RouteProp<RootStackParamList, 'WalletConnect'>;
 
+function parseCaipChainId(chainId: string): number | null {
+  const match = /^eip155:(\d+)$/.exec(chainId);
+  if (!match) return null;
+  const value = Number(match[1]);
+  return Number.isSafeInteger(value) ? value : null;
+}
+
+function getRequestAccount(method: string, params: unknown[]): string | null {
+  if (method === 'eth_sendTransaction' || method === 'eth_signTransaction') {
+    return (params[0] as { from?: string } | undefined)?.from || null;
+  }
+  if (method === 'personal_sign') return (params[1] as string) || null;
+  if (method.startsWith('eth_signTypedData')) {
+    return (params[0] as string) || null;
+  }
+  return null;
+}
+
 function WalletConnectScreen(): React.JSX.Element {
+  const { isDarkMode } = useTheme();
   const navigation = useNavigation<NavigationProp>();
   const route = useRoute<WalletConnectRouteProp>();
 
-  const { wallets, activeWalletIndex, activeNetworkChainId } = useWalletStore();
+  const { wallets, activeWalletIndex, activeNetworkChainId, networks } =
+    useWalletStore();
   const activeWallet = wallets[activeWalletIndex];
+  const { requiresTransactionPin } = useSecurityStore();
 
   const [wcUri, setWcUri] = useState(route.params?.uri || '');
   const [isConnecting, setIsConnecting] = useState(false);
   const [sessions, setSessions] = useState<DAppSession[]>([]);
   const [pendingProposal, setPendingProposal] = useState<any>(null);
+  const [proposalRiskAcknowledged, setProposalRiskAcknowledged] =
+    useState(false);
   const [signRequest, setSignRequest] = useState<SignRequest | null>(null);
+  const [showSignPinConfirm, setShowSignPinConfirm] = useState(false);
   const [currentRequestDApp, setCurrentRequestDApp] = useState<{
     name: string;
     url: string;
+    verification: DAppVerification;
   } | null>(null);
 
   // Realm WalletConnect 세션 로그 훅
@@ -68,8 +100,22 @@ function WalletConnectScreen(): React.JSX.Element {
     initWC();
 
     // 세션 제안 핸들러
-    wcService.onSessionProposal(proposal => {
+    wcService.onSessionProposal(async proposal => {
       logger.debug('Session proposal received');
+      const verification = wcService.getDAppVerification(
+        proposal.verifyContext,
+      );
+      if (wcService.isVerificationBlocked(verification)) {
+        await wcService.rejectSession(proposal);
+        Alert.alert(
+          '위험한 연결 차단',
+          verification.isScam
+            ? 'WalletConnect가 피싱 또는 사기 사이트로 식별했습니다.'
+            : 'dApp이 주장한 주소와 검증된 출처가 일치하지 않습니다.',
+        );
+        return;
+      }
+      setProposalRiskAcknowledged(false);
       setPendingProposal(proposal);
     });
 
@@ -78,6 +124,37 @@ function WalletConnectScreen(): React.JSX.Element {
       logger.debug('Session request received:', request.params.request.method);
       const { topic, params } = request;
       const { request: requestParams } = params;
+      const verification = wcService.getDAppVerification(request.verifyContext);
+      if (wcService.isVerificationBlocked(verification)) {
+        await wcService.rejectRequest(topic, request.id);
+        logger.warn('Rejected request from invalid or known scam origin');
+        return;
+      }
+      if (
+        requestParams.expiryTimestamp !== undefined &&
+        requestParams.expiryTimestamp <= Math.floor(Date.now() / 1000)
+      ) {
+        await wcService.rejectRequest(topic, request.id);
+        logger.warn('Rejected expired session request');
+        return;
+      }
+      const requestChainId = parseCaipChainId(params.chainId);
+      if (!Array.isArray(requestParams.params)) {
+        await wcService.rejectRequest(topic, request.id);
+        logger.warn('Rejected session request with invalid params');
+        return;
+      }
+      const requestArguments = requestParams.params as unknown[];
+      const requestAccount = getRequestAccount(
+        requestParams.method,
+        requestArguments,
+      );
+
+      if (!requestChainId || !requestAccount) {
+        await wcService.rejectRequest(topic, request.id);
+        logger.warn('Rejected malformed session request');
+        return;
+      }
 
       // wcService에서 직접 세션 정보 가져오기
       const activeSessions = wcService.getActiveSessions();
@@ -85,9 +162,27 @@ function WalletConnectScreen(): React.JSX.Element {
 
       logger.debug('Processing request method:', requestParams.method);
 
+      let intent;
+      try {
+        intent = analyzeSigningRequest({
+          method: requestParams.method,
+          params: requestArguments,
+          chainId: requestChainId,
+          account: requestAccount,
+        });
+      } catch (error) {
+        await wcService.rejectRequest(topic, request.id);
+        logger.warn(
+          'Rejected request that could not be safely interpreted',
+          error,
+        );
+        return;
+      }
+
       setCurrentRequestDApp({
         name: session?.name || 'Unknown dApp',
         url: session?.url || '',
+        verification,
       });
 
       // 서명 요청 모달 표시
@@ -95,7 +190,10 @@ function WalletConnectScreen(): React.JSX.Element {
         id: request.id,
         topic,
         method: requestParams.method,
-        params: requestParams.params,
+        params: requestArguments,
+        chainId: requestChainId,
+        account: requestAccount,
+        intent,
       });
     });
   }, []); // 의존성 배열을 비워서 한 번만 실행
@@ -127,6 +225,15 @@ function WalletConnectScreen(): React.JSX.Element {
     if (!pendingProposal || !activeWallet) return;
 
     try {
+      const verification = wcService.getDAppVerification(
+        pendingProposal.verifyContext,
+      );
+      if (
+        wcService.isVerificationBlocked(verification) ||
+        (verification.validation !== 'VALID' && !proposalRiskAcknowledged)
+      ) {
+        throw new Error('검증되지 않은 dApp 연결 확인이 필요합니다.');
+      }
       await wcService.approveSession(pendingProposal, activeWallet.address, [
         activeNetworkChainId,
       ]);
@@ -162,6 +269,7 @@ function WalletConnectScreen(): React.JSX.Element {
     activeWallet,
     activeNetworkChainId,
     logSessionConnected,
+    proposalRiskAcknowledged,
   ]);
 
   const handleRejectSession = useCallback(async () => {
@@ -199,8 +307,8 @@ function WalletConnectScreen(): React.JSX.Element {
   );
 
   // 서명 요청 승인
-  const handleApproveSignRequest = useCallback(async () => {
-    if (!signRequest) return;
+  const executeSignRequest = useCallback(async () => {
+    if (!signRequest || !activeWallet) return;
 
     // Realm에 요청 로그 저장 (pending → approved)
     await logRequest({
@@ -208,18 +316,41 @@ function WalletConnectScreen(): React.JSX.Element {
       requestId: signRequest.id,
       method: signRequest.method,
       params: signRequest.params,
-      chainId: activeNetworkChainId,
+      chainId: signRequest.chainId,
       dappName: currentRequestDApp?.name,
     });
 
     try {
       logger.debug('Processing sign request:', signRequest.method);
 
+      if (
+        activeWallet.address.toLowerCase() !== signRequest.account.toLowerCase()
+      ) {
+        throw new Error('요청된 계정이 현재 선택된 계정과 다릅니다.');
+      }
+      if (
+        !wcService.validateSessionRequest(
+          signRequest.topic,
+          signRequest.chainId,
+          signRequest.account,
+          signRequest.method,
+        )
+      ) {
+        throw new Error('승인되지 않은 계정, 체인 또는 메서드 요청입니다.');
+      }
+
+      assertSigningIntentUnchanged(signRequest.intent.fingerprint, {
+        method: signRequest.method,
+        params: signRequest.params,
+        chainId: signRequest.chainId,
+        account: signRequest.account,
+      });
+
       // 실제 서명 처리
       const result = await signingService.handleRequest(
         signRequest.method,
         signRequest.params,
-        activeNetworkChainId,
+        signRequest.chainId,
       );
 
       logger.info('Sign request completed successfully');
@@ -263,7 +394,20 @@ function WalletConnectScreen(): React.JSX.Element {
       setSignRequest(null);
       setCurrentRequestDApp(null);
     }
-  }, [signRequest, activeNetworkChainId, currentRequestDApp?.name, logRequest]);
+  }, [signRequest, activeWallet, currentRequestDApp?.name, logRequest]);
+
+  const handleApproveSignRequest = useCallback(() => {
+    if (requiresTransactionPin()) {
+      setShowSignPinConfirm(true);
+      return;
+    }
+    executeSignRequest();
+  }, [executeSignRequest, requiresTransactionPin]);
+
+  const handleSignPinConfirmed = useCallback(() => {
+    setShowSignPinConfirm(false);
+    executeSignRequest();
+  }, [executeSignRequest]);
 
   // 서명 요청 거부
   const handleRejectSignRequest = useCallback(async () => {
@@ -279,15 +423,20 @@ function WalletConnectScreen(): React.JSX.Element {
   }, [signRequest]);
 
   // 현재 네트워크 이름 가져오기
-  const activeNetwork = useWalletStore
-    .getState()
-    .networks.find(n => n.chainId === activeNetworkChainId);
+  const requestNetwork = networks.find(
+    network => network.chainId === signRequest?.chainId,
+  );
 
   const renderPendingProposal = () => {
     if (!pendingProposal) return null;
 
     const { params } = pendingProposal;
     const proposer = params.proposer.metadata;
+    const verification = wcService.getDAppVerification(
+      pendingProposal.verifyContext,
+    );
+    const needsVerificationAcknowledgement =
+      verification.validation !== 'VALID';
 
     return (
       <ProposalCard>
@@ -299,7 +448,30 @@ function WalletConnectScreen(): React.JSX.Element {
         <DAppInfo>
           <DAppName>{proposer.name}</DAppName>
           <DAppUrl>{proposer.url}</DAppUrl>
+          <ProposalVerification $valid={verification.validation === 'VALID'}>
+            {verification.validation === 'VALID'
+              ? '✓ WalletConnect 출처 검증됨'
+              : '⚠ 출처를 검증할 수 없음'}
+          </ProposalVerification>
+          {!!verification.origin && (
+            <DAppUrl selectable>{verification.origin}</DAppUrl>
+          )}
         </DAppInfo>
+
+        {needsVerificationAcknowledgement && (
+          <ProposalAcknowledge
+            onPress={() => setProposalRiskAcknowledged(value => !value)}
+            accessibilityRole="checkbox"
+            accessibilityState={{ checked: proposalRiskAcknowledged }}
+          >
+            <ProposalAcknowledgeMark>
+              {proposalRiskAcknowledged ? '☑' : '☐'}
+            </ProposalAcknowledgeMark>
+            <ProposalAcknowledgeText>
+              도메인을 직접 확인했으며 검증되지 않은 연결 위험을 이해합니다.
+            </ProposalAcknowledgeText>
+          </ProposalAcknowledge>
+        )}
 
         <PermissionSection>
           <PermissionTitle>요청 권한:</PermissionTitle>
@@ -312,7 +484,15 @@ function WalletConnectScreen(): React.JSX.Element {
           <SecondaryButton onPress={handleRejectSession}>
             <SecondaryButtonText>거부</SecondaryButtonText>
           </SecondaryButton>
-          <PrimaryButton onPress={handleApproveSession}>
+          <PrimaryButton
+            onPress={handleApproveSession}
+            disabled={
+              needsVerificationAcknowledgement && !proposalRiskAcknowledged
+            }
+            $disabled={
+              needsVerificationAcknowledgement && !proposalRiskAcknowledged
+            }
+          >
             <PrimaryButtonText>연결</PrimaryButtonText>
           </PrimaryButton>
         </ButtonRow>
@@ -322,7 +502,7 @@ function WalletConnectScreen(): React.JSX.Element {
 
   return (
     <Container>
-      <StatusBar barStyle="light-content" />
+      <StatusBar barStyle={isDarkMode ? 'light-content' : 'dark-content'} />
       <ScrollView>
         <Content>
           <Header>
@@ -402,13 +582,21 @@ function WalletConnectScreen(): React.JSX.Element {
 
       {/* 서명 요청 모달 */}
       <SignRequestModal
-        visible={!!signRequest}
+        visible={!!signRequest && !showSignPinConfirm}
         request={signRequest}
         dAppName={currentRequestDApp?.name}
         dAppUrl={currentRequestDApp?.url}
-        networkName={activeNetwork?.name}
+        networkName={requestNetwork?.name}
+        dAppVerification={currentRequestDApp?.verification}
         onApprove={handleApproveSignRequest}
         onReject={handleRejectSignRequest}
+      />
+      <PinConfirmModal
+        visible={showSignPinConfirm}
+        onConfirm={handleSignPinConfirmed}
+        onCancel={() => setShowSignPinConfirm(false)}
+        title="dApp 요청 PIN 확인"
+        message="외부 dApp의 서명 또는 트랜잭션 요청을 승인하려면 PIN을 입력하세요."
       />
     </Container>
   );
@@ -539,6 +727,32 @@ const DAppUrl = styled.Text`
   font-size: ${({ theme }) => theme.typography.caption.fontSize}px;
 `;
 
+const ProposalVerification = styled.Text<{ $valid: boolean }>`
+  color: ${({ $valid }) => ($valid ? '#22c55e' : '#f59e0b')};
+  font-size: 12px;
+  font-weight: 700;
+  margin-top: ${({ theme }) => theme.spacing.sm}px;
+`;
+
+const ProposalAcknowledge = styled.TouchableOpacity`
+  flex-direction: row;
+  align-items: center;
+  margin-bottom: ${({ theme }) => theme.spacing.md}px;
+`;
+
+const ProposalAcknowledgeMark = styled.Text`
+  color: ${({ theme }) => theme.colors.warning};
+  font-size: 22px;
+  margin-right: ${({ theme }) => theme.spacing.sm}px;
+`;
+
+const ProposalAcknowledgeText = styled.Text`
+  flex: 1;
+  color: ${({ theme }) => theme.colors.warning};
+  font-size: 13px;
+  line-height: 18px;
+`;
+
 const PermissionSection = styled.View`
   background-color: ${({ theme }) => theme.colors.background};
   border-radius: ${({ theme }) => theme.borderRadius.md}px;
@@ -563,9 +777,10 @@ const ButtonRow = styled.View`
   gap: ${({ theme }) => theme.spacing.md}px;
 `;
 
-const PrimaryButton = styled.TouchableOpacity`
+const PrimaryButton = styled.TouchableOpacity<{ $disabled?: boolean }>`
   flex: 1;
-  background-color: ${({ theme }) => theme.colors.primary};
+  background-color: ${({ theme, $disabled }) =>
+    $disabled ? theme.colors.border : theme.colors.primary};
   border-radius: ${({ theme }) => theme.borderRadius.md}px;
   padding: ${({ theme }) => theme.spacing.md}px;
   align-items: center;

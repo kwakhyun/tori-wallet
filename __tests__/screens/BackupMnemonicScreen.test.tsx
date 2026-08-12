@@ -5,6 +5,17 @@
 import React from 'react';
 import { render } from '../test-utils';
 
+jest.mock('../../src/services/onboardingVault', () => ({
+  onboardingVault: {
+    getSnapshot: jest.fn(() => ({
+      sessionId: 1,
+      mnemonic:
+        'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about',
+    })),
+    clear: jest.fn(),
+  },
+}));
+
 // 네비게이션 모킹
 const mockNavigate = jest.fn();
 const mockGoBack = jest.fn();

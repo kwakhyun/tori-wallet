@@ -4,6 +4,7 @@
 
 import React, { useCallback } from 'react';
 import styled from 'styled-components/native';
+import { useTheme } from '@/hooks/useTheme';
 import {
   SafeAreaView,
   StatusBar,
@@ -23,6 +24,7 @@ type NavigationProp = NativeStackNavigationProp<RootStackParamList>;
 type TokenDetailRouteProp = RouteProp<RootStackParamList, 'TokenDetail'>;
 
 function TokenDetailScreen(): React.JSX.Element {
+  const { isDarkMode } = useTheme();
   const navigation = useNavigation<NavigationProp>();
   const route = useRoute<TokenDetailRouteProp>();
   const { symbol, name, balance, contractAddress } = route.params;
@@ -92,7 +94,7 @@ function TokenDetailScreen(): React.JSX.Element {
 
   return (
     <Container>
-      <StatusBar barStyle="light-content" />
+      <StatusBar barStyle={isDarkMode ? 'light-content' : 'dark-content'} />
       <Header>
         <BackButton onPress={() => navigation.goBack()}>
           <BackButtonText>‹</BackButtonText>

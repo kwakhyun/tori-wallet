@@ -9,6 +9,7 @@ import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import type { AuthStackParamList } from '@/navigation/AuthNavigator';
 import { ToriCatFace } from '@/components/common/Logo';
+import { useTheme } from '@/hooks/useTheme';
 
 const Container = styled(SafeAreaView)`
   flex: 1;
@@ -74,11 +75,12 @@ const SecondaryButtonText = styled.Text`
 type NavigationProp = NativeStackNavigationProp<AuthStackParamList, 'Welcome'>;
 
 function WelcomeScreen(): React.JSX.Element {
+  const { isDarkMode } = useTheme();
   const navigation = useNavigation<NavigationProp>();
 
   return (
     <Container>
-      <StatusBar barStyle="light-content" />
+      <StatusBar barStyle={isDarkMode ? 'light-content' : 'dark-content'} />
       <Content>
         <LogoContainer>
           <ToriCatFace size={140} />

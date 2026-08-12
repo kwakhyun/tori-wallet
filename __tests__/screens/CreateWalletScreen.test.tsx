@@ -30,6 +30,10 @@ jest.mock('../../src/services/walletService', () => ({
   },
 }));
 
+jest.mock('../../src/services/onboardingVault', () => ({
+  onboardingVault: { start: jest.fn() },
+}));
+
 import CreateWalletScreen from '../../src/screens/Auth/CreateWalletScreen';
 
 describe('CreateWalletScreen', () => {

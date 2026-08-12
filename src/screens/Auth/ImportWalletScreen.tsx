@@ -3,7 +3,8 @@
  */
 
 import React, { useState, useCallback, useRef, useMemo } from 'react';
-import styled, { useTheme } from 'styled-components/native';
+import styled from 'styled-components/native';
+import { useTheme } from '@/hooks/useTheme';
 import {
   SafeAreaView,
   StatusBar,
@@ -20,6 +21,7 @@ import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import type { AuthStackParamList } from '@/navigation/AuthNavigator';
 import { walletService } from '@/services/walletService';
 import { createLogger } from '@/utils/logger';
+import { onboardingVault } from '@/services/onboardingVault';
 
 const logger = createLogger('ImportWallet');
 
@@ -30,7 +32,7 @@ type NavigationProp = NativeStackNavigationProp<
 
 function ImportWalletScreen(): React.JSX.Element {
   const navigation = useNavigation<NavigationProp>();
-  const theme = useTheme();
+  const { theme, isDarkMode } = useTheme();
   const [wordCount, setWordCount] = useState<12 | 24>(12);
   const [words, setWords] = useState<string[]>(Array(12).fill(''));
   const [isLoading, setIsLoading] = useState(false);
@@ -102,6 +104,7 @@ function ImportWalletScreen(): React.JSX.Element {
   const handlePasteAll = useCallback(async () => {
     try {
       const text = await Clipboard.getString();
+      Clipboard.setString('');
       if (text) {
         const separators = /[\s,\n\r\t]+/;
         const pastedWords = text
@@ -205,10 +208,9 @@ function ImportWalletScreen(): React.JSX.Element {
 
       await new Promise(resolve => setTimeout(resolve, 200));
 
-      navigation.navigate('SetPin', {
-        mnemonic: mnemonic,
-        walletAddress: account.address,
-      });
+      onboardingVault.start(mnemonic, account.address);
+      setWords(Array(wordCount).fill(''));
+      navigation.navigate('SetPin');
     } catch (error) {
       logger.error('Failed to import wallet:', error);
       Alert.alert('오류', '지갑 가져오기에 실패했습니다. 다시 시도해주세요.');
@@ -217,7 +219,7 @@ function ImportWalletScreen(): React.JSX.Element {
       setLoadingProgress(0);
       setLoadingMessage('');
     }
-  }, [words, navigation]);
+  }, [words, wordCount, navigation]);
 
   // 입력 완료 여부
   const filledCount = words.filter(w => w.length > 0).length;
@@ -225,7 +227,7 @@ function ImportWalletScreen(): React.JSX.Element {
 
   return (
     <Container>
-      <StatusBar barStyle="light-content" />
+      <StatusBar barStyle={isDarkMode ? 'light-content' : 'dark-content'} />
       <ScrollView keyboardShouldPersistTaps="handled">
         <Content>
           <Header>

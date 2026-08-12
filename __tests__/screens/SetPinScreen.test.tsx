@@ -4,7 +4,12 @@
  */
 
 import React from 'react';
-import { render, fireEvent, waitFor } from '@testing-library/react-native';
+import {
+  cleanup,
+  render,
+  fireEvent,
+  waitFor,
+} from '@testing-library/react-native';
 import { ThemeProvider } from 'styled-components/native';
 import { lightTheme } from '../../src/styles/theme';
 import { Alert } from 'react-native';
@@ -52,10 +57,33 @@ jest.mock('../../src/store/walletStore', () => ({
 // Services 모킹
 const mockStoreMnemonic = jest.fn();
 const mockStoreAccounts = jest.fn();
+const mockClearAll = jest.fn();
 jest.mock('../../src/services/walletService', () => ({
   walletService: {
     storeMnemonic: (...args: unknown[]) => mockStoreMnemonic(...args),
     storeAccounts: (...args: unknown[]) => mockStoreAccounts(...args),
+    clearAll: (...args: unknown[]) => mockClearAll(...args),
+  },
+}));
+
+const mockMnemonic =
+  'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about';
+jest.mock('../../src/services/onboardingVault', () => ({
+  onboardingVault: {
+    getSnapshot: jest.fn(() => ({
+      sessionId: 1,
+      mnemonic: mockMnemonic,
+      walletAddress: '0x1234567890123456789012345678901234567890',
+    })),
+    isActive: jest.fn(() => true),
+    clear: jest.fn(),
+  },
+}));
+
+const mockStartSession = jest.fn();
+jest.mock('../../src/services/signerVault', () => ({
+  signerVault: {
+    startSession: (mnemonic: string) => mockStartSession(mnemonic),
   },
 }));
 
@@ -69,10 +97,17 @@ const renderWithTheme = (component: React.ReactElement) => {
 };
 
 describe('SetPinScreen', () => {
+  afterEach(() => {
+    cleanup();
+    jest.useRealTimers();
+  });
+
   beforeEach(() => {
     jest.clearAllMocks();
     mockStoreMnemonic.mockResolvedValue(undefined);
     mockStoreAccounts.mockResolvedValue(undefined);
+    mockClearAll.mockResolvedValue(undefined);
+    mockStartSession.mockReturnValue(undefined);
   });
 
   describe('렌더링', () => {
@@ -113,7 +148,6 @@ describe('SetPinScreen', () => {
     });
 
     it('should transition to confirm step after 6 digits', async () => {
-      jest.useFakeTimers();
       const { getByText } = renderWithTheme(<SetPinScreen />);
 
       // 6자리 입력
@@ -124,20 +158,14 @@ describe('SetPinScreen', () => {
       fireEvent.press(getByText('5'));
       fireEvent.press(getByText('6'));
 
-      // setTimeout 진행
-      jest.advanceTimersByTime(300);
-
       await waitFor(() => {
         expect(getByText('PIN 확인')).toBeTruthy();
       });
-
-      jest.useRealTimers();
     });
   });
 
   describe('PIN 입력 - 2단계 (확인)', () => {
     it('should complete wallet creation on matching PIN', async () => {
-      jest.useFakeTimers();
       const { getByText } = renderWithTheme(<SetPinScreen />);
 
       // 1단계: PIN 생성
@@ -147,8 +175,6 @@ describe('SetPinScreen', () => {
       fireEvent.press(getByText('4'));
       fireEvent.press(getByText('5'));
       fireEvent.press(getByText('6'));
-
-      jest.advanceTimersByTime(300);
 
       await waitFor(() => {
         expect(getByText('PIN 확인')).toBeTruthy();
@@ -161,8 +187,6 @@ describe('SetPinScreen', () => {
       fireEvent.press(getByText('4'));
       fireEvent.press(getByText('5'));
       fireEvent.press(getByText('6'));
-
-      jest.useRealTimers();
 
       await waitFor(() => {
         expect(mockStoreMnemonic).toHaveBeenCalledWith(

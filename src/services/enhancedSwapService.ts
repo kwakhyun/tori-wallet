@@ -2,17 +2,12 @@
  * 멀티 DEX 스왑 서비스 (가격 비교, 최적 경로 탐색)
  */
 
-import { formatUnits, parseUnits } from 'viem';
-import Config from 'react-native-config';
-
-// 체인별 0x API 엔드포인트
-const ZEROX_API_URLS: Record<number, string> = {
-  1: 'https://api.0x.org',
-  137: 'https://polygon.api.0x.org',
-  42161: 'https://arbitrum.api.0x.org',
-  10: 'https://optimism.api.0x.org',
-  8453: 'https://base.api.0x.org',
-};
+import { formatUnits } from 'viem';
+import { isSwapApiSupported } from './swapApiConfig';
+import {
+  swapService as baseSwapService,
+  type SwapQuote as BaseSwapQuote,
+} from './swapService';
 
 // 체인별 네이티브 토큰 주소
 export const NATIVE_TOKEN_ADDRESS =
@@ -320,23 +315,7 @@ export interface SwapToken {
   isCustom?: boolean;
 }
 
-export interface SwapQuote {
-  sellToken: string;
-  buyToken: string;
-  sellAmount: string;
-  buyAmount: string;
-  price: string;
-  guaranteedPrice: string;
-  estimatedPriceImpact: string;
-  gas: string;
-  gasPrice: string;
-  protocolFee: string;
-  minimumProtocolFee: string;
-  sources: SwapSource[];
-  allowanceTarget: string;
-  to: string;
-  data: string;
-  value: string;
+export interface SwapQuote extends BaseSwapQuote {
   // 추가 정보
   estimatedGasUsd?: string;
   minimumReceived?: string;
@@ -382,7 +361,6 @@ export interface TokenPrice {
 }
 
 class EnhancedSwapService {
-  private apiKey: string = Config.ZEROX_API_KEY || '';
   private priceCache: Map<string, { price: TokenPrice; timestamp: number }> =
     new Map();
   private readonly PRICE_CACHE_TTL = 60000; // 1분
@@ -394,58 +372,14 @@ class EnhancedSwapService {
     params: SwapParams,
     chainId: number,
   ): Promise<SwapQuote | null> {
-    const apiUrl = ZEROX_API_URLS[chainId];
-
-    if (!apiUrl) {
+    if (!isSwapApiSupported(chainId)) {
       console.warn(`Swap not supported on chain ${chainId}`);
       return null;
     }
 
     try {
-      const sellAmountWei = parseUnits(
-        params.sellAmount,
-        params.sellToken.decimals,
-      ).toString();
-
-      const queryParams = new URLSearchParams({
-        sellToken: params.sellToken.address,
-        buyToken: params.buyToken.address,
-        sellAmount: sellAmountWei,
-        takerAddress: params.takerAddress,
-        slippagePercentage: (params.slippagePercentage || 0.5).toString(),
-      });
-
-      if (params.excludedSources?.length) {
-        queryParams.append('excludedSources', params.excludedSources.join(','));
-      }
-
-      if (params.gasPrice) {
-        queryParams.append('gasPrice', params.gasPrice);
-      }
-
-      if (params.skipValidation) {
-        queryParams.append('skipValidation', 'true');
-      }
-
-      const headers: Record<string, string> = {
-        'Content-Type': 'application/json',
-      };
-
-      if (this.apiKey) {
-        headers['0x-api-key'] = this.apiKey;
-      }
-
-      const response = await fetch(
-        `${apiUrl}/swap/v1/quote?${queryParams.toString()}`,
-        { headers },
-      );
-
-      if (!response.ok) {
-        const errorData = (await response.json()) as { reason?: string };
-        throw new Error(errorData.reason || 'Failed to get quote');
-      }
-
-      const quote = (await response.json()) as SwapQuote;
+      const quote = await baseSwapService.getQuote(params, chainId);
+      if (!quote) return null;
 
       // 추가 정보 계산
       const enhancedQuote = await this.enhanceQuote(quote, params, chainId);
@@ -464,12 +398,8 @@ class EnhancedSwapService {
     params: SwapParams,
     _chainId: number,
   ): Promise<SwapQuote> {
-    // 최소 수령량 계산
-    const slippage = params.slippagePercentage || 0.5;
-    const buyAmountBigInt = BigInt(quote.buyAmount);
-    const minimumReceived =
-      buyAmountBigInt -
-      (buyAmountBigInt * BigInt(Math.floor(slippage * 100))) / 10000n;
+    // API v2가 실행 견적에 서명한 최소 수령량을 그대로 사용한다.
+    const minimumReceived = BigInt(quote.minBuyAmount);
 
     // USD 가스비 추정 (ETH 가격 가져오기)
     let estimatedGasUsd: string | undefined;
@@ -519,53 +449,12 @@ class EnhancedSwapService {
     params: SwapParams,
     chainId: number,
   ): Promise<{ price: string; buyAmount: string } | null> {
-    const apiUrl = ZEROX_API_URLS[chainId];
-
-    if (!apiUrl) {
+    if (!isSwapApiSupported(chainId)) {
       return null;
     }
 
     try {
-      const sellAmountWei = parseUnits(
-        params.sellAmount,
-        params.sellToken.decimals,
-      ).toString();
-
-      const queryParams = new URLSearchParams({
-        sellToken: params.sellToken.address,
-        buyToken: params.buyToken.address,
-        sellAmount: sellAmountWei,
-      });
-
-      const headers: Record<string, string> = {
-        'Content-Type': 'application/json',
-      };
-
-      if (this.apiKey) {
-        headers['0x-api-key'] = this.apiKey;
-      }
-
-      const response = await fetch(
-        `${apiUrl}/swap/v1/price?${queryParams.toString()}`,
-        { headers },
-      );
-
-      if (!response.ok) {
-        return null;
-      }
-
-      const data = (await response.json()) as {
-        price: string;
-        buyAmount: string;
-      };
-
-      return {
-        price: data.price,
-        buyAmount: formatUnits(
-          BigInt(data.buyAmount),
-          params.buyToken.decimals,
-        ),
-      };
+      return baseSwapService.getPrice(params, chainId);
     } catch (error: unknown) {
       console.error('Failed to get price:', error);
       return null;
@@ -692,7 +581,7 @@ class EnhancedSwapService {
    * 스왑 지원 여부 확인
    */
   isSwapSupported(chainId: number): boolean {
-    return !!ZEROX_API_URLS[chainId];
+    return isSwapApiSupported(chainId);
   }
 
   /**

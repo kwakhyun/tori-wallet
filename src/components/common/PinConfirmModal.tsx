@@ -6,6 +6,7 @@ import React, { useState, useCallback, useEffect, useRef } from 'react';
 import styled from 'styled-components/native';
 import { Modal, Alert, Vibration, Animated } from 'react-native';
 import { walletService } from '@/services/walletService';
+import { signerVault } from '@/services/signerVault';
 
 interface Props {
   visible: boolean;
@@ -101,6 +102,7 @@ export function PinConfirmModal({
         setProgress(85);
 
         if (mnemonic && walletService.validateMnemonic(mnemonic)) {
+          signerVault.startSession(mnemonic);
           await new Promise(resolve => setTimeout(resolve, 100));
           setProgress(100);
           setAttempts(0);

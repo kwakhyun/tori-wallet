@@ -57,6 +57,13 @@ const mockRetrieveMnemonicWithPin = jest
 const mockRetrieveAccounts = jest.fn().mockResolvedValue([]);
 const mockValidateMnemonic = jest.fn().mockReturnValue(true);
 const mockClearAll = jest.fn().mockResolvedValue(undefined);
+const mockCompleteReset = jest.fn().mockResolvedValue(undefined);
+const mockStartSession = jest.fn();
+const mockSignerUnlockWithPin = jest.fn().mockResolvedValue(true);
+const mockSignerUnlockWithBiometric = jest.fn().mockResolvedValue(true);
+const mockDeriveAccountAtPath = jest.fn().mockReturnValue({
+  address: '0x0987654321098765432109876543210987654321',
+});
 
 jest.mock('../../src/services/walletService', () => ({
   walletService: {
@@ -74,9 +81,29 @@ jest.mock('../../src/services/walletService', () => ({
   },
 }));
 
+jest.mock('../../src/services/signerVault', () => ({
+  signerVault: {
+    startSession: (mnemonic: string) => mockStartSession(mnemonic),
+    unlockWithPin: (pin: string) => mockSignerUnlockWithPin(pin),
+    unlockWithBiometric: () => mockSignerUnlockWithBiometric(),
+    deriveAccountAtPath: (path: string) => mockDeriveAccountAtPath(path),
+  },
+}));
+
+jest.mock('../../src/services/walletResetService', () => ({
+  walletResetService: {
+    reset: () => mockCompleteReset(),
+  },
+}));
+
 describe('useWallet', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    mockSignerUnlockWithPin.mockResolvedValue(true);
+    mockSignerUnlockWithBiometric.mockResolvedValue(true);
+    mockDeriveAccountAtPath.mockReturnValue({
+      address: '0x0987654321098765432109876543210987654321',
+    });
   });
 
   describe('기본 상태', () => {
@@ -227,12 +254,12 @@ describe('useWallet', () => {
         expect(success).toBe(true);
       });
 
-      expect(mockRetrieveMnemonicWithPin).toHaveBeenCalledWith('123456');
+      expect(mockSignerUnlockWithPin).toHaveBeenCalledWith('123456');
       expect(mockUnlock).toHaveBeenCalled();
     });
 
     it('should return false when PIN unlock fails', async () => {
-      mockRetrieveMnemonicWithPin.mockResolvedValueOnce(null);
+      mockSignerUnlockWithPin.mockResolvedValueOnce(false);
       const { result } = renderHook(() => useWallet());
 
       await act(async () => {
@@ -249,12 +276,12 @@ describe('useWallet', () => {
         expect(success).toBe(true);
       });
 
-      expect(mockRetrieveMnemonic).toHaveBeenCalled();
+      expect(mockSignerUnlockWithBiometric).toHaveBeenCalled();
       expect(mockUnlock).toHaveBeenCalled();
     });
 
     it('should return false when biometrics unlock fails', async () => {
-      mockRetrieveMnemonic.mockResolvedValueOnce(null);
+      mockSignerUnlockWithBiometric.mockResolvedValueOnce(false);
       const { result } = renderHook(() => useWallet());
 
       await act(async () => {
@@ -280,13 +307,17 @@ describe('useWallet', () => {
         expect(address).toBeDefined();
       });
 
-      expect(mockDeriveAccount).toHaveBeenCalled();
+      expect(mockDeriveAccountAtPath).toHaveBeenCalledWith(
+        "m/44'/60'/0'/0/1",
+      );
       expect(mockStoreAccounts).toHaveBeenCalled();
       expect(mockAddWallet).toHaveBeenCalled();
     });
 
     it('should throw error when adding account to locked wallet', async () => {
-      mockRetrieveMnemonic.mockResolvedValueOnce(null);
+      mockDeriveAccountAtPath.mockImplementationOnce(() => {
+        throw new Error('Wallet is locked');
+      });
       const { result } = renderHook(() => useWallet());
 
       // addAccount가 locked wallet에서 호출될 때 에러를 던지거나 null 반환
@@ -298,7 +329,7 @@ describe('useWallet', () => {
         // 에러가 발생하면 테스트 통과
       }
 
-      expect(mockRetrieveMnemonic).toHaveBeenCalled();
+      expect(mockDeriveAccountAtPath).toHaveBeenCalled();
     });
 
     it('should switch account', () => {
@@ -340,12 +371,11 @@ describe('useWallet', () => {
         await result.current.resetWallet();
       });
 
-      expect(mockClearAll).toHaveBeenCalled();
-      expect(mockReset).toHaveBeenCalled();
+      expect(mockCompleteReset).toHaveBeenCalled();
     });
 
     it('should handle reset error', async () => {
-      mockClearAll.mockRejectedValueOnce(new Error('Reset failed'));
+      mockCompleteReset.mockRejectedValueOnce(new Error('Reset failed'));
       const { result } = renderHook(() => useWallet());
 
       // 에러가 발생할 수 있는 resetWallet 호출
@@ -357,7 +387,7 @@ describe('useWallet', () => {
         // 에러가 발생하면 테스트 통과
       }
 
-      expect(mockClearAll).toHaveBeenCalled();
+      expect(mockCompleteReset).toHaveBeenCalled();
     });
   });
 });

@@ -59,6 +59,21 @@ describe('SwapReviewModal', () => {
     data: '0x',
     allowanceTarget: '0xallowance',
     value: '0',
+    minBuyAmount: '1490000000',
+    liquidityAvailable: true,
+    issues: {
+      allowance: null,
+      balance: null,
+      simulationIncomplete: false,
+      invalidSourcesPassed: [],
+    },
+    security: {
+      intentFingerprint: `0x${'11'.repeat(32)}`,
+      quoteFingerprint: `0x${'22'.repeat(32)}`,
+      validatedAt: Date.now(),
+      chainId: 1,
+      taker: '0x1234567890123456789012345678901234567890',
+    },
   };
 
   const defaultProps = {

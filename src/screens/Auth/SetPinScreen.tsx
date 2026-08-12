@@ -2,29 +2,30 @@
  * PIN 설정 및 지갑 생성 완료 화면
  */
 
-import React, { useState, useCallback, useRef } from 'react';
+import React, { useState, useCallback, useRef, useEffect } from 'react';
 import styled from 'styled-components/native';
+import { useTheme } from '@/hooks/useTheme';
 import { SafeAreaView, StatusBar, Alert, Vibration } from 'react-native';
-import {
-  useRoute,
-  CommonActions,
-  useNavigation,
-} from '@react-navigation/native';
-import type { RouteProp } from '@react-navigation/native';
+import { CommonActions, useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import type { AuthStackParamList } from '@/navigation/AuthNavigator';
 import { walletService } from '@/services/walletService';
+import { signerVault } from '@/services/signerVault';
 import { useWalletStore } from '@/store/walletStore';
+import { onboardingVault } from '@/services/onboardingVault';
 
-type SetPinRouteProp = RouteProp<AuthStackParamList, 'SetPin'>;
 type NavigationProp = NativeStackNavigationProp<AuthStackParamList, 'SetPin'>;
 
 type Step = 'create' | 'confirm';
 
 function SetPinScreen(): React.JSX.Element {
-  const route = useRoute<SetPinRouteProp>();
+  const { isDarkMode } = useTheme();
   const navigation = useNavigation<NavigationProp>();
-  const { mnemonic, walletAddress } = route.params;
+  const walletAddress = onboardingVault.getSnapshot()?.walletAddress || '';
+
+  useEffect(() => {
+    if (!walletAddress) navigation.navigate('Welcome');
+  }, [navigation, walletAddress]);
 
   const [step, setStep] = useState<Step>('create');
   const [pin, setPin] = useState('');
@@ -52,25 +53,45 @@ function SetPinScreen(): React.JSX.Element {
       setLoadingMessage('지갑 생성 중...');
 
       try {
+        const onboardingSecret = onboardingVault.getSnapshot();
+        if (!onboardingSecret?.walletAddress) {
+          throw new Error('지갑 생성 세션이 만료되었습니다.');
+        }
+        const { mnemonic, sessionId } = onboardingSecret;
+
         // 니모닉 저장
         setLoadingProgress(20);
         await walletService.storeMnemonic(mnemonic, confirmedPin);
+
+        if (!onboardingVault.isActive(sessionId)) {
+          await walletService.clearAll();
+          throw new Error(
+            '앱이 백그라운드로 전환되어 지갑 생성을 취소했습니다.',
+          );
+        }
 
         // 계정 저장
         setLoadingProgress(50);
         setLoadingMessage('계정 정보 저장 중...');
         await walletService.storeAccounts([
           {
-            address: walletAddress,
+            address: onboardingSecret.walletAddress,
             derivationPath: "m/44'/60'/0'/0/0",
             name: 'Account 1',
           },
         ]);
 
+        if (!onboardingVault.isActive(sessionId)) {
+          await walletService.clearAll();
+          throw new Error(
+            '앱이 백그라운드로 전환되어 지갑 생성을 취소했습니다.',
+          );
+        }
+
         // 스토어 업데이트
         setLoadingProgress(80);
         addWallet({
-          address: walletAddress,
+          address: onboardingSecret.walletAddress,
           name: 'Account 1',
           isHD: true,
           derivationPath: "m/44'/60'/0'/0/0",
@@ -79,8 +100,10 @@ function SetPinScreen(): React.JSX.Element {
         setLoadingProgress(100);
         setLoadingMessage('완료!');
 
+        signerVault.startSession(mnemonic);
         unlock();
         setHasWallet(true);
+        onboardingVault.clear();
 
         navigation.dispatch(
           CommonActions.reset({
@@ -101,7 +124,7 @@ function SetPinScreen(): React.JSX.Element {
         setLoadingMessage('');
       }
     },
-    [mnemonic, walletAddress, addWallet, unlock, setHasWallet, navigation],
+    [addWallet, unlock, setHasWallet, navigation],
   );
 
   const handleNumberPress = useCallback(
@@ -113,10 +136,8 @@ function SetPinScreen(): React.JSX.Element {
           setPin(newPin);
           if (newPin.length === 6) {
             firstPin.current = newPin;
-            setTimeout(() => {
-              setStep('confirm');
-              setPin('');
-            }, 200);
+            setStep('confirm');
+            setPin('');
           }
         }
       } else {
@@ -145,7 +166,7 @@ function SetPinScreen(): React.JSX.Element {
 
   return (
     <Container>
-      <StatusBar barStyle="light-content" />
+      <StatusBar barStyle={isDarkMode ? 'light-content' : 'dark-content'} />
       <Content>
         <Header>
           <BackButton onPress={() => navigation.goBack()} disabled={isLoading}>

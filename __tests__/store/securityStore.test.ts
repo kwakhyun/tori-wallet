@@ -10,11 +10,8 @@ import {
 
 describe('SecurityStore', () => {
   beforeEach(() => {
-    // 스토어 초기화
-    const { result } = renderHook(() => useSecurityStore());
-    act(() => {
-      result.current.clearRecentAddresses();
-    });
+    // React 렌더러를 만들기 전에 전역 스토어 상태를 초기화한다.
+    useSecurityStore.getState().resetSecurityState();
   });
 
   describe('AUTO_LOCK_OPTIONS', () => {
@@ -24,7 +21,6 @@ describe('SecurityStore', () => {
       expect(AUTO_LOCK_OPTIONS['1m']).toBe(60000);
       expect(AUTO_LOCK_OPTIONS['5m']).toBe(300000);
       expect(AUTO_LOCK_OPTIONS['15m']).toBe(900000);
-      expect(AUTO_LOCK_OPTIONS.never).toBe(-1);
     });
   });
 
@@ -42,9 +38,6 @@ describe('SecurityStore', () => {
     it('should update last active time', () => {
       const { result } = renderHook(() => useSecurityStore());
       const before = result.current.lastActiveTime;
-
-      // 시간이 지남을 시뮬레이션
-      jest.advanceTimersByTime(100);
 
       act(() => {
         result.current.updateLastActiveTime();
@@ -85,6 +78,25 @@ describe('SecurityStore', () => {
       });
 
       expect(result.current.transactionLimit).toBeNull();
+    });
+
+    it('requires a PIN according to the explicit policy and value limit', () => {
+      const { result } = renderHook(() => useSecurityStore());
+
+      expect(result.current.requiresTransactionPin()).toBe(true);
+
+      act(() => {
+        result.current.setRequirePinForTransaction(false);
+        result.current.setTransactionLimit(null);
+      });
+      expect(result.current.requiresTransactionPin()).toBe(false);
+
+      act(() => {
+        result.current.setTransactionLimit(100);
+      });
+      expect(result.current.requiresTransactionPin()).toBe(true);
+      expect(result.current.requiresTransactionPin(101)).toBe(true);
+      expect(result.current.requiresTransactionPin(100)).toBe(false);
     });
   });
 
@@ -225,17 +237,6 @@ describe('SecurityStore', () => {
       expect(typeof shouldLock).toBe('boolean');
     });
 
-    it('should return false when autoLockTimeout is never', () => {
-      const { result } = renderHook(() => useSecurityStore());
-
-      act(() => {
-        result.current.setAutoLockTimeout('never');
-        result.current.updateLastActiveTime();
-      });
-
-      expect(result.current.shouldAutoLock()).toBe(false);
-    });
-
     it('should return true when autoLockTimeout is immediate', () => {
       const { result } = renderHook(() => useSecurityStore());
 
@@ -365,6 +366,20 @@ describe('SecurityStore', () => {
         '0xAABBCCDDEEFF00112233445566778899AABBCCDD',
       );
       expect(foundUpper).toBeDefined();
+    });
+  });
+
+  describe('persist migration', () => {
+    it('replaces the removed never-lock option and preserves current options', async () => {
+      const migrate = useSecurityStore.persist.getOptions().migrate;
+      expect(migrate).toBeDefined();
+
+      expect(await migrate?.({ autoLockTimeout: 'never' }, 1)).toMatchObject({
+        autoLockTimeout: '1m',
+      });
+      expect(await migrate?.({ autoLockTimeout: '5m' }, 1)).toMatchObject({
+        autoLockTimeout: '5m',
+      });
     });
   });
 });

@@ -4,20 +4,21 @@
 
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import styled from 'styled-components/native';
+import { useTheme } from '@/hooks/useTheme';
 import { SafeAreaView, StatusBar, Alert, Animated } from 'react-native';
 import { useWalletStore } from '@/store/walletStore';
 import { walletService } from '@/services/walletService';
+import { signerVault } from '@/services/signerVault';
 import { ToriCatFace } from '@/components/common/Logo';
-import EncryptedStorage from 'react-native-encrypted-storage';
-
-const BIOMETRIC_ENABLED_KEY = 'tori_biometric_enabled';
 
 function UnlockScreen(): React.JSX.Element {
+  const { isDarkMode } = useTheme();
   const { unlock } = useWalletStore();
   const [pin, setPin] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [displayProgress, setDisplayProgress] = useState(0);
   const [attempts, setAttempts] = useState(0);
+  const pendingTimers = useRef<ReturnType<typeof setTimeout>[]>([]);
 
   // 애니메이션 값
   const animatedProgress = useRef(new Animated.Value(0)).current;
@@ -44,27 +45,40 @@ function UnlockScreen(): React.JSX.Element {
     [animatedProgress],
   );
 
-  // 컴포넌트 언마운트 시 정리
-  useEffect(() => {
-    // cleanup if needed
-  }, []);
+  const delay = useCallback(
+    (milliseconds: number) =>
+      new Promise<void>(resolve => {
+        const timer = setTimeout(() => {
+          pendingTimers.current = pendingTimers.current.filter(
+            pending => pending !== timer,
+          );
+          resolve();
+        }, milliseconds);
+        pendingTimers.current.push(timer);
+      }),
+    [],
+  );
+
+  useEffect(
+    () => () => {
+      pendingTimers.current.forEach(timer => clearTimeout(timer));
+      pendingTimers.current = [];
+      animatedProgress.stopAnimation();
+    },
+    [animatedProgress],
+  );
 
   // 생체인증 시도
   const tryBiometric = useCallback(async () => {
     try {
-      const biometricEnabled = await EncryptedStorage.getItem(
-        BIOMETRIC_ENABLED_KEY,
-      );
-      if (biometricEnabled !== 'true') return;
+      if (!(await walletService.isBiometricEnabled())) return;
 
       const supported = await walletService.isBiometricSupported();
       if (!supported) return;
 
       // Keychain의 생체인증으로 니모닉 조회 시도
       setIsLoading(true);
-      const mnemonic = await walletService.retrieveMnemonic();
-
-      if (mnemonic) {
+      if (await signerVault.unlockWithBiometric()) {
         // 생체인증 성공 - 잠금 해제
         unlock();
       }
@@ -81,6 +95,18 @@ function UnlockScreen(): React.JSX.Element {
     tryBiometric();
   }, [tryBiometric]);
 
+  useEffect(() => {
+    if (attempts === 0) return;
+    if (attempts >= 5) {
+      Alert.alert(
+        '경고',
+        `PIN을 ${attempts}회 틀렸습니다. 반복 실패 시 입력을 잠시 중단하고 다시 시도하세요.`,
+      );
+    } else {
+      Alert.alert('오류', 'PIN이 올바르지 않습니다.');
+    }
+  }, [attempts]);
+
   const handlePinInput = useCallback(
     async (digit: string) => {
       if (pin.length >= 6) return;
@@ -93,39 +119,29 @@ function UnlockScreen(): React.JSX.Element {
         setProgress(10);
 
         // 진행률 업데이트 간 딜레이
-        await new Promise(resolve => setTimeout(resolve, 200));
+        await delay(200);
         setProgress(30);
-        await new Promise(resolve => setTimeout(resolve, 200));
+        await delay(200);
         setProgress(50);
 
         try {
-          const mnemonic = await walletService.retrieveMnemonicWithPin(newPin);
+          const authenticated = await signerVault.unlockWithPin(newPin);
 
-          await new Promise(resolve => setTimeout(resolve, 150));
+          await delay(150);
           setProgress(70);
-          await new Promise(resolve => setTimeout(resolve, 150));
+          await delay(150);
           setProgress(85);
 
-          if (mnemonic && walletService.validateMnemonic(mnemonic)) {
-            await new Promise(resolve => setTimeout(resolve, 100));
+          if (authenticated) {
+            await delay(100);
             setProgress(100);
             unlock();
             setPin('');
             setAttempts(0);
           } else {
             setProgress(0);
-            setAttempts(prev => prev + 1);
             setPin('');
-            if (attempts >= 4) {
-              Alert.alert(
-                '경고',
-                `PIN을 ${
-                  attempts + 1
-                }회 틀렸습니다.\n10회 실패 시 지갑이 초기화됩니다.`,
-              );
-            } else {
-              Alert.alert('오류', 'PIN이 올바르지 않습니다.');
-            }
+            setAttempts(current => current + 1);
           }
         } catch {
           setProgress(0);
@@ -136,7 +152,7 @@ function UnlockScreen(): React.JSX.Element {
         }
       }
     },
-    [pin, unlock, attempts, setProgress],
+    [delay, pin, unlock, setProgress],
   );
 
   const handleDelete = useCallback(() => {
@@ -202,7 +218,7 @@ function UnlockScreen(): React.JSX.Element {
 
   return (
     <Container>
-      <StatusBar barStyle="light-content" />
+      <StatusBar barStyle={isDarkMode ? 'light-content' : 'dark-content'} />
       <Content>
         <LogoContainer>
           <ToriCatFace size={100} />

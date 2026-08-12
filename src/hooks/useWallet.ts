@@ -5,6 +5,8 @@
 import { useCallback } from 'react';
 import { useWalletStore } from '../store/walletStore';
 import { walletService } from '../services/walletService';
+import { signerVault } from '../services/signerVault';
+import { walletResetService } from '../services/walletResetService';
 import { toAppError, logError } from '../utils/error';
 
 export function useWallet() {
@@ -18,7 +20,6 @@ export function useWallet() {
     setActiveWallet,
     lock,
     unlock: unlockStore,
-    reset,
   } = useWalletStore();
 
   const activeWallet = wallets[activeWalletIndex] || null;
@@ -48,6 +49,7 @@ export function useWallet() {
           derivationPath: "m/44'/60'/0'/0/0",
         });
 
+        signerVault.startSession(mnemonic);
         unlockStore();
 
         return { mnemonic, address: account.address };
@@ -87,6 +89,7 @@ export function useWallet() {
           derivationPath: "m/44'/60'/0'/0/0",
         });
 
+        signerVault.startSession(mnemonic);
         unlockStore();
 
         return { address: account.address };
@@ -103,8 +106,7 @@ export function useWallet() {
    */
   const unlockWithBiometrics = useCallback(async () => {
     try {
-      const mnemonic = await walletService.retrieveMnemonic();
-      if (mnemonic) {
+      if (await signerVault.unlockWithBiometric()) {
         unlockStore();
         return true;
       }
@@ -121,8 +123,7 @@ export function useWallet() {
   const unlockWithPin = useCallback(
     async (pin: string) => {
       try {
-        const mnemonic = await walletService.retrieveMnemonicWithPin(pin);
-        if (mnemonic) {
+        if (await signerVault.unlockWithPin(pin)) {
           unlockStore();
           return true;
         }
@@ -141,20 +142,16 @@ export function useWallet() {
   const addAccount = useCallback(
     async (name: string) => {
       try {
-        const mnemonic = await walletService.retrieveMnemonic();
-        if (!mnemonic) {
-          throw new Error('Wallet is locked');
-        }
-
         const newIndex = wallets.length;
-        const account = walletService.deriveAccount(mnemonic, newIndex);
+        const derivationPath = `m/44'/60'/0'/0/${newIndex}`;
+        const account = signerVault.deriveAccountAtPath(derivationPath);
 
         const storedAccounts = await walletService.retrieveAccounts();
         const newStoredAccounts = [
           ...storedAccounts,
           {
             address: account.address,
-            derivationPath: `m/44'/60'/0'/0/${newIndex}`,
+            derivationPath,
             name,
           },
         ];
@@ -165,7 +162,7 @@ export function useWallet() {
           address: account.address,
           name,
           isHD: true,
-          derivationPath: `m/44'/60'/0'/0/${newIndex}`,
+          derivationPath,
         });
 
         return account.address;
@@ -194,13 +191,12 @@ export function useWallet() {
    */
   const resetWallet = useCallback(async () => {
     try {
-      await walletService.clearAll();
-      reset();
+      await walletResetService.reset();
     } catch (error) {
       logError(error, 'resetWallet');
       throw toAppError(error);
     }
-  }, [reset]);
+  }, []);
 
   return {
     // State

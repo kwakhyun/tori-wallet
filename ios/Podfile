@@ -5,8 +5,28 @@ require Pod::Executable.execute_command('node', ['-p',
     {paths: [process.argv[1]]},
   )', __dir__]).strip
 
+# QR 스캔에는 위치 메타데이터가 필요하지 않으므로 CLLocation 코드를 빌드하지 않는다.
+$VCEnableLocation = false
+
 platform :ios, min_ios_version_supported
 prepare_react_native_project!
+
+# React Native 0.83.1 pins fmt 11.0.2. Apple Clang 21 (Xcode 26.4+) rejects
+# that version's FMT_STRING consteval path. Keep this narrowly scoped source
+# patch until React Native upgrades fmt, then remove it with this helper.
+def patch_fmt_consteval_for_apple_clang(installer)
+  fmt_base = File.join(installer.sandbox.root, 'fmt', 'include', 'fmt', 'base.h')
+  return unless File.exist?(fmt_base)
+
+  old_guard = '#elif defined(__apple_build_version__) && __apple_build_version__ < 14000029L'
+  new_guard = '#elif defined(__apple_build_version__)'
+  content = File.read(fmt_base)
+  return unless content.include?(old_guard)
+
+  File.chmod(0644, fmt_base)
+  File.write(fmt_base, content.sub(old_guard, new_guard))
+  Pod::UI.puts 'Applied fmt 11.0.2 Apple Clang consteval compatibility patch'.yellow
+end
 
 linkage = ENV['USE_FRAMEWORKS']
 if linkage != nil
@@ -30,5 +50,6 @@ target 'ToriWallet' do
       :mac_catalyst_enabled => false,
       # :ccache_enabled => true
     )
+    patch_fmt_consteval_for_apple_clang(installer)
   end
 end

@@ -4,6 +4,7 @@
 
 import React, { useState, useCallback } from 'react';
 import styled from 'styled-components/native';
+import { useTheme } from '@/hooks/useTheme';
 import {
   SafeAreaView,
   StatusBar,
@@ -25,6 +26,7 @@ import type { RootStackParamList } from '@/navigation/RootNavigator';
 type NavigationProp = NativeStackNavigationProp<RootStackParamList>;
 
 export function SecuritySettingsScreen() {
+  const { isDarkMode } = useTheme();
   const navigation = useNavigation<NavigationProp>();
   const {
     autoLockTimeout,
@@ -112,7 +114,7 @@ export function SecuritySettingsScreen() {
 
   return (
     <Container>
-      <StatusBar barStyle="light-content" />
+      <StatusBar barStyle={isDarkMode ? 'light-content' : 'dark-content'} />
       <ScrollView>
         <Content>
           <Title>보안 설정</Title>

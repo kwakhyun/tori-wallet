@@ -1,18 +1,29 @@
-/**
- * 니모닉/키 관리 서비스 (보안 저장소 연동)
- */
+/** 니모닉/계정 저장과 기기 인증 정책을 관리한다. */
 
+import { Platform } from 'react-native';
 import * as Keychain from 'react-native-keychain';
 import EncryptedStorage from 'react-native-encrypted-storage';
-import { generateMnemonic, english, mnemonicToAccount } from 'viem/accounts';
+import { mnemonicToAccount } from 'viem/accounts';
 import type { HDAccount } from 'viem/accounts';
+import {
+  entropyToMnemonic,
+  validateMnemonic as validateBip39Mnemonic,
+} from '@scure/bip39';
+import { wordlist as englishWordlist } from '@scure/bip39/wordlists/english';
 import { createLogger } from '@/utils/logger';
-import { encrypt, decrypt } from '@/utils/crypto';
+import { decrypt, encrypt, isNewEncryptionFormat } from '@/utils/crypto';
+import {
+  SecureRandomGenerator,
+  secureRandomGenerator,
+} from '@/utils/secureRandom';
 
 const logger = createLogger('Wallet');
 
 const MNEMONIC_STORAGE_KEY = 'tori_wallet_mnemonic';
 const ACCOUNTS_STORAGE_KEY = 'tori_wallet_accounts';
+export const BIOMETRIC_ENABLED_KEY = 'tori_biometric_enabled';
+const VAULT_VERSION_KEY = 'tori_wallet_vault_version';
+const VAULT_VERSION = '2';
 
 export interface StoredAccount {
   address: string;
@@ -20,48 +31,73 @@ export interface StoredAccount {
   name: string;
 }
 
-class WalletService {
-  /**
-   * 새 니모닉 생성 (12 또는 24 단어)
-   */
+export class WalletService {
+  private initializationPromise: Promise<void> | null = null;
+
+  constructor(
+    private readonly randomGenerator: SecureRandomGenerator = secureRandomGenerator,
+  ) {}
+
   generateMnemonic(wordCount: 12 | 24 = 12): string {
-    const strength = wordCount === 24 ? 256 : 128;
-    return generateMnemonic(english, strength);
-  }
-
-  /**
-   * 니모닉 유효성 검증
-   */
-  validateMnemonic(mnemonic: string): boolean {
-    const words = mnemonic.trim().split(/\s+/);
-    if (words.length !== 12 && words.length !== 24) {
-      return false;
+    const entropy = this.randomGenerator.bytes(wordCount === 24 ? 32 : 16);
+    try {
+      const mnemonic = entropyToMnemonic(entropy, englishWordlist);
+      if (!validateBip39Mnemonic(mnemonic, englishWordlist)) {
+        throw new Error('Generated mnemonic checksum is invalid');
+      }
+      return mnemonic;
+    } finally {
+      entropy.fill(0);
     }
-
-    // 모든 단어가 BIP-39 영어 단어 목록에 있는지 확인
-    return words.every(word => english.includes(word));
   }
 
-  /**
-   * 니모닉에서 계정 파생
-   */
+  validateMnemonic(mnemonic: string): boolean {
+    const normalized = mnemonic.trim().toLowerCase().replace(/\s+/g, ' ');
+    const wordCount = normalized.split(' ').length;
+    return (
+      (wordCount === 12 || wordCount === 24) &&
+      validateBip39Mnemonic(normalized, englishWordlist)
+    );
+  }
+
   deriveAccount(mnemonic: string, index: number = 0): HDAccount {
-    const path = `m/44'/60'/0'/0/${index}` as const;
-    return mnemonicToAccount(mnemonic, { path });
+    return this.deriveAccountAtPath(mnemonic, `m/44'/60'/0'/0/${index}`);
   }
 
-  /**
-   * 니모닉 암호화 저장
-   */
+  deriveAccountAtPath(mnemonic: string, derivationPath: string): HDAccount {
+    if (!/^m\/44'\/60'\/.+/.test(derivationPath)) {
+      throw new Error('Unsupported derivation path');
+    }
+    return mnemonicToAccount(mnemonic, {
+      path: derivationPath as `m/44'/60'/${string}`,
+    });
+  }
+
+  /** 기존 무인증 Keychain 자격 증명을 최초 1회 제거한다. */
+  async initializeSecureStorage(): Promise<void> {
+    if (this.initializationPromise) return this.initializationPromise;
+
+    this.initializationPromise = (async () => {
+      const version = await EncryptedStorage.getItem(VAULT_VERSION_KEY);
+      if (version === VAULT_VERSION) return;
+
+      await Keychain.resetGenericPassword({ service: MNEMONIC_STORAGE_KEY });
+      await EncryptedStorage.setItem(BIOMETRIC_ENABLED_KEY, 'false');
+      await EncryptedStorage.setItem(VAULT_VERSION_KEY, VAULT_VERSION);
+      logger.info('Legacy keychain credential removed');
+    })().catch(error => {
+      this.initializationPromise = null;
+      throw error;
+    });
+
+    return this.initializationPromise;
+  }
+
+  /** PIN 암호화본만 저장한다. 생체인증 사본은 명시적 활성화 시 별도 저장한다. */
   async storeMnemonic(mnemonic: string, pin: string): Promise<void> {
     try {
-      // Keychain에 저장 (시뮬레이터 호환성을 위해 생체인증 옵션 제외)
-      await Keychain.setGenericPassword(MNEMONIC_STORAGE_KEY, mnemonic, {
-        service: MNEMONIC_STORAGE_KEY,
-      });
-
-      // 암호화된 저장소에 PIN 암호화 백업
-      const encrypted = this.encryptWithPin(mnemonic, pin);
+      await this.initializeSecureStorage();
+      const encrypted = await encrypt(mnemonic, pin);
       await EncryptedStorage.setItem(MNEMONIC_STORAGE_KEY, encrypted);
     } catch (error) {
       logger.error('Failed to store mnemonic:', error);
@@ -69,102 +105,101 @@ class WalletService {
     }
   }
 
-  /**
-   * 니모닉 조회 (생체인증 요청)
-   */
+  /** 생체정보로 보호된 Keychain 항목만 조회한다. 실패 시 PIN 경로로 폴백하지 않는다. */
   async retrieveMnemonic(): Promise<string | null> {
     try {
-      // 생체인증 없이 먼저 시도 (시뮬레이터 호환)
+      await this.initializeSecureStorage();
+      if (!(await this.isBiometricEnabled())) return null;
+
       const credentials = await Keychain.getGenericPassword({
         service: MNEMONIC_STORAGE_KEY,
-      });
-
-      if (credentials) {
-        return credentials.password;
-      }
-
-      // Keychain에 없으면 생체인증으로 재시도
-      const credentialsWithAuth = await Keychain.getGenericPassword({
-        service: MNEMONIC_STORAGE_KEY,
+        accessControl: Keychain.ACCESS_CONTROL.BIOMETRY_CURRENT_SET,
         authenticationPrompt: {
           title: 'Tori Wallet',
-          subtitle: '지갑에 접근하려면 인증이 필요합니다',
+          subtitle: '지갑에 접근하려면 생체인증이 필요합니다',
+          cancel: '취소',
         },
       });
-
-      if (credentialsWithAuth) {
-        return credentialsWithAuth.password;
-      }
-
-      return null;
+      return credentials ? credentials.password : null;
     } catch (error) {
-      logger.error('Failed to retrieve mnemonic with biometric:', error);
-      // 생체인증 실패 시 인증 없이 다시 시도
-      return this.retrieveMnemonicWithoutAuth();
-    }
-  }
-
-  /**
-   * 저장된 니모닉 불러오기 (인증 없이 - 개발/테스트용)
-   */
-  async retrieveMnemonicWithoutAuth(): Promise<string | null> {
-    try {
-      // Keychain에서 인증 없이 가져오기 시도
-      const credentials = await Keychain.getGenericPassword({
-        service: MNEMONIC_STORAGE_KEY,
-      });
-
-      if (credentials) {
-        return credentials.password;
-      }
-
-      // Keychain에 없으면 EncryptedStorage에서 시도
-      // 참고: EncryptedStorage의 데이터는 PIN으로 암호화되어 있으므로
-      // 인증 없이는 복호화할 수 없음 (보안 정책)
-      const encrypted = await EncryptedStorage.getItem(MNEMONIC_STORAGE_KEY);
-      if (encrypted) {
-        // PIN 없이는 복호화 불가 - 사용자에게 PIN 입력 요청 필요
-        logger.debug('Encrypted mnemonic found, PIN required for decryption');
-      }
-
-      return null;
-    } catch (error) {
-      logger.error('Failed to retrieve mnemonic without auth:', error);
+      logger.warn('Biometric mnemonic retrieval failed', error);
       return null;
     }
   }
 
-  /**
-   * PIN으로 니모닉 복호화
-   */
+  /** @deprecated 민감정보의 무인증 조회는 지원하지 않는다. */
+  async retrieveMnemonicWithoutAuth(): Promise<null> {
+    return null;
+  }
+
   async retrieveMnemonicWithPin(pin: string): Promise<string | null> {
     try {
+      await this.initializeSecureStorage();
       const encrypted = await EncryptedStorage.getItem(MNEMONIC_STORAGE_KEY);
-      if (!encrypted) {
-        return null;
+      if (!encrypted) return null;
+
+      const mnemonic = await decrypt(encrypted, pin);
+      if (!mnemonic || !this.validateMnemonic(mnemonic)) return null;
+
+      if (!isNewEncryptionFormat(encrypted)) {
+        await EncryptedStorage.setItem(
+          MNEMONIC_STORAGE_KEY,
+          await encrypt(mnemonic, pin),
+        );
+        logger.info('Mnemonic encryption migrated to vault v2');
       }
-      return this.decryptWithPin(encrypted, pin);
+      return mnemonic;
     } catch (error) {
-      logger.error('Failed to decrypt mnemonic:', error);
+      logger.warn('Failed to decrypt mnemonic', error);
       return null;
     }
   }
 
-  /**
-   * 생체인증 지원 여부 확인
-   */
+  async enableBiometric(mnemonic: string): Promise<void> {
+    await this.initializeSecureStorage();
+    if (!(await this.isBiometricSupported())) {
+      throw new Error('Biometric authentication is not available');
+    }
+
+    const securityLevel =
+      Platform.OS === 'android'
+        ? Keychain.SECURITY_LEVEL.SECURE_HARDWARE
+        : undefined;
+    const stored = await Keychain.setGenericPassword(
+      MNEMONIC_STORAGE_KEY,
+      mnemonic,
+      {
+        service: MNEMONIC_STORAGE_KEY,
+        accessible: Keychain.ACCESSIBLE.WHEN_PASSCODE_SET_THIS_DEVICE_ONLY,
+        accessControl: Keychain.ACCESS_CONTROL.BIOMETRY_CURRENT_SET,
+        securityLevel,
+        cloudSync: false,
+      },
+    );
+    if (!stored) throw new Error('Failed to secure biometric credential');
+    await EncryptedStorage.setItem(BIOMETRIC_ENABLED_KEY, 'true');
+  }
+
+  async disableBiometric(): Promise<void> {
+    await Keychain.resetGenericPassword({ service: MNEMONIC_STORAGE_KEY });
+    await EncryptedStorage.setItem(BIOMETRIC_ENABLED_KEY, 'false');
+  }
+
+  async isBiometricEnabled(): Promise<boolean> {
+    return (
+      (await EncryptedStorage.getItem(BIOMETRIC_ENABLED_KEY)) === 'true' &&
+      (await Keychain.hasGenericPassword({ service: MNEMONIC_STORAGE_KEY }))
+    );
+  }
+
   async isBiometricSupported(): Promise<boolean> {
     try {
-      const biometryType = await Keychain.getSupportedBiometryType();
-      return biometryType !== null;
+      return (await Keychain.getSupportedBiometryType()) !== null;
     } catch {
       return false;
     }
   }
 
-  /**
-   * 계정 목록 저장
-   */
   async storeAccounts(accounts: StoredAccount[]): Promise<void> {
     try {
       await EncryptedStorage.setItem(
@@ -173,54 +208,34 @@ class WalletService {
       );
     } catch (error) {
       logger.error('Failed to store accounts:', error);
+      throw new Error('계정 정보 저장에 실패했습니다.');
     }
   }
 
-  /**
-   * 계정 목록 불러오기
-   */
   async retrieveAccounts(): Promise<StoredAccount[]> {
-    try {
-      const data = await EncryptedStorage.getItem(ACCOUNTS_STORAGE_KEY);
-      if (data) {
-        return JSON.parse(data);
-      }
-      return [];
-    } catch (error) {
-      logger.error('Failed to retrieve accounts:', error);
-      return [];
-    }
+    const data = await EncryptedStorage.getItem(ACCOUNTS_STORAGE_KEY);
+    if (!data) return [];
+    const accounts = JSON.parse(data) as StoredAccount[];
+    if (!Array.isArray(accounts)) throw new Error('Invalid account storage');
+    return accounts;
   }
 
-  /**
-   * 모든 지갑 데이터 삭제
-   */
+  /** 모든 보안 저장소 삭제를 끝까지 시도하고 일부 실패도 호출자에게 알린다. */
   async clearAll(): Promise<void> {
-    try {
-      await Keychain.resetGenericPassword({ service: MNEMONIC_STORAGE_KEY });
-      await EncryptedStorage.removeItem(MNEMONIC_STORAGE_KEY);
-      await EncryptedStorage.removeItem(ACCOUNTS_STORAGE_KEY);
-    } catch (error) {
-      logger.error('Failed to clear wallet data:', error);
-    }
-  }
+    const results = await Promise.allSettled([
+      Keychain.resetGenericPassword({ service: MNEMONIC_STORAGE_KEY }),
+      EncryptedStorage.removeItem(MNEMONIC_STORAGE_KEY),
+      EncryptedStorage.removeItem(ACCOUNTS_STORAGE_KEY),
+      EncryptedStorage.removeItem(BIOMETRIC_ENABLED_KEY),
+      EncryptedStorage.removeItem(VAULT_VERSION_KEY),
+    ]);
+    this.initializationPromise = null;
 
-  /**
-   * AES-256 기반 암호화
-   */
-  private encryptWithPin(data: string, pin: string): string {
-    return encrypt(data, pin);
-  }
-
-  /**
-   * AES-256 기반 복호화 (레거시 XOR 데이터도 자동 마이그레이션)
-   */
-  private decryptWithPin(encrypted: string, pin: string): string {
-    const result = decrypt(encrypted, pin);
-    if (result === null) {
-      throw new Error('Decryption failed');
+    const failures = results.filter(result => result.status === 'rejected');
+    if (failures.length > 0) {
+      logger.error('Failed to clear all wallet data', failures);
+      throw new Error('일부 지갑 데이터를 삭제하지 못했습니다.');
     }
-    return result;
   }
 }
 

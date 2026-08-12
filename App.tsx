@@ -4,29 +4,32 @@
 
 import '@/utils/polyfills'; // 반드시 첫 번째로 import
 import React, { useEffect, useState } from 'react';
-import { Appearance, StatusBar } from 'react-native';
+import { Appearance, StatusBar, StyleSheet, View } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { NavigationContainer } from '@react-navigation/native';
 import { ThemeProvider } from 'styled-components/native';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { QueryClientProvider } from '@tanstack/react-query';
+import BootSplash from 'react-native-bootsplash';
 
 import RootNavigator from '@/navigation/RootNavigator';
 import { useThemeStore } from '@/store/themeStore';
 import { useAppState } from '@/hooks/useAppState';
+import {
+  createQueryClient,
+  setupAppFocusListener,
+  setupNetworkListener,
+} from '@/config/queryClient';
 
-const queryClient = new QueryClient({
-  defaultOptions: {
-    queries: {
-      retry: 2,
-      staleTime: 30 * 1000,
-    },
-  },
-});
+const queryClient = createQueryClient();
 
 // 앱 상태 관리 컴포넌트
 function AppStateManager({ children }: { children: React.ReactNode }) {
-  useAppState();
-  return <>{children}</>;
+  const { trackUserActivity } = useAppState();
+  return (
+    <View style={styles.appRoot} onTouchStart={trackUserActivity}>
+      {children}
+    </View>
+  );
 }
 
 // 테마가 적용된 앱 콘텐츠
@@ -56,6 +59,9 @@ function ThemedApp(): React.JSX.Element {
     <ThemeProvider theme={activeTheme}>
       <SafeAreaProvider>
         <NavigationContainer
+          onReady={() => {
+            BootSplash.hide({ fade: true });
+          }}
           theme={{
             dark: isDarkMode,
             colors: {
@@ -88,6 +94,15 @@ function ThemedApp(): React.JSX.Element {
 }
 
 function App(): React.JSX.Element {
+  useEffect(() => {
+    const unsubscribeNetwork = setupNetworkListener();
+    const unsubscribeFocus = setupAppFocusListener();
+    return () => {
+      unsubscribeNetwork();
+      unsubscribeFocus();
+    };
+  }, []);
+
   return (
     <QueryClientProvider client={queryClient}>
       <ThemedApp />
@@ -96,3 +111,7 @@ function App(): React.JSX.Element {
 }
 
 export default App;
+
+const styles = StyleSheet.create({
+  appRoot: { flex: 1 },
+});

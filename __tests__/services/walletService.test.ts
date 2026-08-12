@@ -1,457 +1,232 @@
 /**
- * 지갑 서비스 테스트
+ * 지갑 저장소는 PIN 암호화본과 명시적으로 활성화된 생체인증 사본만 유지한다.
  */
 
-import { walletService } from '../../src/services/walletService';
-
-// react-native-keychain 모킹
 jest.mock('react-native-keychain', () => ({
-  setGenericPassword: jest.fn().mockResolvedValue(true),
-  getGenericPassword: jest.fn().mockResolvedValue({
-    username: 'tori_wallet_mnemonic',
-    password: 'test mnemonic phrase',
-  }),
-  resetGenericPassword: jest.fn().mockResolvedValue(true),
-  getSupportedBiometryType: jest.fn().mockResolvedValue('FaceID'),
+  setGenericPassword: jest.fn(),
+  getGenericPassword: jest.fn(),
+  hasGenericPassword: jest.fn(),
+  resetGenericPassword: jest.fn(),
+  getSupportedBiometryType: jest.fn(),
   ACCESS_CONTROL: {
-    BIOMETRY_ANY: 'BIOMETRY_ANY',
-    BIOMETRY_ANY_OR_DEVICE_PASSCODE: 'BIOMETRY_ANY_OR_DEVICE_PASSCODE',
+    BIOMETRY_CURRENT_SET: 'BIOMETRY_CURRENT_SET',
   },
-  AUTHENTICATION_TYPE: {
-    DEVICE_PASSCODE_OR_BIOMETRICS: 'DEVICE_PASSCODE_OR_BIOMETRICS',
+  ACCESSIBLE: {
+    WHEN_PASSCODE_SET_THIS_DEVICE_ONLY: 'WHEN_PASSCODE_SET_THIS_DEVICE_ONLY',
+  },
+  SECURITY_LEVEL: {
+    SECURE_HARDWARE: 'SECURE_HARDWARE',
   },
 }));
 
-// react-native-encrypted-storage 모킹
 jest.mock('react-native-encrypted-storage', () => ({
-  setItem: jest.fn().mockResolvedValue(true),
-  getItem: jest.fn().mockResolvedValue(null),
-  removeItem: jest.fn().mockResolvedValue(true),
+  setItem: jest.fn(),
+  getItem: jest.fn(),
+  removeItem: jest.fn(),
 }));
+
+import * as Keychain from 'react-native-keychain';
+import EncryptedStorage from 'react-native-encrypted-storage';
+import { WalletService, walletService } from '../../src/services/walletService';
+import { SecureRandomGenerator } from '../../src/utils/secureRandom';
+
+const VALID_MNEMONIC =
+  'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about';
+const PIN = '123456';
+
+const keychain = Keychain as unknown as {
+  resetGenericPassword: jest.Mock;
+  setGenericPassword: jest.Mock;
+  getGenericPassword: jest.Mock;
+  hasGenericPassword: jest.Mock;
+  getSupportedBiometryType: jest.Mock;
+};
+const storage = EncryptedStorage as unknown as {
+  setItem: jest.Mock;
+  getItem: jest.Mock;
+  removeItem: jest.Mock;
+};
 
 describe('WalletService', () => {
-  describe('generateMnemonic', () => {
-    it('should generate a 12-word mnemonic by default', () => {
-      const mnemonic = walletService.generateMnemonic();
-      const words = mnemonic.split(' ');
-      expect(words).toHaveLength(12);
-    });
+  beforeEach(async () => {
+    jest.clearAllMocks();
+    keychain.resetGenericPassword.mockResolvedValue(true);
+    keychain.setGenericPassword.mockResolvedValue(true);
+    keychain.getGenericPassword.mockResolvedValue(false);
+    keychain.hasGenericPassword.mockResolvedValue(false);
+    keychain.getSupportedBiometryType.mockResolvedValue('FaceID' as never);
+    storage.setItem.mockResolvedValue(undefined);
+    storage.getItem.mockResolvedValue(null);
+    storage.removeItem.mockResolvedValue(undefined);
 
-    it('should generate a 24-word mnemonic when specified', () => {
-      const mnemonic = walletService.generateMnemonic(24);
-      const words = mnemonic.split(' ');
-      expect(words).toHaveLength(24);
-    });
-
-    it('should generate different mnemonics each time', () => {
-      const mnemonic1 = walletService.generateMnemonic();
-      const mnemonic2 = walletService.generateMnemonic();
-      expect(mnemonic1).not.toBe(mnemonic2);
-    });
-  });
-
-  describe('validateMnemonic', () => {
-    it('should validate a correct 12-word mnemonic', () => {
-      // 유효한 BIP-39 니모닉 사용
-      const validMnemonic =
-        'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about';
-      expect(walletService.validateMnemonic(validMnemonic)).toBe(true);
-    });
-
-    it('should validate a correct 24-word mnemonic', () => {
-      const validMnemonic =
-        'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon art';
-      expect(walletService.validateMnemonic(validMnemonic)).toBe(true);
-    });
-
-    it('should reject invalid word count', () => {
-      expect(walletService.validateMnemonic('one two three')).toBe(false);
-      expect(walletService.validateMnemonic('')).toBe(false);
-    });
-
-    it('should reject invalid words', () => {
-      const invalidMnemonic =
-        'invalid words that are not in bip39 wordlist test test test test test test';
-      expect(walletService.validateMnemonic(invalidMnemonic)).toBe(false);
-    });
-  });
-
-  describe('deriveAccount', () => {
-    const testMnemonic =
-      'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about';
-
-    it('should derive an account from mnemonic', () => {
-      const account = walletService.deriveAccount(testMnemonic, 0);
-      expect(account).toBeDefined();
-      expect(account.address).toMatch(/^0x[a-fA-F0-9]{40}$/);
-    });
-
-    it('should derive different accounts for different indices', () => {
-      const account0 = walletService.deriveAccount(testMnemonic, 0);
-      const account1 = walletService.deriveAccount(testMnemonic, 1);
-      expect(account0.address).not.toBe(account1.address);
-    });
-
-    it('should derive the same account for the same index', () => {
-      const account1 = walletService.deriveAccount(testMnemonic, 0);
-      const account2 = walletService.deriveAccount(testMnemonic, 0);
-      expect(account1.address).toBe(account2.address);
-    });
-
-    it('should derive deterministic addresses', () => {
-      const account = walletService.deriveAccount(testMnemonic, 0);
-      // BIP-44 표준 경로로 파생된 주소는 항상 동일
-      expect(account.address.toLowerCase()).toBe(
-        '0x9858effd232b4033e47d90003d41ec34ecaeda94',
-      );
-    });
-  });
-});
-
-describe('WalletService - Storage', () => {
-  const testMnemonic =
-    'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about';
-  const testPin = '123456';
-
-  beforeEach(() => {
+    await walletService.clearAll();
     jest.clearAllMocks();
   });
 
-  describe('storeMnemonic', () => {
-    it('should store mnemonic securely', async () => {
-      const Keychain = require('react-native-keychain');
-      await walletService.storeMnemonic(testMnemonic, testPin);
-      expect(Keychain.setGenericPassword).toHaveBeenCalled();
-    });
+  it('generates valid 12-word and 24-word BIP-39 mnemonics', () => {
+    const twelveWords = walletService.generateMnemonic();
+    const twentyFourWords = walletService.generateMnemonic(24);
+
+    expect(twelveWords.split(' ')).toHaveLength(12);
+    expect(twentyFourWords.split(' ')).toHaveLength(24);
+    expect(walletService.validateMnemonic(twelveWords)).toBe(true);
+    expect(walletService.validateMnemonic(twentyFourWords)).toBe(true);
   });
 
-  describe('retrieveMnemonic', () => {
-    it('should retrieve stored mnemonic', async () => {
-      const mnemonic = await walletService.retrieveMnemonic();
-      expect(mnemonic).toBeDefined();
-    });
-  });
-});
+  it('never creates a mnemonic when the RNG health check fails', () => {
+    const weakRandom = new SecureRandomGenerator(target => target.fill(0));
+    const service = new WalletService(weakRandom);
 
-describe('WalletService - Biometric', () => {
-  beforeEach(() => {
-    jest.clearAllMocks();
+    expect(() => service.generateMnemonic()).toThrow(
+      '보안 난수 상태 검사에 실패하여 지갑 생성을 중단했습니다.',
+    );
   });
 
-  describe('isBiometricSupported', () => {
-    it('should check if biometric is supported', async () => {
-      const result = await walletService.isBiometricSupported();
-      expect(typeof result).toBe('boolean');
-    });
-  });
-});
-
-describe('WalletService - Error Handling', () => {
-  const testMnemonic =
-    'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about';
-  const testPin = '123456';
-
-  beforeEach(() => {
-    jest.clearAllMocks();
+  it('rejects a checksum-invalid mnemonic even when all words exist', () => {
+    const invalidChecksum =
+      'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon';
+    expect(walletService.validateMnemonic(invalidChecksum)).toBe(false);
   });
 
-  describe('retrieveMnemonicWithoutAuth', () => {
-    it('should return mnemonic or null', async () => {
-      const result = await walletService.retrieveMnemonicWithoutAuth();
-      expect(result === null || typeof result === 'string').toBe(true);
-    });
+  it('derives deterministic and distinct HD accounts', () => {
+    const account0 = walletService.deriveAccount(VALID_MNEMONIC, 0);
+    const account1 = walletService.deriveAccount(VALID_MNEMONIC, 1);
+
+    expect(account0.address.toLowerCase()).toBe(
+      '0x9858effd232b4033e47d90003d41ec34ecaeda94',
+    );
+    expect(account1.address).not.toBe(account0.address);
+    expect(
+      walletService.deriveAccountAtPath(VALID_MNEMONIC, "m/44'/60'/0'/0/1")
+        .address,
+    ).toBe(account1.address);
   });
 
-  describe('storeMnemonic error handling', () => {
-    it('should handle storage errors', async () => {
-      const Keychain = require('react-native-keychain');
-      Keychain.setGenericPassword.mockRejectedValueOnce(
-        new Error('Storage error'),
-      );
+  it('stores only the PIN-encrypted mnemonic by default', async () => {
+    await walletService.storeMnemonic(VALID_MNEMONIC, PIN);
 
-      await expect(
-        walletService.storeMnemonic(testMnemonic, testPin),
-      ).rejects.toThrow('니모닉 저장에 실패했습니다');
+    const mnemonicWrite = storage.setItem.mock.calls.find(
+      ([key]) => key === 'tori_wallet_mnemonic',
+    );
+    expect(mnemonicWrite).toBeDefined();
+    expect(mnemonicWrite?.[1]).not.toContain(VALID_MNEMONIC);
+    expect(JSON.parse(mnemonicWrite?.[1] || '{}')).toMatchObject({
+      version: 2,
+      kdf: 'scrypt',
+      n: 65536,
     });
+    expect(keychain.setGenericPassword).not.toHaveBeenCalled();
   });
 
-  describe('isBiometricSupported', () => {
-    it('should return boolean value', async () => {
-      const result = await walletService.isBiometricSupported();
-      expect(typeof result).toBe('boolean');
+  it('round-trips the encrypted mnemonic with the correct PIN only', async () => {
+    let encrypted = '';
+    storage.setItem.mockImplementation(async (key, value) => {
+      if (key === 'tori_wallet_mnemonic') encrypted = value;
     });
+    await walletService.storeMnemonic(VALID_MNEMONIC, PIN);
+
+    storage.getItem.mockImplementation(async key =>
+      key === 'tori_wallet_mnemonic' ? encrypted : '2',
+    );
+    await expect(walletService.retrieveMnemonicWithPin(PIN)).resolves.toBe(
+      VALID_MNEMONIC,
+    );
+    await expect(
+      walletService.retrieveMnemonicWithPin('654321'),
+    ).resolves.toBeNull();
   });
 
-  describe('retrieveAccounts error handling', () => {
-    it('should return empty array on error', async () => {
-      const EncryptedStorage = require('react-native-encrypted-storage');
-      EncryptedStorage.getItem.mockRejectedValueOnce(
-        new Error('Storage error'),
-      );
+  it('never exposes a mnemonic through the unauthenticated legacy method', async () => {
+    keychain.getGenericPassword.mockResolvedValue({
+      username: 'legacy',
+      password: VALID_MNEMONIC,
+      service: 'tori_wallet_mnemonic',
+      storage: 'keychain',
+    } as never);
 
-      const accounts = await walletService.retrieveAccounts();
-      expect(accounts).toEqual([]);
-    });
+    await expect(
+      walletService.retrieveMnemonicWithoutAuth(),
+    ).resolves.toBeNull();
+    expect(keychain.getGenericPassword).not.toHaveBeenCalled();
   });
 
-  describe('storeAccounts error handling', () => {
-    it('should handle storage error gracefully', async () => {
-      const EncryptedStorage = require('react-native-encrypted-storage');
-      EncryptedStorage.setItem.mockRejectedValueOnce(
-        new Error('Storage error'),
-      );
+  it('returns the Keychain mnemonic only when biometric storage is enabled', async () => {
+    storage.getItem.mockImplementation(async key =>
+      key === 'tori_wallet_vault_version' ? '2' : 'true',
+    );
+    keychain.hasGenericPassword.mockResolvedValue(true);
+    keychain.getGenericPassword.mockResolvedValue({
+      username: 'tori_wallet_mnemonic',
+      password: VALID_MNEMONIC,
+      service: 'tori_wallet_mnemonic',
+      storage: 'keychain',
+    } as never);
 
-      const accounts = [
-        {
-          address: '0x1234567890123456789012345678901234567890',
-          derivationPath: "m/44'/60'/0'/0/0",
-          name: 'Account 1',
-        },
-      ];
-
-      await expect(
-        walletService.storeAccounts(accounts),
-      ).resolves.not.toThrow();
-    });
-  });
-});
-
-describe('WalletService - Security Features', () => {
-  const testMnemonic =
-    'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about';
-  const testPin = '123456';
-
-  beforeEach(() => {
-    jest.clearAllMocks();
+    await expect(walletService.retrieveMnemonic()).resolves.toBe(
+      VALID_MNEMONIC,
+    );
+    expect(keychain.getGenericPassword).toHaveBeenCalledWith(
+      expect.objectContaining({
+        accessControl: 'BIOMETRY_CURRENT_SET',
+      }),
+    );
   });
 
-  describe('retrieveMnemonic with biometric', () => {
-    it('should return mnemonic when keychain has credentials', async () => {
-      const Keychain = require('react-native-keychain');
-      Keychain.getGenericPassword.mockResolvedValueOnce({
-        password: testMnemonic,
-      });
+  it('uses device-bound Keychain protection when enabling biometrics', async () => {
+    storage.getItem.mockResolvedValue('2');
+    keychain.getSupportedBiometryType.mockResolvedValue('FaceID' as never);
 
-      const result = await walletService.retrieveMnemonic();
-      expect(result).toBe(testMnemonic);
-    });
+    await walletService.enableBiometric(VALID_MNEMONIC);
 
-    it('should try biometric auth when no simple credentials', async () => {
-      const Keychain = require('react-native-keychain');
-      // 첫 번째 호출: 인증 없이 - 실패
-      Keychain.getGenericPassword.mockResolvedValueOnce(false);
-      // 두 번째 호출: 생체인증으로 - 성공
-      Keychain.getGenericPassword.mockResolvedValueOnce({
-        password: testMnemonic,
-      });
-
-      const result = await walletService.retrieveMnemonic();
-      expect(result).toBe(testMnemonic);
-      expect(Keychain.getGenericPassword).toHaveBeenCalledTimes(2);
-    });
-
-    it('should return null when all auth methods fail', async () => {
-      const Keychain = require('react-native-keychain');
-      Keychain.getGenericPassword.mockResolvedValue(false);
-
-      const result = await walletService.retrieveMnemonic();
-      expect(result).toBeNull();
-    });
-
-    it('should fallback to retrieveMnemonicWithoutAuth on error', async () => {
-      const Keychain = require('react-native-keychain');
-      Keychain.getGenericPassword
-        .mockRejectedValueOnce(new Error('Biometric failed'))
-        .mockResolvedValueOnce(false);
-
-      const result = await walletService.retrieveMnemonic();
-      // retrieveMnemonicWithoutAuth이 호출되어 null 또는 mnemonic 반환
-      expect(result === null || typeof result === 'string').toBe(true);
-    });
+    expect(keychain.setGenericPassword).toHaveBeenCalledWith(
+      'tori_wallet_mnemonic',
+      VALID_MNEMONIC,
+      expect.objectContaining({
+        accessible: 'WHEN_PASSCODE_SET_THIS_DEVICE_ONLY',
+        accessControl: 'BIOMETRY_CURRENT_SET',
+        cloudSync: false,
+      }),
+    );
   });
 
-  describe('retrieveMnemonicWithoutAuth', () => {
-    it('should return mnemonic from keychain if available', async () => {
-      const Keychain = require('react-native-keychain');
-      Keychain.getGenericPassword.mockResolvedValueOnce({
-        password: testMnemonic,
-      });
+  it('stores and retrieves the account derivation metadata', async () => {
+    const accounts = [
+      {
+        address: '0x1234567890123456789012345678901234567890',
+        derivationPath: "m/44'/60'/0'/0/0",
+        name: 'Account 1',
+      },
+    ];
+    storage.getItem.mockResolvedValue(JSON.stringify(accounts));
 
-      const result = await walletService.retrieveMnemonicWithoutAuth();
-      expect(result).toBe(testMnemonic);
-    });
-
-    it('should check encrypted storage when keychain empty', async () => {
-      const Keychain = require('react-native-keychain');
-      const EncryptedStorage = require('react-native-encrypted-storage');
-
-      Keychain.getGenericPassword.mockResolvedValueOnce(false);
-      EncryptedStorage.getItem.mockResolvedValueOnce('encrypted_data');
-
-      const result = await walletService.retrieveMnemonicWithoutAuth();
-      // PIN 없이는 복호화 불가하므로 null 반환
-      expect(result).toBeNull();
-    });
-
-    it('should return null on error', async () => {
-      const Keychain = require('react-native-keychain');
-      Keychain.getGenericPassword.mockRejectedValueOnce(
-        new Error('Keychain error'),
-      );
-
-      const result = await walletService.retrieveMnemonicWithoutAuth();
-      expect(result).toBeNull();
-    });
+    await walletService.storeAccounts(accounts);
+    await expect(walletService.retrieveAccounts()).resolves.toEqual(accounts);
+    expect(storage.setItem).toHaveBeenCalledWith(
+      'tori_wallet_accounts',
+      JSON.stringify(accounts),
+    );
   });
 
-  describe('retrieveMnemonicWithPin', () => {
-    it('should return null when no encrypted data exists', async () => {
-      const EncryptedStorage = require('react-native-encrypted-storage');
-      EncryptedStorage.getItem.mockResolvedValueOnce(null);
-
-      const result = await walletService.retrieveMnemonicWithPin(testPin);
-      expect(result).toBeNull();
-    });
-
-    it('should decrypt mnemonic with correct PIN', async () => {
-      const EncryptedStorage = require('react-native-encrypted-storage');
-      // 실제 XOR 암호화 로직을 시뮬레이션
-      // walletService.encryptWithPin과 동일한 방식으로 암호화
-      const mnemonicBuffer = Buffer.from(testMnemonic);
-      const pinBuffer = Buffer.from(testPin.repeat(mnemonicBuffer.length));
-      const encryptedBuffer = Buffer.alloc(mnemonicBuffer.length);
-
-      for (let i = 0; i < mnemonicBuffer.length; i++) {
-        // eslint-disable-next-line no-bitwise
-        encryptedBuffer[i] = mnemonicBuffer[i]! ^ pinBuffer[i]!;
-      }
-
-      const encrypted = encryptedBuffer.toString('base64');
-      EncryptedStorage.getItem.mockResolvedValueOnce(encrypted);
-
-      const result = await walletService.retrieveMnemonicWithPin(testPin);
-      expect(result).toBe(testMnemonic);
-    });
-
-    it('should return null on decryption error', async () => {
-      const EncryptedStorage = require('react-native-encrypted-storage');
-      EncryptedStorage.getItem.mockRejectedValueOnce(
-        new Error('Storage error'),
-      );
-
-      const result = await walletService.retrieveMnemonicWithPin(testPin);
-      expect(result).toBeNull();
-    });
+  it('surfaces account storage failures', async () => {
+    storage.setItem.mockRejectedValueOnce(new Error('Storage error'));
+    await expect(walletService.storeAccounts([])).rejects.toThrow(
+      '계정 정보 저장에 실패했습니다.',
+    );
   });
 
-  describe('clearAll', () => {
-    it('should clear all wallet data', async () => {
-      const Keychain = require('react-native-keychain');
-      const EncryptedStorage = require('react-native-encrypted-storage');
+  it('clears every wallet storage location', async () => {
+    await walletService.clearAll();
 
-      Keychain.resetGenericPassword.mockResolvedValueOnce(true);
-      EncryptedStorage.removeItem.mockResolvedValue(undefined);
-
-      await walletService.clearAll();
-
-      expect(Keychain.resetGenericPassword).toHaveBeenCalled();
-      expect(EncryptedStorage.removeItem).toHaveBeenCalledTimes(2);
-    });
-
-    it('should handle errors during clear', async () => {
-      const Keychain = require('react-native-keychain');
-      Keychain.resetGenericPassword.mockRejectedValueOnce(
-        new Error('Clear error'),
-      );
-
-      // 에러가 발생해도 throw하지 않음
-      await expect(walletService.clearAll()).resolves.not.toThrow();
-    });
+    expect(keychain.resetGenericPassword).toHaveBeenCalled();
+    expect(storage.removeItem).toHaveBeenCalledTimes(4);
   });
 
-  describe('isBiometricSupported', () => {
-    it('should return true when biometry is available', async () => {
-      const Keychain = require('react-native-keychain');
-      Keychain.getSupportedBiometryType.mockResolvedValueOnce('FaceID');
+  it('surfaces partial deletion failures after attempting all locations', async () => {
+    keychain.resetGenericPassword.mockRejectedValueOnce(new Error('failed'));
 
-      const result = await walletService.isBiometricSupported();
-      expect(result).toBe(true);
-    });
-
-    it('should return false when biometry is not available', async () => {
-      const Keychain = require('react-native-keychain');
-      Keychain.getSupportedBiometryType.mockResolvedValueOnce(null);
-
-      const result = await walletService.isBiometricSupported();
-      expect(result).toBe(false);
-    });
-
-    it('should return false on error', async () => {
-      const Keychain = require('react-native-keychain');
-      Keychain.getSupportedBiometryType.mockRejectedValueOnce(
-        new Error('Biometry error'),
-      );
-
-      const result = await walletService.isBiometricSupported();
-      expect(result).toBe(false);
-    });
-  });
-});
-
-describe('WalletService - Account Management', () => {
-  beforeEach(() => {
-    jest.clearAllMocks();
-  });
-
-  describe('storeAccounts', () => {
-    it('should store accounts array', async () => {
-      const EncryptedStorage = require('react-native-encrypted-storage');
-      EncryptedStorage.setItem.mockResolvedValueOnce(undefined);
-
-      const accounts = [
-        {
-          address: '0x1234567890123456789012345678901234567890' as const,
-          derivationPath: "m/44'/60'/0'/0/0",
-          name: 'Account 1',
-        },
-        {
-          address: '0xabcdef1234567890123456789012345678901234' as const,
-          derivationPath: "m/44'/60'/0'/0/1",
-          name: 'Account 2',
-        },
-      ];
-
-      await walletService.storeAccounts(accounts);
-
-      expect(EncryptedStorage.setItem).toHaveBeenCalledWith(
-        expect.any(String),
-        JSON.stringify(accounts),
-      );
-    });
-  });
-
-  describe('retrieveAccounts', () => {
-    it('should retrieve stored accounts', async () => {
-      const EncryptedStorage = require('react-native-encrypted-storage');
-      const accounts = [
-        {
-          address: '0x1234567890123456789012345678901234567890',
-          derivationPath: "m/44'/60'/0'/0/0",
-          name: 'Account 1',
-        },
-      ];
-      EncryptedStorage.getItem.mockResolvedValueOnce(JSON.stringify(accounts));
-
-      const result = await walletService.retrieveAccounts();
-      expect(result).toEqual(accounts);
-    });
-
-    it('should return empty array when no accounts stored', async () => {
-      const EncryptedStorage = require('react-native-encrypted-storage');
-      EncryptedStorage.getItem.mockResolvedValueOnce(null);
-
-      const result = await walletService.retrieveAccounts();
-      expect(result).toEqual([]);
-    });
+    await expect(walletService.clearAll()).rejects.toThrow(
+      '일부 지갑 데이터를 삭제하지 못했습니다.',
+    );
+    expect(storage.removeItem).toHaveBeenCalledTimes(4);
   });
 });

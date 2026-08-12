@@ -4,7 +4,12 @@
  */
 
 import React from 'react';
-import { render, fireEvent, waitFor } from '@testing-library/react-native';
+import {
+  cleanup,
+  render,
+  fireEvent,
+  waitFor,
+} from '@testing-library/react-native';
 import UnlockScreen from '../../src/screens/Auth/UnlockScreen';
 import { ThemeProvider } from 'styled-components/native';
 import { lightTheme } from '../../src/styles/theme';
@@ -34,23 +39,22 @@ jest.mock('../../src/store/walletStore', () => ({
 
 // walletService 모킹
 const mockIsBiometricSupported = jest.fn();
-const mockRetrieveMnemonic = jest.fn();
-const mockRetrieveMnemonicWithPin = jest.fn();
-const mockValidateMnemonic = jest.fn();
+const mockIsBiometricEnabled = jest.fn();
 
 jest.mock('../../src/services/walletService', () => ({
   walletService: {
     isBiometricSupported: () => mockIsBiometricSupported(),
-    retrieveMnemonic: () => mockRetrieveMnemonic(),
-    retrieveMnemonicWithPin: (pin: string) => mockRetrieveMnemonicWithPin(pin),
-    validateMnemonic: (mnemonic: string) => mockValidateMnemonic(mnemonic),
+    isBiometricEnabled: () => mockIsBiometricEnabled(),
   },
 }));
 
-// EncryptedStorage 모킹
-jest.mock('react-native-encrypted-storage', () => ({
-  getItem: jest.fn().mockResolvedValue(null),
-  setItem: jest.fn().mockResolvedValue(undefined),
+const mockUnlockWithPin = jest.fn();
+const mockUnlockWithBiometric = jest.fn();
+jest.mock('../../src/services/signerVault', () => ({
+  signerVault: {
+    unlockWithPin: (pin: string) => mockUnlockWithPin(pin),
+    unlockWithBiometric: () => mockUnlockWithBiometric(),
+  },
 }));
 
 // Alert 모킹
@@ -61,12 +65,16 @@ const renderWithTheme = (component: React.ReactElement) => {
 };
 
 describe('UnlockScreen', () => {
+  afterEach(() => {
+    cleanup();
+  });
+
   beforeEach(() => {
     jest.clearAllMocks();
     mockIsBiometricSupported.mockResolvedValue(false);
-    mockRetrieveMnemonic.mockResolvedValue(null);
-    mockRetrieveMnemonicWithPin.mockResolvedValue(null);
-    mockValidateMnemonic.mockReturnValue(true);
+    mockIsBiometricEnabled.mockResolvedValue(false);
+    mockUnlockWithPin.mockResolvedValue(false);
+    mockUnlockWithBiometric.mockResolvedValue(false);
   });
 
   describe('렌더링', () => {
@@ -118,10 +126,7 @@ describe('UnlockScreen', () => {
     });
 
     it('should attempt unlock after 6 digits entered', async () => {
-      mockRetrieveMnemonicWithPin.mockResolvedValue(
-        'test mnemonic phrase words',
-      );
-      mockValidateMnemonic.mockReturnValue(true);
+      mockUnlockWithPin.mockResolvedValue(true);
 
       const { getByText } = renderWithTheme(<UnlockScreen />);
 
@@ -134,15 +139,12 @@ describe('UnlockScreen', () => {
       fireEvent.press(getByText('6'));
 
       await waitFor(() => {
-        expect(mockRetrieveMnemonicWithPin).toHaveBeenCalledWith('123456');
+        expect(mockUnlockWithPin).toHaveBeenCalledWith('123456');
       });
     });
 
     it('should call unlock on valid PIN', async () => {
-      mockRetrieveMnemonicWithPin.mockResolvedValue(
-        'valid mnemonic phrase words',
-      );
-      mockValidateMnemonic.mockReturnValue(true);
+      mockUnlockWithPin.mockResolvedValue(true);
 
       const { getByText } = renderWithTheme(<UnlockScreen />);
 
@@ -160,7 +162,7 @@ describe('UnlockScreen', () => {
     });
 
     it('should show error on invalid PIN', async () => {
-      mockRetrieveMnemonicWithPin.mockResolvedValue(null);
+      mockUnlockWithPin.mockResolvedValue(false);
 
       const { getByText } = renderWithTheme(<UnlockScreen />);
 
@@ -173,7 +175,7 @@ describe('UnlockScreen', () => {
       fireEvent.press(getByText('1'));
 
       await waitFor(() => {
-        expect(Alert.alert).toHaveBeenCalledWith(
+        expect(Alert.alert).toHaveBeenLastCalledWith(
           '오류',
           'PIN이 올바르지 않습니다.',
         );
@@ -183,23 +185,21 @@ describe('UnlockScreen', () => {
 
   describe('생체인증', () => {
     it('should attempt biometric auth when enabled and supported', async () => {
-      const EncryptedStorage = require('react-native-encrypted-storage');
-      EncryptedStorage.getItem.mockResolvedValue('true');
+      mockIsBiometricEnabled.mockResolvedValue(true);
       mockIsBiometricSupported.mockResolvedValue(true);
-      mockRetrieveMnemonic.mockResolvedValue('biometric mnemonic');
+      mockUnlockWithBiometric.mockResolvedValue(true);
 
       renderWithTheme(<UnlockScreen />);
 
       await waitFor(() => {
-        expect(mockRetrieveMnemonic).toHaveBeenCalled();
+        expect(mockUnlockWithBiometric).toHaveBeenCalled();
       });
     });
 
     it('should unlock on successful biometric auth', async () => {
-      const EncryptedStorage = require('react-native-encrypted-storage');
-      EncryptedStorage.getItem.mockResolvedValue('true');
+      mockIsBiometricEnabled.mockResolvedValue(true);
       mockIsBiometricSupported.mockResolvedValue(true);
-      mockRetrieveMnemonic.mockResolvedValue('valid mnemonic phrase');
+      mockUnlockWithBiometric.mockResolvedValue(true);
 
       renderWithTheme(<UnlockScreen />);
 
@@ -209,10 +209,9 @@ describe('UnlockScreen', () => {
     });
 
     it('should fall back to PIN when biometric fails', async () => {
-      const EncryptedStorage = require('react-native-encrypted-storage');
-      EncryptedStorage.getItem.mockResolvedValue('true');
+      mockIsBiometricEnabled.mockResolvedValue(true);
       mockIsBiometricSupported.mockResolvedValue(true);
-      mockRetrieveMnemonic.mockRejectedValue(new Error('Biometric failed'));
+      mockUnlockWithBiometric.mockRejectedValue(new Error('Biometric failed'));
 
       const { getByText } = renderWithTheme(<UnlockScreen />);
 
@@ -234,7 +233,7 @@ describe('UnlockScreen', () => {
 
   describe('보안 - 시도 횟수 제한', () => {
     it('should warn after multiple failed attempts', async () => {
-      mockRetrieveMnemonicWithPin.mockResolvedValue(null);
+      mockUnlockWithPin.mockResolvedValue(false);
 
       const { getByText } = renderWithTheme(<UnlockScreen />);
 
@@ -247,9 +246,12 @@ describe('UnlockScreen', () => {
         fireEvent.press(getByText('1'));
         fireEvent.press(getByText('1'));
 
-        await waitFor(() => {
-          expect(mockRetrieveMnemonicWithPin).toHaveBeenCalled();
-        });
+        await waitFor(
+          () => {
+            expect(Alert.alert).toHaveBeenCalledTimes(i + 1);
+          },
+          { timeout: 3000 },
+        );
       }
 
       // 5회 실패 후 경고 메시지 확인
@@ -264,7 +266,7 @@ describe('UnlockScreen', () => {
 
   describe('에러 처리', () => {
     it('should handle PIN verification error gracefully', async () => {
-      mockRetrieveMnemonicWithPin.mockRejectedValue(new Error('Storage error'));
+      mockUnlockWithPin.mockRejectedValue(new Error('Storage error'));
 
       const { getByText } = renderWithTheme(<UnlockScreen />);
 

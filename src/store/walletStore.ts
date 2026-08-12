@@ -5,6 +5,7 @@
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { signerVault } from '@/services/signerVault';
 
 export interface Wallet {
   address: string;
@@ -122,10 +123,10 @@ export const useWalletStore = create<WalletState>()(
           return {
             wallets: newWallets,
             hasWallet: newWallets.length > 0,
-            activeWalletIndex: Math.min(
-              state.activeWalletIndex,
-              newWallets.length - 1,
-            ),
+            activeWalletIndex:
+              newWallets.length === 0
+                ? 0
+                : Math.min(state.activeWalletIndex, newWallets.length - 1),
           };
         }),
 
@@ -138,11 +139,22 @@ export const useWalletStore = create<WalletState>()(
 
       setActiveNetwork: chainId => set({ activeNetworkChainId: chainId }),
 
-      lock: () => set({ isLocked: true }),
+      lock: () => {
+        signerVault.lock();
+        set({ isLocked: true });
+      },
 
-      unlock: () => set({ isLocked: false }),
+      unlock: () => {
+        if (!signerVault.isUnlocked()) {
+          throw new Error('Cannot unlock without an authenticated signer session');
+        }
+        set({ isLocked: false });
+      },
 
-      reset: () => set(initialState),
+      reset: () => {
+        signerVault.lock();
+        set(initialState);
+      },
     }),
     {
       name: 'tori-wallet-storage',

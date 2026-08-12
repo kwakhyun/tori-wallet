@@ -1,3 +1,10 @@
+jest.mock('../../src/services/signerVault', () => ({
+  signerVault: {
+    isUnlocked: jest.fn(() => true),
+    lock: jest.fn(),
+  },
+}));
+
 /**
  * 지갑 스토어 테스트
  */

@@ -5,9 +5,9 @@
 
 jest.setTimeout(60000);
 
-// @testing-library/react-native 자동 cleanup 비활성화
-// 각 테스트 파일에서 수동으로 cleanup 호출하거나 test-utils 사용
-process.env.RNTL_SKIP_AUTO_CLEANUP = 'true';
+// 실제 React Native 런타임처럼 동기 네이티브 호출이 가능한 환경으로 표시한다.
+// 보안 난수 모듈은 이 값이 없는 구형 Chrome 원격 디버거에서 fail-closed 한다.
+global.nativeCallSyncHook = jest.fn();
 
 // MSW를 위한 폴리필 (Node 18 이상에서 필요)
 import { TextEncoder, TextDecoder } from 'util';
@@ -39,9 +39,17 @@ jest.mock('react-native-keychain', () => ({
 // Mock react-native-config
 jest.mock('react-native-config', () => ({
   WALLETCONNECT_PROJECT_ID: 'test_project_id',
-  ZEROX_API_KEY: 'test_0x_api_key',
+  SWAP_API_BASE_URL: '',
   ALCHEMY_API_KEY: 'test_alchemy_key',
   COINGECKO_API_KEY: 'test_coingecko_key',
+}));
+
+jest.mock('react-native-bootsplash', () => ({
+  __esModule: true,
+  default: {
+    hide: jest.fn(() => Promise.resolve()),
+    isVisible: jest.fn(() => true),
+  },
 }));
 
 // Mock react-native-encrypted-storage
@@ -246,8 +254,8 @@ jest.mock('@walletconnect/core', () => ({
   Core: jest.fn().mockImplementation(() => ({})),
 }));
 
-jest.mock('@walletconnect/web3wallet', () => ({
-  Web3Wallet: {
+jest.mock('@reown/walletkit', () => ({
+  WalletKit: {
     init: jest.fn(() =>
       Promise.resolve({
         on: jest.fn(),

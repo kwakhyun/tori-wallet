@@ -4,6 +4,7 @@
 
 import React, { useState, useCallback, useEffect } from 'react';
 import styled from 'styled-components/native';
+import { useTheme } from '@/hooks/useTheme';
 import {
   SafeAreaView,
   StatusBar,
@@ -27,6 +28,7 @@ export function AddressBookScreen({
   onSelectAddress,
   selectionMode = false,
 }: Props) {
+  const { isDarkMode } = useTheme();
   // Realm 훅 사용
   const {
     addresses: addressBook,
@@ -284,7 +286,7 @@ export function AddressBookScreen({
 
   return (
     <Container>
-      <StatusBar barStyle="light-content" />
+      <StatusBar barStyle={isDarkMode ? 'light-content' : 'dark-content'} />
       <Content>
         <Header>
           <Title>주소록</Title>

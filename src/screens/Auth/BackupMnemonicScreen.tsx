@@ -2,57 +2,42 @@
  * 니모닉 백업 화면
  */
 
-import React, { useState, useMemo, useCallback } from 'react';
+import React, { useEffect, useState, useMemo } from 'react';
 import styled from 'styled-components/native';
+import { useTheme } from '@/hooks/useTheme';
 import {
   SafeAreaView,
   StatusBar,
   ScrollView,
   Alert,
-  Clipboard,
   StyleSheet,
 } from 'react-native';
-import { useNavigation, useRoute } from '@react-navigation/native';
+import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
-import type { RouteProp } from '@react-navigation/native';
 import type { AuthStackParamList } from '@/navigation/AuthNavigator';
+import { onboardingVault } from '@/services/onboardingVault';
 
 type NavigationProp = NativeStackNavigationProp<
   AuthStackParamList,
   'BackupMnemonic'
 >;
-type BackupMnemonicRouteProp = RouteProp<AuthStackParamList, 'BackupMnemonic'>;
-
 const styles = StyleSheet.create({
   scrollContent: { flexGrow: 1 },
 });
 
 function BackupMnemonicScreen(): React.JSX.Element {
+  const { isDarkMode } = useTheme();
   const navigation = useNavigation<NavigationProp>();
-  const route = useRoute<BackupMnemonicRouteProp>();
-  const { mnemonic } = route.params;
+  const mnemonic = onboardingVault.getSnapshot()?.mnemonic || '';
+
+  useEffect(() => {
+    if (!mnemonic) navigation.navigate('Welcome');
+  }, [mnemonic, navigation]);
 
   const [isRevealed, setIsRevealed] = useState(false);
-  const [hasCopied, setHasCopied] = useState(false);
-  const [isCopied, setIsCopied] = useState(false);
+  const [hasConfirmedBackup, setHasConfirmedBackup] = useState(false);
 
   const words = useMemo(() => mnemonic.split(' '), [mnemonic]);
-
-  const handleCopyMnemonic = useCallback(() => {
-    Clipboard.setString(mnemonic);
-    setIsCopied(true);
-    setHasCopied(true);
-    Alert.alert(
-      '복사 완료',
-      '복구 구문이 클립보드에 복사되었습니다.\n\n⚠️ 60초 후 클립보드가 자동으로 비워집니다.',
-    );
-    // 3초 후 복사 상태 리셋
-    setTimeout(() => setIsCopied(false), 3000);
-    // 60초 후 클립보드 자동 삭제 (보안)
-    setTimeout(() => {
-      Clipboard.setString('');
-    }, 60000);
-  }, [mnemonic]);
 
   const handleReveal = () => {
     Alert.alert(
@@ -66,29 +51,29 @@ function BackupMnemonicScreen(): React.JSX.Element {
   };
 
   const handleContinue = () => {
-    if (!hasCopied) {
+    if (!hasConfirmedBackup) {
       Alert.alert('백업 확인', '복구 구문을 안전한 곳에 적어두셨나요?', [
         { text: '아니요', style: 'cancel' },
         {
           text: '네, 적어뒀습니다',
           onPress: () => {
-            setHasCopied(true);
-            navigation.navigate('VerifyMnemonic', { mnemonic });
+            setHasConfirmedBackup(true);
+            navigation.navigate('VerifyMnemonic');
           },
         },
       ]);
     } else {
-      navigation.navigate('VerifyMnemonic', { mnemonic });
+      navigation.navigate('VerifyMnemonic');
     }
   };
 
   return (
     <Container>
-      <StatusBar barStyle="light-content" />
+      <StatusBar barStyle={isDarkMode ? 'light-content' : 'dark-content'} />
       <ScrollView contentContainerStyle={styles.scrollContent}>
         <Content>
           <Header>
-            <BackButton onPress={() => navigation.goBack()}>
+            <BackButton onPress={() => onboardingVault.clear()}>
               <BackButtonText>←</BackButtonText>
             </BackButton>
           </Header>
@@ -108,21 +93,14 @@ function BackupMnemonicScreen(): React.JSX.Element {
                 </RevealButton>
               </BlurOverlay>
             ) : (
-              <>
-                <WordsGrid>
-                  {words.map((word, index) => (
-                    <WordItem key={index}>
-                      <WordNumber>{index + 1}</WordNumber>
-                      <WordText>{word}</WordText>
-                    </WordItem>
-                  ))}
-                </WordsGrid>
-                <CopyButton onPress={handleCopyMnemonic}>
-                  <CopyButtonText>
-                    {isCopied ? '✓ 복사됨' : '📋 복구 구문 복사'}
-                  </CopyButtonText>
-                </CopyButton>
-              </>
+              <WordsGrid>
+                {words.map((word, index) => (
+                  <WordItem key={index}>
+                    <WordNumber>{index + 1}</WordNumber>
+                    <WordText>{word}</WordText>
+                  </WordItem>
+                ))}
+              </WordsGrid>
             )}
           </MnemonicContainer>
 
@@ -244,22 +222,6 @@ const WordText = styled.Text`
   color: ${({ theme }) => theme.colors.textPrimary};
   font-size: ${({ theme }) => theme.typography.body.fontSize}px;
   font-weight: 500;
-`;
-
-const CopyButton = styled.TouchableOpacity`
-  background-color: ${({ theme }) => theme.colors.primaryLight}20;
-  border: 1px solid ${({ theme }) => theme.colors.primary};
-  border-radius: ${({ theme }) => theme.borderRadius.md}px;
-  padding: ${({ theme }) => theme.spacing.sm}px
-    ${({ theme }) => theme.spacing.md}px;
-  align-items: center;
-  margin-top: ${({ theme }) => theme.spacing.md}px;
-`;
-
-const CopyButtonText = styled.Text`
-  color: ${({ theme }) => theme.colors.primary};
-  font-size: ${({ theme }) => theme.typography.bodySmall.fontSize}px;
-  font-weight: 600;
 `;
 
 const WarningBox = styled.View`

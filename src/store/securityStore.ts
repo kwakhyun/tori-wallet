@@ -13,7 +13,6 @@ export const AUTO_LOCK_OPTIONS = {
   '1m': 60 * 1000,
   '5m': 5 * 60 * 1000,
   '15m': 15 * 60 * 1000,
-  never: -1,
 } as const;
 
 export type AutoLockOption = keyof typeof AUTO_LOCK_OPTIONS;
@@ -67,6 +66,8 @@ interface SecurityState {
 
   // 자동 잠금 체크
   shouldAutoLock: () => boolean;
+  requiresTransactionPin: (usdValue?: number) => boolean;
+  resetSecurityState: () => void;
 }
 
 const initialState = {
@@ -147,16 +148,30 @@ export const useSecurityStore = create<SecurityState>()(
       // 자동 잠금 필요 여부 체크
       shouldAutoLock: () => {
         const { autoLockTimeout, lastActiveTime } = get();
-        if (autoLockTimeout === 'never') return false;
-
         const timeoutMs = AUTO_LOCK_OPTIONS[autoLockTimeout];
         if (timeoutMs === 0) return true; // immediate
 
         return Date.now() - lastActiveTime > timeoutMs;
       },
+
+      requiresTransactionPin: usdValue => {
+        const { requirePinForTransaction, transactionLimit } = get();
+        if (requirePinForTransaction) return true;
+        if (transactionLimit === null) return false;
+        return usdValue === undefined || usdValue > transactionLimit;
+      },
+
+      resetSecurityState: () => set(initialState),
     }),
     {
       name: 'tori-security-storage',
+      version: 2,
+      migrate: persistedState => {
+        const state = persistedState as Partial<SecurityState>;
+        return state.autoLockTimeout === ('never' as AutoLockOption)
+          ? { ...state, autoLockTimeout: '1m' as AutoLockOption }
+          : state;
+      },
       storage: createJSONStorage(() => AsyncStorage),
       partialize: state => ({
         autoLockTimeout: state.autoLockTimeout,
@@ -176,5 +191,4 @@ export const AUTO_LOCK_LABELS: Record<AutoLockOption, string> = {
   '1m': '1분',
   '5m': '5분',
   '15m': '15분',
-  never: '사용 안함',
 };

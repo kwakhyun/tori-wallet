@@ -2,14 +2,11 @@
  * WalletConnect 서명 요청 처리 서비스
  */
 
-import { Buffer } from '../utils/polyfills';
 import {
   createWalletClient,
   http,
-  hexToString,
   type TransactionSerializable,
 } from 'viem';
-import { privateKeyToAccount, mnemonicToAccount } from 'viem/accounts';
 import {
   mainnet,
   sepolia,
@@ -18,7 +15,7 @@ import {
   optimism,
   base,
 } from 'viem/chains';
-import { walletService } from './walletService';
+import { signerVault } from './signerVault';
 import { createLogger } from '@/utils/logger';
 
 const logger = createLogger('Signing');
@@ -63,8 +60,8 @@ class SigningService {
     params: TransactionParams,
     chainId: number,
   ): Promise<string> {
-    const privateKey = await this.getPrivateKey();
-    const account = privateKeyToAccount(privateKey as `0x${string}`);
+    if (!params.from) throw new Error('Transaction account is required');
+    const account = await signerVault.getAccount(params.from);
 
     const chain = CHAINS[chainId as keyof typeof CHAINS];
     const rpcUrl = RPC_URLS[chainId];
@@ -115,8 +112,8 @@ class SigningService {
     params: TransactionParams,
     chainId: number,
   ): Promise<string> {
-    const privateKey = await this.getPrivateKey();
-    const account = privateKeyToAccount(privateKey as `0x${string}`);
+    if (!params.from) throw new Error('Transaction account is required');
+    const account = await signerVault.getAccount(params.from);
 
     const chain = CHAINS[chainId as keyof typeof CHAINS];
 
@@ -150,23 +147,13 @@ class SigningService {
   /**
    * 개인 메시지 서명
    */
-  async personalSign(message: string, _address: string): Promise<string> {
-    const privateKey = await this.getPrivateKey();
-    const account = privateKeyToAccount(privateKey as `0x${string}`);
-
-    // hex 메시지인 경우 문자열로 변환
-    let messageToSign: string;
-    if (message.startsWith('0x')) {
-      try {
-        messageToSign = hexToString(message as `0x${string}`);
-      } catch {
-        messageToSign = message;
-      }
-    } else {
-      messageToSign = message;
-    }
-
-    const signature = await account.signMessage({ message: messageToSign });
+  async personalSign(message: string, address: string): Promise<string> {
+    const account = await signerVault.getAccount(address);
+    const signature = await account.signMessage({
+      message: message.startsWith('0x')
+        ? { raw: message as `0x${string}` }
+        : message,
+    });
 
     logger.info('Personal message signed');
     return signature;
@@ -175,16 +162,8 @@ class SigningService {
   /**
    * 일반 서명 (보안 주의 - raw hash 서명)
    */
-  async ethSign(message: string, _address: string): Promise<string> {
-    const privateKey = await this.getPrivateKey();
-    const account = privateKeyToAccount(privateKey as `0x${string}`);
-
-    const signature = await account.signMessage({
-      message: { raw: message as `0x${string}` },
-    });
-
-    logger.info('eth_sign completed');
-    return signature;
+  async ethSign(_message: string, _address: string): Promise<string> {
+    throw new Error('eth_sign is disabled for security reasons');
   }
 
   /**
@@ -192,10 +171,9 @@ class SigningService {
    */
   async signTypedData(
     typedData: string | object,
-    _address: string,
+    address: string,
   ): Promise<string> {
-    const privateKey = await this.getPrivateKey();
-    const account = privateKeyToAccount(privateKey as `0x${string}`);
+    const account = await signerVault.getAccount(address);
 
     let data: any;
     if (typeof typedData === 'string') {
@@ -227,7 +205,7 @@ class SigningService {
     params: unknown[],
     chainId: number,
   ): Promise<string> {
-    logger.debug('Handling request:', { method, params });
+    logger.debug('Handling signing request', { method, chainId });
 
     switch (method) {
       case 'eth_sendTransaction': {
@@ -247,13 +225,6 @@ class SigningService {
         return this.personalSign(message, address);
       }
 
-      case 'eth_sign': {
-        // eth_sign: [address, message]
-        const address = params[0] as string;
-        const message = params[1] as string;
-        return this.ethSign(message, address);
-      }
-
       case 'eth_signTypedData':
       case 'eth_signTypedData_v3':
       case 'eth_signTypedData_v4': {
@@ -268,29 +239,6 @@ class SigningService {
     }
   }
 
-  /**
-   * 개인키 조회 (니모닉에서 파생)
-   */
-  private async getPrivateKey(): Promise<string> {
-    const mnemonic = await walletService.retrieveMnemonic();
-
-    if (!mnemonic) {
-      throw new Error('Failed to retrieve mnemonic. Please authenticate.');
-    }
-
-    const hdAccount = mnemonicToAccount(mnemonic, {
-      path: "m/44'/60'/0'/0/0" as const,
-    });
-
-    const privateKeyBytes = hdAccount.getHdKey().privateKey;
-    if (!privateKeyBytes) {
-      throw new Error('Failed to derive private key');
-    }
-
-    const privateKey = `0x${Buffer.from(privateKeyBytes).toString('hex')}`;
-
-    return privateKey;
-  }
 }
 
 export const signingService = new SigningService();

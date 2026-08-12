@@ -4,6 +4,7 @@
 
 import React, { useState, useCallback, useEffect } from 'react';
 import styled from 'styled-components/native';
+import { useTheme } from '@/hooks/useTheme';
 import {
   SafeAreaView,
   StatusBar,
@@ -22,12 +23,13 @@ import { useSecurityStore } from '@/store/securityStore';
 import { useAddressName } from '@/realm/hooks';
 import { useBalance } from '@/hooks/useBalance';
 import { txService } from '@/services/txService';
-import { walletService } from '@/services/walletService';
+import { signingService } from '@/services/signingService';
 import { chainClient } from '@/services/chainClient';
+import { transactionCacheService } from '@/realm/services';
 import { QRScanner } from '@/components/common';
 import PinConfirmModal from '@/components/common/PinConfirmModal';
 import AddressBookScreen from '@/screens/Settings/AddressBookScreen';
-import { parseEther, formatEther, type Chain } from 'viem';
+import { parseEther, formatEther } from 'viem';
 
 type NavigationProp = NativeStackNavigationProp<
   RootStackParamList,
@@ -35,12 +37,13 @@ type NavigationProp = NativeStackNavigationProp<
 >;
 
 function SendTransactionScreen(): React.JSX.Element {
+  const { isDarkMode } = useTheme();
   const navigation = useNavigation<NavigationProp>();
   // route params can be used for pre-filling token address if needed
 
   const { wallets, activeWalletIndex, activeNetworkChainId, networks } =
     useWalletStore();
-  const { requirePinForTransaction, addRecentAddress } = useSecurityStore();
+  const { requiresTransactionPin, addRecentAddress } = useSecurityStore();
   const activeWallet = wallets[activeWalletIndex];
   const activeNetwork = networks.find(n => n.chainId === activeNetworkChainId);
 
@@ -64,8 +67,6 @@ function SendTransactionScreen(): React.JSX.Element {
   const [isCalculatingMax, setIsCalculatingMax] = useState(false);
   const [step, setStep] = useState<'input' | 'confirm' | 'success'>('input');
   const [txHash, setTxHash] = useState<string | null>(null);
-  const [pinInput, setPinInput] = useState('');
-  const [showPinModal, setShowPinModal] = useState(false);
   const [showPinConfirmModal, setShowPinConfirmModal] = useState(false);
   const [showQRScanner, setShowQRScanner] = useState(false);
   const [showAddressBook, setShowAddressBook] = useState(false);
@@ -225,98 +226,21 @@ function SendTransactionScreen(): React.JSX.Element {
     setStep('confirm');
   }, [toAddress, amount, balance, activeWallet, activeNetworkChainId]);
 
-  const handleConfirm = useCallback(() => {
-    if (requirePinForTransaction) {
-      setShowPinConfirmModal(true);
-    } else {
-      // PIN 확인이 비활성화된 경우 기존 PIN 모달 사용
-      setShowPinModal(true);
-    }
-  }, [requirePinForTransaction]);
-
-  // PIN 확인 후 트랜잭션 실행
-  const handlePinConfirmed = useCallback(() => {
-    setShowPinConfirmModal(false);
-    setShowPinModal(true); // 니모닉 복호화를 위한 PIN 입력
-  }, []);
-
   const handleSendTransaction = useCallback(
-    async (pin: string) => {
-      setShowPinModal(false);
+    async () => {
       setIsSending(true);
 
       try {
-        // PIN으로 니모닉 복호화
-        const mnemonic = await walletService.retrieveMnemonicWithPin(pin);
-        if (!mnemonic) {
-          Alert.alert('오류', 'PIN이 올바르지 않습니다.');
-          setIsSending(false);
-          return;
-        }
-
-        // 계정 복원
-        const account = walletService.deriveAccount(mnemonic, 0);
-
-        // 트랜잭션 생성 및 서명
-        const client = chainClient.getClient(activeNetworkChainId);
+        if (!activeWallet) throw new Error('활성 계정을 찾을 수 없습니다.');
         const valueWei = parseEther(amount);
-
-        // nonce 조회
-        const nonce = await client.getTransactionCount({
-          address: account.address,
-        });
-
-        // 가스 추정
-        const gasLimit = await client.estimateGas({
-          account: account.address,
-          to: toAddress as `0x${string}`,
-          value: valueWei,
-        });
-
-        const gasPrice = await client.getGasPrice();
-
-        // 트랜잭션 서명 및 전송
-        const viemModule = await import('viem');
-        const { createWalletClient, http } = viemModule;
-        const { sepolia, mainnet, polygon, arbitrum, optimism, base } =
-          await import('viem/chains');
-
-        const chainMap: Record<number, Chain> = {
-          1: mainnet,
-          137: polygon,
-          42161: arbitrum,
-          10: optimism,
-          8453: base,
-          11155111: sepolia,
-        };
-
-        // 안정적인 Public RPC URLs
-        const rpcUrls: Record<number, string> = {
-          1: 'https://eth.llamarpc.com',
-          137: 'https://polygon-rpc.com',
-          42161: 'https://arb1.arbitrum.io/rpc',
-          10: 'https://mainnet.optimism.io',
-          8453: 'https://mainnet.base.org',
-          11155111: 'https://ethereum-sepolia-rpc.publicnode.com',
-        };
-
-        const chain = chainMap[activeNetworkChainId] || sepolia;
-        const rpcUrl = rpcUrls[activeNetworkChainId] || rpcUrls[11155111];
-
-        const walletClient = createWalletClient({
-          account,
-          chain,
-          transport: http(rpcUrl),
-        });
-
-        const hash = await walletClient.sendTransaction({
-          chain,
-          to: toAddress as `0x${string}`,
-          value: valueWei,
-          gas: gasLimit,
-          gasPrice,
-          nonce,
-        });
+        const hash = await signingService.sendTransaction(
+          {
+            from: activeWallet.address,
+            to: toAddress as `0x${string}`,
+            value: valueWei.toString(),
+          },
+          activeNetworkChainId,
+        );
 
         setTxHash(hash);
         setStep('success');
@@ -325,6 +249,48 @@ function SendTransactionScreen(): React.JSX.Element {
         addRecentAddress(toAddress as `0x${string}`);
 
         refetchBalance();
+
+        try {
+          await transactionCacheService.createLocalTransaction({
+            hash,
+            chainId: activeNetworkChainId,
+            from: activeWallet.address,
+            to: toAddress,
+            value: amount,
+            valueWei: valueWei.toString(),
+            gasPrice: '0',
+            type: 'send',
+            tokenSymbol: activeNetwork?.symbol,
+            tokenAmount: amount,
+          });
+
+          const client = chainClient.getClient(activeNetworkChainId);
+          client
+            .waitForTransactionReceipt({ hash: hash as `0x${string}` })
+            .then(receipt =>
+              transactionCacheService.updateStatus(
+                hash,
+                activeNetworkChainId,
+                receipt.status === 'success'
+                  ? {
+                      status: 'confirmed',
+                      blockNumber: receipt.blockNumber.toString(),
+                      gasUsed: receipt.gasUsed.toString(),
+                      confirmedAt: new Date(),
+                    }
+                  : { status: 'failed' },
+              ),
+            )
+            .catch(error =>
+              transactionCacheService.updateStatus(hash, activeNetworkChainId, {
+                status: 'failed',
+                errorMessage:
+                  error instanceof Error ? error.message : 'Receipt failed',
+              }),
+            );
+        } catch (cacheError) {
+          console.warn('Failed to cache pending transaction:', cacheError);
+        }
       } catch (error) {
         console.error('Transaction failed:', error);
 
@@ -351,8 +317,29 @@ function SendTransactionScreen(): React.JSX.Element {
         setIsSending(false);
       }
     },
-    [activeNetworkChainId, amount, toAddress, refetchBalance, addRecentAddress],
+    [
+      activeNetworkChainId,
+      activeNetwork,
+      activeWallet,
+      amount,
+      toAddress,
+      refetchBalance,
+      addRecentAddress,
+    ],
   );
+
+  const handleConfirm = useCallback(() => {
+    if (requiresTransactionPin()) {
+      setShowPinConfirmModal(true);
+    } else {
+      handleSendTransaction();
+    }
+  }, [requiresTransactionPin, handleSendTransaction]);
+
+  const handlePinConfirmed = useCallback(() => {
+    setShowPinConfirmModal(false);
+    handleSendTransaction();
+  }, [handleSendTransaction]);
 
   const handleMaxAmount = useCallback(async () => {
     if (!balance?.formatted || !activeWallet || !toAddress) {
@@ -611,48 +598,9 @@ function SendTransactionScreen(): React.JSX.Element {
     </SuccessContainer>
   );
 
-  const renderPinModal = () => (
-    <ModalOverlay>
-      <ModalContent>
-        <ModalTitle>PIN 입력</ModalTitle>
-        <ModalDescription>
-          트랜잭션을 승인하려면 PIN을 입력하세요
-        </ModalDescription>
-        <PinInput
-          value={pinInput}
-          onChangeText={setPinInput}
-          placeholder="6자리 PIN"
-          placeholderTextColor="#71717A"
-          keyboardType="number-pad"
-          secureTextEntry
-          maxLength={6}
-        />
-        <ButtonRow>
-          <SecondaryButton
-            onPress={() => {
-              setShowPinModal(false);
-              setPinInput('');
-            }}
-          >
-            <SecondaryButtonText>취소</SecondaryButtonText>
-          </SecondaryButton>
-          <FlexButton
-            onPress={() => {
-              handleSendTransaction(pinInput);
-              setPinInput('');
-            }}
-            disabled={pinInput.length !== 6}
-          >
-            <PrimaryButtonText>확인</PrimaryButtonText>
-          </FlexButton>
-        </ButtonRow>
-      </ModalContent>
-    </ModalOverlay>
-  );
-
   return (
     <Container testID="send-transaction-screen">
-      <StatusBar barStyle="light-content" />
+      <StatusBar barStyle={isDarkMode ? 'light-content' : 'dark-content'} />
       <StyledScrollView>
         <Content>
           <Header>
@@ -671,8 +619,6 @@ function SendTransactionScreen(): React.JSX.Element {
           {step === 'success' && renderSuccessStep()}
         </Content>
       </StyledScrollView>
-
-      {showPinModal && renderPinModal()}
 
       {/* PIN 확인 모달 (보안 설정에 따라) */}
       <PinConfirmModal
@@ -979,51 +925,6 @@ const TxHashValue = styled.Text`
   color: ${({ theme }) => theme.colors.textPrimary};
   font-size: ${({ theme }) => theme.typography.bodySmall.fontSize}px;
   font-family: monospace;
-`;
-
-const ModalOverlay = styled.View`
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background-color: rgba(0, 0, 0, 0.7);
-  justify-content: center;
-  align-items: center;
-  padding: ${({ theme }) => theme.spacing.lg}px;
-`;
-
-const ModalContent = styled.View`
-  background-color: ${({ theme }) => theme.colors.surface};
-  border-radius: ${({ theme }) => theme.borderRadius.lg}px;
-  padding: ${({ theme }) => theme.spacing.xl}px;
-  width: 100%;
-`;
-
-const ModalTitle = styled.Text`
-  color: ${({ theme }) => theme.colors.textPrimary};
-  font-size: ${({ theme }) => theme.typography.h3.fontSize}px;
-  font-weight: ${({ theme }) => theme.typography.h3.fontWeight};
-  text-align: center;
-  margin-bottom: ${({ theme }) => theme.spacing.sm}px;
-`;
-
-const ModalDescription = styled.Text`
-  color: ${({ theme }) => theme.colors.textSecondary};
-  font-size: ${({ theme }) => theme.typography.body.fontSize}px;
-  text-align: center;
-  margin-bottom: ${({ theme }) => theme.spacing.lg}px;
-`;
-
-const PinInput = styled.TextInput`
-  background-color: ${({ theme }) => theme.colors.background};
-  border-radius: ${({ theme }) => theme.borderRadius.md}px;
-  padding: ${({ theme }) => theme.spacing.md}px;
-  color: ${({ theme }) => theme.colors.textPrimary};
-  font-size: 24px;
-  text-align: center;
-  letter-spacing: 8px;
-  margin-bottom: ${({ theme }) => theme.spacing.lg}px;
 `;
 
 const ErrorBox = styled.View`

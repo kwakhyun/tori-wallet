@@ -51,7 +51,7 @@ export interface SwapSettings {
 interface SwapState {
   // 히스토리
   history: SwapHistoryItem[];
-  addHistoryItem: (item: Omit<SwapHistoryItem, 'id'>) => void;
+  addHistoryItem: (item: Omit<SwapHistoryItem, 'id'>) => string;
   updateHistoryStatus: (id: string, status: SwapHistoryItem['status']) => void;
   clearHistory: () => void;
   getHistoryByChain: (chainId: number) => SwapHistoryItem[];
@@ -78,6 +78,7 @@ interface SwapState {
   recentTokens: Record<number, string[]>; // chainId -> token addresses
   addRecentToken: (chainId: number, tokenAddress: string) => void;
   getRecentTokens: (chainId: number) => string[];
+  resetSwapState: () => void;
 }
 
 const DEFAULT_SETTINGS: SwapSettings = {
@@ -213,6 +214,14 @@ export const useSwapStore = create<SwapState>()(
       getRecentTokens: chainId => {
         return get().recentTokens[chainId] || [];
       },
+
+      resetSwapState: () =>
+        set({
+          history: [],
+          favoritePairs: [],
+          settings: DEFAULT_SETTINGS,
+          recentTokens: {},
+        }),
     }),
     {
       name: 'tori-swap-store',

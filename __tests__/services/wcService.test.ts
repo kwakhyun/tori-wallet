@@ -12,8 +12,8 @@ jest.mock('@walletconnect/core', () => ({
   Core: jest.fn().mockImplementation(() => ({})),
 }));
 
-jest.mock('@walletconnect/web3wallet', () => ({
-  Web3Wallet: {
+jest.mock('@reown/walletkit', () => ({
+  WalletKit: {
     init: jest.fn().mockResolvedValue({
       on: jest.fn(),
       pair: jest.fn(),
@@ -36,15 +36,17 @@ jest.mock('@walletconnect/utils', () => ({
 describe('WCService', () => {
   beforeEach(() => {
     jest.clearAllMocks();
-    // wcService의 web3wallet을 리셋
-    (wcService as any).web3wallet = null;
+    // wcService의 WalletKit 인스턴스을 리셋
+    (wcService as any).walletKit = null;
+    (wcService as any).initializationPromise = null;
   });
 
   afterEach(() => {
     jest.clearAllTimers();
     jest.useRealTimers();
-    // wcService의 web3wallet을 리셋
-    (wcService as any).web3wallet = null;
+    // wcService의 WalletKit 인스턴스을 리셋
+    (wcService as any).walletKit = null;
+    (wcService as any).initializationPromise = null;
   });
 
   describe('initialize - no PROJECT_ID', () => {
@@ -142,6 +144,36 @@ describe('WCService', () => {
   });
 });
 
+describe('WCService - Verify API policy', () => {
+  it('blocks invalid origins and known scam domains', () => {
+    const invalid = wcService.getDAppVerification({
+      verified: {
+        validation: 'INVALID',
+        origin: 'https://evil.example',
+      },
+    });
+    const scam = wcService.getDAppVerification({
+      verified: {
+        validation: 'VALID',
+        origin: 'https://scam.example',
+        isScam: true,
+      },
+    });
+
+    expect(wcService.isVerificationBlocked(invalid)).toBe(true);
+    expect(wcService.isVerificationBlocked(scam)).toBe(true);
+  });
+
+  it('keeps unavailable verification explicitly UNKNOWN', () => {
+    expect(wcService.getDAppVerification(undefined)).toEqual({
+      validation: 'UNKNOWN',
+      origin: '',
+      verifyUrl: '',
+      isScam: false,
+    });
+  });
+});
+
 // WCService 초기화 후 동작 테스트
 describe('WCService - Initialized', () => {
   const mockWeb3Wallet = {
@@ -163,6 +195,7 @@ describe('WCService - Initialized', () => {
         namespaces: {
           eip155: {
             chains: ['eip155:1'],
+            methods: ['eth_sendTransaction'],
             accounts: ['eip155:1:0x1234567890123456789012345678901234567890'],
           },
         },
@@ -174,12 +207,13 @@ describe('WCService - Initialized', () => {
 
   beforeEach(async () => {
     jest.clearAllMocks();
-    // wcService의 web3wallet을 리셋
-    (wcService as any).web3wallet = null;
+    // wcService의 WalletKit 인스턴스을 리셋
+    (wcService as any).walletKit = null;
+    (wcService as any).initializationPromise = null;
 
-    // Web3Wallet.init을 모킹하여 초기화된 상태 시뮬레이션
-    const { Web3Wallet } = require('@walletconnect/web3wallet');
-    Web3Wallet.init.mockResolvedValue(mockWeb3Wallet);
+    // WalletKit.init을 모킹하여 초기화된 상태 시뮬레이션
+    const { WalletKit } = require('@reown/walletkit');
+    WalletKit.init.mockResolvedValue(mockWeb3Wallet);
 
     // 새로운 wcService 인스턴스 초기화
     await wcService.initialize();
@@ -188,8 +222,9 @@ describe('WCService - Initialized', () => {
   afterEach(() => {
     jest.clearAllTimers();
     jest.useRealTimers();
-    // wcService의 web3wallet을 리셋
-    (wcService as any).web3wallet = null;
+    // wcService의 WalletKit 인스턴스을 리셋
+    (wcService as any).walletKit = null;
+    (wcService as any).initializationPromise = null;
   });
 
   describe('initialize', () => {
@@ -237,6 +272,61 @@ describe('WCService - Initialized', () => {
         accounts: ['eip155:1:0x1234567890123456789012345678901234567890'],
         expiry: expect.any(Number),
       });
+    });
+  });
+
+  describe('validateSessionRequest', () => {
+    const address = '0x1234567890123456789012345678901234567890';
+
+    it('binds a request to the approved topic, method, chain, and account', () => {
+      expect(
+        wcService.validateSessionRequest(
+          'session-1',
+          1,
+          address,
+          'eth_sendTransaction',
+        ),
+      ).toBe(true);
+      expect(
+        wcService.validateSessionRequest('session-1', 1, address, 'eth_sign'),
+      ).toBe(false);
+      expect(
+        wcService.validateSessionRequest(
+          'session-1',
+          137,
+          address,
+          'eth_sendTransaction',
+        ),
+      ).toBe(false);
+      expect(
+        wcService.validateSessionRequest(
+          'missing',
+          1,
+          address,
+          'eth_sendTransaction',
+        ),
+      ).toBe(false);
+    });
+  });
+
+  describe('disconnectAllSessions', () => {
+    it('disconnects every active session', async () => {
+      await expect(wcService.disconnectAllSessions()).resolves.toBeUndefined();
+      expect(mockWeb3Wallet.disconnectSession).toHaveBeenCalledWith({
+        topic: 'session-1',
+        reason: expect.any(Object),
+      });
+    });
+
+    it('reports a partial disconnect failure', async () => {
+      const disconnect = jest
+        .spyOn(wcService, 'disconnectSession')
+        .mockRejectedValueOnce(new Error('failed'));
+
+      await expect(wcService.disconnectAllSessions()).rejects.toThrow(
+        'Failed to disconnect 1 session(s)',
+      );
+      disconnect.mockRestore();
     });
   });
 
@@ -351,18 +441,20 @@ describe('WCService - Error Handling', () => {
 
   beforeEach(async () => {
     jest.clearAllMocks();
-    // wcService의 web3wallet을 리셋
-    (wcService as any).web3wallet = null;
-    const { Web3Wallet } = require('@walletconnect/web3wallet');
-    Web3Wallet.init.mockResolvedValue(mockWeb3WalletWithErrors);
+    // wcService의 WalletKit 인스턴스을 리셋
+    (wcService as any).walletKit = null;
+    (wcService as any).initializationPromise = null;
+    const { WalletKit } = require('@reown/walletkit');
+    WalletKit.init.mockResolvedValue(mockWeb3WalletWithErrors);
     await wcService.initialize();
   });
 
   afterEach(() => {
     jest.clearAllTimers();
     jest.useRealTimers();
-    // wcService의 web3wallet을 리셋
-    (wcService as any).web3wallet = null;
+    // wcService의 WalletKit 인스턴스을 리셋
+    (wcService as any).walletKit = null;
+    (wcService as any).initializationPromise = null;
   });
 
   describe('pair error handling', () => {
@@ -459,22 +551,24 @@ describe('WCService - Event Callbacks', () => {
 
   beforeEach(async () => {
     jest.clearAllMocks();
-    // wcService의 web3wallet을 리셋
-    (wcService as any).web3wallet = null;
+    // wcService의 WalletKit 인스턴스을 리셋
+    (wcService as any).walletKit = null;
+    (wcService as any).initializationPromise = null;
     sessionProposalHandler = null;
     sessionRequestHandler = null;
     sessionDeleteHandler = null;
 
-    const { Web3Wallet } = require('@walletconnect/web3wallet');
-    Web3Wallet.init.mockResolvedValue(mockWeb3WalletWithCallbacks);
+    const { WalletKit } = require('@reown/walletkit');
+    WalletKit.init.mockResolvedValue(mockWeb3WalletWithCallbacks);
     await wcService.initialize();
   });
 
   afterEach(() => {
     jest.clearAllTimers();
     jest.useRealTimers();
-    // wcService의 web3wallet을 리셋
-    (wcService as any).web3wallet = null;
+    // wcService의 WalletKit 인스턴스을 리셋
+    (wcService as any).walletKit = null;
+    (wcService as any).initializationPromise = null;
   });
 
   describe('session_proposal event', () => {

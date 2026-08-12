@@ -2,10 +2,11 @@
  * WalletConnect 서명 요청 모달
  */
 
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import styled from 'styled-components/native';
 import { Modal } from 'react-native';
-import { formatEther } from 'viem';
+import type { SigningIntent } from '@/services/signingIntentService';
+import type { DAppVerification } from '@/services/wcService';
 
 interface SignRequestModalProps {
   visible: boolean;
@@ -13,6 +14,7 @@ interface SignRequestModalProps {
   dAppName?: string;
   dAppUrl?: string;
   networkName?: string;
+  dAppVerification?: DAppVerification;
   onApprove: () => void;
   onReject: () => void;
 }
@@ -22,16 +24,9 @@ export interface SignRequest {
   topic: string;
   method: string;
   params: unknown[];
-}
-
-interface TransactionParams {
-  from?: string;
-  to?: string;
-  value?: string;
-  data?: string;
-  gas?: string;
-  gasPrice?: string;
-  nonce?: string;
+  chainId: number;
+  account: string;
+  intent: SigningIntent;
 }
 
 export function SignRequestModal({
@@ -40,114 +35,40 @@ export function SignRequestModal({
   dAppName,
   dAppUrl,
   networkName,
+  dAppVerification,
   onApprove,
   onReject,
 }: SignRequestModalProps): React.JSX.Element | null {
+  const [riskAcknowledged, setRiskAcknowledged] = useState(false);
+
+  useEffect(() => {
+    setRiskAcknowledged(false);
+  }, [
+    request?.id,
+    request?.topic,
+    request?.intent.fingerprint,
+    dAppVerification?.validation,
+  ]);
+
   if (!request) return null;
 
-  const getRequestInfo = () => {
-    const { method, params } = request;
-
-    switch (method) {
-      case 'eth_sendTransaction':
-      case 'eth_signTransaction': {
-        const tx = (params[0] || {}) as TransactionParams;
-        return {
-          type: 'transaction',
-          title: '트랜잭션 승인',
-          icon: '📤',
-          description: '이 트랜잭션을 승인하시겠습니까?',
-          details: parseTransaction(tx),
-        };
-      }
-      case 'personal_sign':
-      case 'eth_sign': {
-        const message = params[0] as string;
-        return {
-          type: 'message',
-          title: '메시지 서명',
-          icon: '✍️',
-          description: '이 메시지에 서명하시겠습니까?',
-          details: { message: hexToString(message) },
-        };
-      }
-      case 'eth_signTypedData':
-      case 'eth_signTypedData_v3':
-      case 'eth_signTypedData_v4': {
-        const typedData = params[1] as string;
-        let parsed;
-        try {
-          parsed = JSON.parse(typedData);
-        } catch {
-          parsed = typedData;
-        }
-        return {
-          type: 'typedData',
-          title: '데이터 서명',
-          icon: '📋',
-          description: '이 데이터에 서명하시겠습니까?',
-          details: { typedData: parsed },
-        };
-      }
-      default:
-        return {
-          type: 'unknown',
-          title: '서명 요청',
-          icon: '🔐',
-          description: `${method} 요청을 승인하시겠습니까?`,
-          details: { params },
-        };
-    }
-  };
-
-  const parseTransaction = (tx: TransactionParams) => {
-    const value = tx.value ? formatWeiToEth(tx.value) : '0';
-    const gasLimit = tx.gas ? parseInt(tx.gas, 16).toString() : '-';
-    const gasPrice = tx.gasPrice
-      ? (parseInt(tx.gasPrice, 16) / 1e9).toFixed(2) + ' Gwei'
-      : '-';
-
-    return {
-      to: tx.to || '컨트랙트 생성',
-      value,
-      gasLimit,
-      gasPrice,
-      data: tx.data && tx.data !== '0x' ? '있음' : '없음',
-      isContractInteraction: tx.data && tx.data !== '0x' && tx.data.length > 2,
-    };
-  };
-
-  const formatWeiToEth = (weiHex: string): string => {
-    try {
-      const wei = BigInt(weiHex);
-      const eth = Number(formatEther(wei));
-      if (eth === 0) return '0 ETH';
-      if (eth < 0.0001) return '< 0.0001 ETH';
-      return `${eth.toFixed(4)} ETH`;
-    } catch {
-      return '0 ETH';
-    }
-  };
-
-  const hexToString = (hex: string): string => {
-    try {
-      if (!hex.startsWith('0x')) return hex;
-      const bytes = [];
-      for (let i = 2; i < hex.length; i += 2) {
-        bytes.push(parseInt(hex.substr(i, 2), 16));
-      }
-      return new TextDecoder().decode(new Uint8Array(bytes));
-    } catch {
-      return hex;
-    }
-  };
-
-  const formatAddress = (address?: string): string => {
-    if (!address) return '-';
-    return `${address.slice(0, 8)}...${address.slice(-6)}`;
-  };
-
-  const info = getRequestInfo();
+  const { intent } = request;
+  const verificationBlocked =
+    dAppVerification !== undefined &&
+    (dAppVerification.isScam || dAppVerification.validation === 'INVALID');
+  const verificationNeedsAcknowledgement =
+    dAppVerification !== undefined && dAppVerification.validation !== 'VALID';
+  const approveDisabled =
+    intent.blocked ||
+    verificationBlocked ||
+    ((intent.requiresRiskAcknowledgement || verificationNeedsAcknowledgement) &&
+      !riskAcknowledged);
+  const icon =
+    intent.kind === 'transaction'
+      ? '📤'
+      : intent.kind === 'typedData'
+      ? '📋'
+      : '✍️';
 
   return (
     <Modal
@@ -162,89 +83,108 @@ export function SignRequestModal({
             {/* 헤더 */}
             <ModalHeader>
               <IconContainer>
-                <IconText>{info.icon}</IconText>
+                <IconText>{icon}</IconText>
               </IconContainer>
-              <ModalTitle>{info.title}</ModalTitle>
-              <ModalDescription>{info.description}</ModalDescription>
+              <ModalTitle>{intent.title}</ModalTitle>
+              <ModalDescription>{intent.summary}</ModalDescription>
             </ModalHeader>
 
             {/* dApp 정보 */}
             <DAppInfoSection>
               <DAppName>{dAppName || 'Unknown dApp'}</DAppName>
               <DAppUrl>{dAppUrl || ''}</DAppUrl>
+              {dAppVerification && (
+                <VerificationBadge
+                  $valid={dAppVerification.validation === 'VALID'}
+                  $blocked={verificationBlocked}
+                >
+                  {verificationBlocked
+                    ? '검증 실패 · 차단'
+                    : dAppVerification.validation === 'VALID'
+                    ? 'WalletConnect 출처 검증됨'
+                    : '출처 검증 불가'}
+                </VerificationBadge>
+              )}
+              {!!dAppVerification?.origin && (
+                <DAppUrl selectable>{dAppVerification.origin}</DAppUrl>
+              )}
               {networkName && <NetworkBadge>{networkName}</NetworkBadge>}
+              <DAppUrl selectable>{request.account}</DAppUrl>
             </DAppInfoSection>
 
             {/* 상세 정보 */}
             <DetailsScrollView>
-              {info.type === 'transaction' && info.details && (
-                <DetailsSection>
-                  <DetailRow>
-                    <DetailLabel>받는 주소</DetailLabel>
-                    <DetailValue>
-                      {formatAddress((info.details as { to?: string }).to)}
-                    </DetailValue>
-                  </DetailRow>
+              <DetailsSection>
+                {intent.details.map(detail => (
+                  <DetailColumn key={`${detail.label}:${detail.value}`}>
+                    <DetailLabel>{detail.label}</DetailLabel>
+                    <DetailValue selectable>{detail.value}</DetailValue>
+                  </DetailColumn>
+                ))}
 
-                  <DetailRow $highlight>
-                    <DetailLabel>금액</DetailLabel>
-                    <DetailValueLarge>
-                      {(info.details as { value: string }).value}
-                    </DetailValueLarge>
-                  </DetailRow>
+                {intent.rawPayload !== undefined && (
+                  <MessageBox>
+                    <MessageLabel>
+                      {intent.kind === 'message'
+                        ? '메시지 원문'
+                        : intent.kind === 'typedData'
+                        ? 'EIP-712 전체 원문'
+                        : '전체 호출 데이터'}
+                    </MessageLabel>
+                    <MessageContent selectable>
+                      {intent.rawPayload}
+                    </MessageContent>
+                  </MessageBox>
+                )}
 
-                  <DetailRow>
-                    <DetailLabel>가스 한도</DetailLabel>
-                    <DetailValue>
-                      {(info.details as { gasLimit: string }).gasLimit}
-                    </DetailValue>
-                  </DetailRow>
+                {intent.warnings.map(warning => (
+                  <WarningBox
+                    key={warning.message}
+                    $critical={warning.level === 'critical'}
+                  >
+                    <WarningIcon>
+                      {warning.level === 'critical' ? '🚨' : '⚠️'}
+                    </WarningIcon>
+                    <WarningText $critical={warning.level === 'critical'}>
+                      {warning.message}
+                    </WarningText>
+                  </WarningBox>
+                ))}
 
-                  <DetailRow>
-                    <DetailLabel>가스 가격</DetailLabel>
-                    <DetailValue>
-                      {(info.details as { gasPrice: string }).gasPrice}
-                    </DetailValue>
-                  </DetailRow>
+                {verificationNeedsAcknowledgement && !verificationBlocked && (
+                  <WarningBox>
+                    <WarningIcon>⚠️</WarningIcon>
+                    <WarningText>
+                      WalletConnect가 dApp 출처를 검증하지 못했습니다. 표시된
+                      도메인을 직접 확인하세요.
+                    </WarningText>
+                  </WarningBox>
+                )}
 
-                  {(info.details as { isContractInteraction?: boolean })
-                    .isContractInteraction && (
-                    <WarningBox>
-                      <WarningIcon>⚠️</WarningIcon>
-                      <WarningText>
-                        스마트 컨트랙트 호출입니다.{'\n'}
-                        신뢰할 수 있는 dApp인지 확인하세요.
-                      </WarningText>
-                    </WarningBox>
+                {(intent.blocked || verificationBlocked) && (
+                  <BlockedBox>
+                    이 요청은 보안 정책에 의해 차단되어 승인할 수 없습니다.
+                  </BlockedBox>
+                )}
+
+                {(intent.requiresRiskAcknowledgement ||
+                  verificationNeedsAcknowledgement) &&
+                  !intent.blocked &&
+                  !verificationBlocked && (
+                    <RiskAcknowledgeButton
+                      onPress={() => setRiskAcknowledged(value => !value)}
+                      accessibilityRole="checkbox"
+                      accessibilityState={{ checked: riskAcknowledged }}
+                    >
+                      <RiskAcknowledgeMark>
+                        {riskAcknowledged ? '☑' : '☐'}
+                      </RiskAcknowledgeMark>
+                      <RiskAcknowledgeText>
+                        위험과 전체 원문을 확인했습니다.
+                      </RiskAcknowledgeText>
+                    </RiskAcknowledgeButton>
                   )}
-                </DetailsSection>
-              )}
-
-              {info.type === 'message' && info.details && (
-                <DetailsSection>
-                  <MessageBox>
-                    <MessageLabel>메시지 내용</MessageLabel>
-                    <MessageContent>
-                      {(info.details as { message: string }).message}
-                    </MessageContent>
-                  </MessageBox>
-                </DetailsSection>
-              )}
-
-              {info.type === 'typedData' && info.details && (
-                <DetailsSection>
-                  <MessageBox>
-                    <MessageLabel>서명 데이터</MessageLabel>
-                    <MessageContent numberOfLines={10}>
-                      {JSON.stringify(
-                        (info.details as { typedData: unknown }).typedData,
-                        null,
-                        2,
-                      )}
-                    </MessageContent>
-                  </MessageBox>
-                </DetailsSection>
-              )}
+              </DetailsSection>
             </DetailsScrollView>
 
             {/* 버튼 */}
@@ -252,8 +192,14 @@ export function SignRequestModal({
               <RejectButton onPress={onReject}>
                 <RejectButtonText>거부</RejectButtonText>
               </RejectButton>
-              <ApproveButton onPress={onApprove}>
-                <ApproveButtonText>승인</ApproveButtonText>
+              <ApproveButton
+                onPress={onApprove}
+                disabled={approveDisabled}
+                $disabled={approveDisabled}
+              >
+                <ApproveButtonText>
+                  {intent.blocked || verificationBlocked ? '차단됨' : '승인'}
+                </ApproveButtonText>
               </ApproveButton>
             </ButtonSection>
           </ModalContent>
@@ -348,26 +294,26 @@ const NetworkBadge = styled.Text`
   overflow: hidden;
 `;
 
+const VerificationBadge = styled.Text<{
+  $valid: boolean;
+  $blocked: boolean;
+}>`
+  color: ${({ $valid, $blocked }) =>
+    $blocked ? '#ef4444' : $valid ? '#22c55e' : '#f59e0b'};
+  font-size: 12px;
+  font-weight: 700;
+  margin-top: ${({ theme }) => theme.spacing.sm}px;
+`;
+
 const DetailsSection = styled.View`
   padding: ${({ theme }) => theme.spacing.md}px;
 `;
 
-const DetailRow = styled.View<{ $highlight?: boolean }>`
-  flex-direction: row;
-  justify-content: space-between;
-  align-items: center;
+const DetailColumn = styled.View`
   padding: ${({ theme }) => theme.spacing.sm}px 0;
   border-bottom-width: 1px;
   border-color: ${({ theme }) => theme.colors.border};
-  ${({ $highlight, theme }) =>
-    $highlight &&
-    `
-    background-color: ${theme.colors.backgroundSecondary};
-    margin: 0 -${theme.spacing.md}px;
-    padding: ${theme.spacing.md}px;
-    border-radius: ${theme.borderRadius.md}px;
-    border-bottom-width: 0;
-  `}
+  gap: 4px;
 `;
 
 const DetailLabel = styled.Text`
@@ -379,19 +325,15 @@ const DetailValue = styled.Text`
   color: ${({ theme }) => theme.colors.textPrimary};
   font-size: 14px;
   font-family: monospace;
+  line-height: 19px;
 `;
 
-const DetailValueLarge = styled.Text`
-  color: ${({ theme }) => theme.colors.textPrimary};
-  font-size: 18px;
-  font-weight: bold;
-`;
-
-const WarningBox = styled.View`
+const WarningBox = styled.View<{ $critical?: boolean }>`
   flex-direction: row;
   align-items: flex-start;
-  background-color: rgba(245, 158, 11, 0.1);
-  border: 1px solid #f59e0b;
+  background-color: ${({ $critical }) =>
+    $critical ? 'rgba(239, 68, 68, 0.12)' : 'rgba(245, 158, 11, 0.1)'};
+  border: 1px solid ${({ $critical }) => ($critical ? '#ef4444' : '#f59e0b')};
   border-radius: ${({ theme }) => theme.borderRadius.md}px;
   padding: ${({ theme }) => theme.spacing.md}px;
   margin-top: ${({ theme }) => theme.spacing.md}px;
@@ -402,9 +344,9 @@ const WarningIcon = styled.Text`
   margin-right: ${({ theme }) => theme.spacing.sm}px;
 `;
 
-const WarningText = styled.Text`
+const WarningText = styled.Text<{ $critical?: boolean }>`
   flex: 1;
-  color: #f59e0b;
+  color: ${({ $critical }) => ($critical ? '#ef4444' : '#f59e0b')};
   font-size: 13px;
   line-height: 18px;
 `;
@@ -429,7 +371,33 @@ const MessageContent = styled.Text`
 `;
 
 const DetailsScrollView = styled.ScrollView`
-  max-height: 250px;
+  max-height: 360px;
+`;
+
+const BlockedBox = styled.Text`
+  color: #ef4444;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 19px;
+  margin-top: ${({ theme }) => theme.spacing.md}px;
+`;
+
+const RiskAcknowledgeButton = styled.TouchableOpacity`
+  flex-direction: row;
+  align-items: center;
+  padding: ${({ theme }) => theme.spacing.md}px 0;
+`;
+
+const RiskAcknowledgeMark = styled.Text`
+  color: ${({ theme }) => theme.colors.primary};
+  font-size: 22px;
+  margin-right: ${({ theme }) => theme.spacing.sm}px;
+`;
+
+const RiskAcknowledgeText = styled.Text`
+  flex: 1;
+  color: ${({ theme }) => theme.colors.textPrimary};
+  font-size: 14px;
 `;
 
 const ButtonSection = styled.View`
@@ -452,11 +420,12 @@ const RejectButtonText = styled.Text`
   font-weight: 600;
 `;
 
-const ApproveButton = styled.TouchableOpacity`
+const ApproveButton = styled.TouchableOpacity<{ $disabled?: boolean }>`
   flex: 1;
   padding: ${({ theme }) => theme.spacing.md}px;
   border-radius: ${({ theme }) => theme.borderRadius.md}px;
-  background-color: ${({ theme }) => theme.colors.primary};
+  background-color: ${({ theme, $disabled }) =>
+    $disabled ? theme.colors.border : theme.colors.primary};
   align-items: center;
 `;
 

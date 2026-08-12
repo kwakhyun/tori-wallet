@@ -57,7 +57,18 @@ react {
 /**
  * Set this to true to Run Proguard on Release builds to minify the Java bytecode.
  */
-def enableProguardInReleaseBuilds = false
+def enableProguardInReleaseBuilds = true
+
+def releaseStoreFile = System.getenv("TORI_RELEASE_STORE_FILE")
+def releaseStorePassword = System.getenv("TORI_RELEASE_STORE_PASSWORD")
+def releaseKeyAlias = System.getenv("TORI_RELEASE_KEY_ALIAS")
+def releaseKeyPassword = System.getenv("TORI_RELEASE_KEY_PASSWORD")
+def hasReleaseSigning = releaseStoreFile && releaseStorePassword && releaseKeyAlias && releaseKeyPassword
+def isReleaseTask = gradle.startParameter.taskNames.any { it.toLowerCase().contains("release") }
+
+if (isReleaseTask && !hasReleaseSigning) {
+    throw new GradleException("Release signing variables are required. Configure TORI_RELEASE_STORE_FILE, TORI_RELEASE_STORE_PASSWORD, TORI_RELEASE_KEY_ALIAS, and TORI_RELEASE_KEY_PASSWORD.")
+}
 
 /**
  * The preferred build flavor of JavaScriptCore (JSC)
@@ -92,16 +103,23 @@ android {
             keyAlias 'androiddebugkey'
             keyPassword 'android'
         }
+        release {
+            if (hasReleaseSigning) {
+                storeFile file(releaseStoreFile)
+                storePassword releaseStorePassword
+                keyAlias releaseKeyAlias
+                keyPassword releaseKeyPassword
+            }
+        }
     }
     buildTypes {
         debug {
             signingConfig signingConfigs.debug
         }
         release {
-            // Caution! In production, you need to generate your own keystore file.
-            // see https://reactnative.dev/docs/signed-apk-android.
-            signingConfig signingConfigs.debug
+            signingConfig signingConfigs.release
             minifyEnabled enableProguardInReleaseBuilds
+            shrinkResources enableProguardInReleaseBuilds
             proguardFiles getDefaultProguardFile("proguard-android.txt"), "proguard-rules.pro"
         }
     }

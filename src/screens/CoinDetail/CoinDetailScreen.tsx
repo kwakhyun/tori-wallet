@@ -5,7 +5,8 @@
 
 /* eslint-disable react-native/no-inline-styles */
 import React, { useState, useCallback, useEffect } from 'react';
-import styled, { useTheme } from 'styled-components/native';
+import styled from 'styled-components/native';
+import { useTheme } from '@/hooks/useTheme';
 import {
   SafeAreaView,
   StatusBar,
@@ -34,7 +35,7 @@ const CHART_HEIGHT = 220;
 type TimeRange = '1' | '7' | '30';
 
 function CoinDetailScreen(): React.JSX.Element {
-  const theme = useTheme();
+  const { theme, isDarkMode } = useTheme();
   const navigation = useNavigation<NavigationProp>();
   const route = useRoute<CoinDetailRouteProp>();
   const { coinId, coinName, coinSymbol, coinImage } = route.params;
@@ -206,7 +207,7 @@ function CoinDetailScreen(): React.JSX.Element {
   if (isLoading) {
     return (
       <Container>
-        <StatusBar barStyle="light-content" />
+        <StatusBar barStyle={isDarkMode ? 'light-content' : 'dark-content'} />
         <LoadingContainer>
           <ActivityIndicator size="large" color={theme.colors.primary} />
         </LoadingContainer>
@@ -216,7 +217,7 @@ function CoinDetailScreen(): React.JSX.Element {
 
   return (
     <Container>
-      <StatusBar barStyle="light-content" />
+      <StatusBar barStyle={isDarkMode ? 'light-content' : 'dark-content'} />
       <Header>
         <BackButton onPress={() => navigation.goBack()}>
           <BackButtonText>‹</BackButtonText>

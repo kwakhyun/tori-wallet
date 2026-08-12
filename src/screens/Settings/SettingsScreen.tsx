@@ -3,7 +3,8 @@
  */
 
 import React, { useCallback, useState, useEffect, useRef } from 'react';
-import styled, { useTheme, ThemeProvider } from 'styled-components/native';
+import styled, { ThemeProvider } from 'styled-components/native';
+import { useTheme } from '@/hooks/useTheme';
 import {
   SafeAreaView,
   StatusBar,
@@ -19,7 +20,7 @@ import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useWalletStore } from '@/store/walletStore';
 import { useThemeStore, themeModeOptions } from '@/store/themeStore';
 import { walletService } from '@/services/walletService';
-import EncryptedStorage from 'react-native-encrypted-storage';
+import { walletResetService } from '@/services/walletResetService';
 import { createLogger } from '@/utils/logger';
 import type { RootStackParamList } from '@/navigation/RootNavigator';
 import type { ThemeMode } from '@/styles/theme';
@@ -27,7 +28,6 @@ import type { ThemeMode } from '@/styles/theme';
 type NavigationProp = NativeStackNavigationProp<RootStackParamList>;
 
 const logger = createLogger('Settings');
-const BIOMETRIC_ENABLED_KEY = 'tori_biometric_enabled';
 
 // 앱 정보 상수
 const APP_VERSION = '1.0.0';
@@ -41,7 +41,7 @@ const TERMS_OF_SERVICE_URL =
 
 function SettingsScreen(): React.JSX.Element {
   const navigation = useNavigation<NavigationProp>();
-  const theme = useTheme();
+  const { theme, isDarkMode } = useTheme();
   const {
     wallets,
     activeWalletIndex,
@@ -49,7 +49,6 @@ function SettingsScreen(): React.JSX.Element {
     activeNetworkChainId,
     setActiveNetwork,
     lock,
-    reset,
   } = useWalletStore();
 
   // 테마 상태
@@ -106,8 +105,7 @@ function SettingsScreen(): React.JSX.Element {
       const supported = await walletService.isBiometricSupported();
       setBiometricSupported(supported);
 
-      const enabled = await EncryptedStorage.getItem(BIOMETRIC_ENABLED_KEY);
-      setBiometricEnabled(enabled === 'true');
+      setBiometricEnabled(await walletService.isBiometricEnabled());
     };
     checkBiometric();
   }, []);
@@ -339,7 +337,7 @@ function SettingsScreen(): React.JSX.Element {
         setPinInput('');
         setShowBiometricPinModal(true);
       } else {
-        await EncryptedStorage.setItem(BIOMETRIC_ENABLED_KEY, 'false');
+        await walletService.disableBiometric();
         setBiometricEnabled(false);
         Alert.alert('완료', '생체인증이 비활성화되었습니다.');
       }
@@ -379,7 +377,7 @@ function SettingsScreen(): React.JSX.Element {
       ) {
         await new Promise(resolve => setTimeout(resolve, 100));
         setProgress(100);
-        await EncryptedStorage.setItem(BIOMETRIC_ENABLED_KEY, 'true');
+        await walletService.enableBiometric(retrievedMnemonic);
         setBiometricEnabled(true);
         setShowBiometricPinModal(false);
         Alert.alert('완료', '생체인증이 활성화되었습니다.');
@@ -412,8 +410,7 @@ function SettingsScreen(): React.JSX.Element {
           style: 'destructive',
           onPress: async () => {
             try {
-              await walletService.clearAll();
-              reset();
+              await walletResetService.reset();
             } catch (error) {
               logger.error('Failed to reset wallet:', error);
               Alert.alert('오류', '초기화에 실패했습니다.');
@@ -422,7 +419,7 @@ function SettingsScreen(): React.JSX.Element {
         },
       ],
     );
-  }, [reset]);
+  }, []);
 
   // 로그아웃 (지갑 데이터 유지, 잠금 상태로 전환)
   const handleLogout = useCallback(() => {
@@ -458,8 +455,7 @@ function SettingsScreen(): React.JSX.Element {
           style: 'destructive',
           onPress: async () => {
             try {
-              await walletService.clearAll();
-              reset();
+              await walletResetService.reset();
               logger.info('Wallet cleared - ready for new import');
             } catch (error) {
               logger.error('Failed to switch wallet:', error);
@@ -469,7 +465,7 @@ function SettingsScreen(): React.JSX.Element {
         },
       ],
     );
-  }, [reset, handleViewMnemonic]);
+  }, [handleViewMnemonic]);
 
   const truncateAddress = (address: string) => {
     if (!address) return '';
@@ -526,7 +522,7 @@ function SettingsScreen(): React.JSX.Element {
 
   return (
     <Container>
-      <StatusBar barStyle="light-content" />
+      <StatusBar barStyle={isDarkMode ? 'light-content' : 'dark-content'} />
       <ScrollView>
         <Content>
           <Title>설정</Title>

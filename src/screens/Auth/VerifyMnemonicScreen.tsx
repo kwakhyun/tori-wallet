@@ -2,8 +2,9 @@
  * 니모닉 검증 화면 (백업 확인)
  */
 
-import React, { useState, useMemo, useCallback } from 'react';
+import React, { useState, useMemo, useCallback, useEffect } from 'react';
 import styled from 'styled-components/native';
+import { useTheme } from '@/hooks/useTheme';
 import {
   SafeAreaView,
   StatusBar,
@@ -11,26 +12,28 @@ import {
   Alert,
   StyleSheet,
 } from 'react-native';
-import { useNavigation, useRoute } from '@react-navigation/native';
+import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
-import type { RouteProp } from '@react-navigation/native';
 import type { AuthStackParamList } from '@/navigation/AuthNavigator';
 import { walletService } from '@/services/walletService';
+import { onboardingVault } from '@/services/onboardingVault';
 
 type NavigationProp = NativeStackNavigationProp<
   AuthStackParamList,
   'VerifyMnemonic'
 >;
-type VerifyMnemonicRouteProp = RouteProp<AuthStackParamList, 'VerifyMnemonic'>;
-
 const styles = StyleSheet.create({
   scrollContent: { flexGrow: 1 },
 });
 
 function VerifyMnemonicScreen(): React.JSX.Element {
+  const { isDarkMode } = useTheme();
   const navigation = useNavigation<NavigationProp>();
-  const route = useRoute<VerifyMnemonicRouteProp>();
-  const { mnemonic } = route.params;
+  const mnemonic = onboardingVault.getSnapshot()?.mnemonic || '';
+
+  useEffect(() => {
+    if (!mnemonic) navigation.navigate('Welcome');
+  }, [mnemonic, navigation]);
 
   const words = useMemo(() => mnemonic.split(' '), [mnemonic]);
 
@@ -78,17 +81,15 @@ function VerifyMnemonicScreen(): React.JSX.Element {
 
     // 검증 성공 - 지갑 주소 생성하고 PIN 설정으로 이동
     const account = walletService.deriveAccount(mnemonic, 0);
-    navigation.navigate('SetPin', {
-      mnemonic,
-      walletAddress: account.address,
-    });
+    onboardingVault.setWalletAddress(account.address);
+    navigation.navigate('SetPin');
   }, [inputs, verificationIndices, words, mnemonic, navigation]);
 
   const isComplete = inputs.every(input => input.length > 0);
 
   return (
     <Container>
-      <StatusBar barStyle="light-content" />
+      <StatusBar barStyle={isDarkMode ? 'light-content' : 'dark-content'} />
       <ScrollView contentContainerStyle={styles.scrollContent}>
         <Content>
           <Header>

@@ -3,7 +3,8 @@
  */
 
 import React, { useCallback, useState, useEffect } from 'react';
-import styled, { useTheme } from 'styled-components/native';
+import styled from 'styled-components/native';
+import { useTheme } from '@/hooks/useTheme';
 import {
   StatusBar,
   RefreshControl,
@@ -24,7 +25,7 @@ import { HomeScreenSkeleton } from '@/components/common/Skeleton';
 type NavigationProp = NativeStackNavigationProp<RootStackParamList>;
 
 function HomeScreen(): React.JSX.Element {
-  const theme = useTheme();
+  const { theme, isDarkMode } = useTheme();
   const navigation = useNavigation<NavigationProp>();
   const { wallets, activeWalletIndex, activeNetworkChainId, networks } =
     useWalletStore();
@@ -152,7 +153,7 @@ function HomeScreen(): React.JSX.Element {
   if (!activeWallet) {
     return (
       <Container>
-        <StatusBar barStyle="light-content" />
+        <StatusBar barStyle={isDarkMode ? 'light-content' : 'dark-content'} />
         <EmptyContainer>
           <EmptyText>지갑이 없습니다</EmptyText>
         </EmptyContainer>
@@ -164,7 +165,7 @@ function HomeScreen(): React.JSX.Element {
   if (isInitialLoading) {
     return (
       <Container>
-        <StatusBar barStyle="light-content" />
+        <StatusBar barStyle={isDarkMode ? 'light-content' : 'dark-content'} />
         <HomeScreenSkeleton />
       </Container>
     );
@@ -172,7 +173,7 @@ function HomeScreen(): React.JSX.Element {
 
   return (
     <Container testID="home-screen">
-      <StatusBar barStyle="light-content" />
+      <StatusBar barStyle={isDarkMode ? 'light-content' : 'dark-content'} />
       <ScrollView
         testID="home-scroll-view"
         refreshControl={
@@ -484,7 +485,7 @@ const TokenIconContainer = styled.View`
 
 const TokenIconText = styled.Text`
   font-size: 24px;
-  color: ${({ theme }) => theme.colors.textPrimary};
+  color: #ffffff;
 `;
 
 const TokenInfo = styled.View`

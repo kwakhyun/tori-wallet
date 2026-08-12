@@ -273,6 +273,32 @@ describe('SwapService', () => {
   });
 
   describe('getQuote', () => {
+    const taker = '0x1234567890123456789012345678901234567890';
+    const allowanceHolder = '0x0000000000001fF3684f28c67538d4D072C22734';
+    const nativeQuote = () => ({
+      allowanceTarget: allowanceHolder,
+      buyAmount: '1500000',
+      buyToken: SWAP_TOKENS[1][1].address,
+      sellAmount: '1000000000000000000',
+      sellToken: SWAP_TOKENS[1][0].address,
+      minBuyAmount: '1490000',
+      liquidityAvailable: true,
+      issues: {
+        allowance: null,
+        balance: null,
+        simulationIncomplete: false,
+        invalidSourcesPassed: [],
+      },
+      route: { fills: [] },
+      transaction: {
+        to: '0xdef1c0ded9bec7f1a1670819833240f027b25eff',
+        data: '0x12345678',
+        gas: '200000',
+        gasPrice: '50000000000',
+        value: '1000000000000000000',
+      },
+    });
+
     it('should return null for unsupported chain', async () => {
       const consoleSpy = jest.spyOn(console, 'warn').mockImplementation();
 
@@ -310,6 +336,75 @@ describe('SwapService', () => {
           1,
         ),
       ).rejects.toThrow('Insufficient liquidity');
+    });
+
+    it('validates and binds a v2 AllowanceHolder quote to the requested intent', async () => {
+      (global.fetch as jest.Mock).mockResolvedValueOnce({
+        ok: true,
+        json: jest.fn().mockResolvedValueOnce(nativeQuote()),
+      });
+      const params = {
+        sellToken: SWAP_TOKENS[1][0],
+        buyToken: SWAP_TOKENS[1][1],
+        sellAmount: '1',
+        takerAddress: taker,
+        slippagePercentage: 0.5,
+      };
+
+      const quote = await swapService.getQuote(params, 1);
+
+      expect(quote?.minimumReceived).toBe('1.49');
+      expect(quote?.security.intentFingerprint).toMatch(/^0x[0-9a-f]{64}$/);
+      expect(() =>
+        swapService.assertQuoteMatchesIntent(quote!, params, 1),
+      ).not.toThrow();
+      expect(global.fetch).toHaveBeenCalledWith(
+        expect.stringContaining('/swap/allowance-holder/quote?'),
+        expect.objectContaining({
+          headers: expect.objectContaining({ '0x-version': 'v2' }),
+        }),
+      );
+    });
+
+    it('blocks a quote that redirects token approval away from AllowanceHolder', async () => {
+      (global.fetch as jest.Mock).mockResolvedValueOnce({
+        ok: true,
+        json: jest.fn().mockResolvedValueOnce({
+          ...nativeQuote(),
+          allowanceTarget: '0x1111111111111111111111111111111111111111',
+        }),
+      });
+
+      await expect(
+        swapService.getQuote(
+          {
+            sellToken: SWAP_TOKENS[1][0],
+            buyToken: SWAP_TOKENS[1][1],
+            sellAmount: '1',
+            takerAddress: taker,
+          },
+          1,
+        ),
+      ).rejects.toThrow('공식 0x AllowanceHolder가 아닌 승인 대상');
+    });
+
+    it('blocks execution data changed after the user reviewed the quote', async () => {
+      (global.fetch as jest.Mock).mockResolvedValueOnce({
+        ok: true,
+        json: jest.fn().mockResolvedValueOnce(nativeQuote()),
+      });
+      const params = {
+        sellToken: SWAP_TOKENS[1][0],
+        buyToken: SWAP_TOKENS[1][1],
+        sellAmount: '1',
+        takerAddress: taker,
+      };
+      const quote = await swapService.getQuote(params, 1);
+      quote!.data = '0x87654321';
+
+      expect(() =>
+        swapService.assertQuoteMatchesIntent(quote!, params, 1),
+      ).toThrow('검토 후 스왑 실행 데이터가 변경되어 차단했습니다.');
     });
   });
 

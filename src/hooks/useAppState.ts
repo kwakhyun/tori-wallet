@@ -7,6 +7,7 @@ import { AppState, AppStateStatus } from 'react-native';
 import { useWalletStore } from '@/store/walletStore';
 import { useSecurityStore, AUTO_LOCK_OPTIONS } from '@/store/securityStore';
 import { createLogger } from '@/utils/logger';
+import { onboardingVault } from '@/services/onboardingVault';
 
 const logger = createLogger('AppState');
 
@@ -15,7 +16,8 @@ export function useAppState() {
   const backgroundTime = useRef<number | null>(null);
 
   const { hasWallet, isLocked, lock } = useWalletStore();
-  const { autoLockTimeout, updateLastActiveTime } = useSecurityStore();
+  const { autoLockTimeout, updateLastActiveTime, shouldAutoLock } =
+    useSecurityStore();
 
   const handleAppStateChange = useCallback(
     (nextAppState: AppStateStatus) => {
@@ -27,6 +29,7 @@ export function useAppState() {
         (nextAppState === 'background' || nextAppState === 'inactive')
       ) {
         backgroundTime.current = Date.now();
+        onboardingVault.clear();
         logger.info('App went to background');
 
         // 즉시 잠금 설정인 경우
@@ -47,12 +50,7 @@ export function useAppState() {
           const timeInBackground = Date.now() - backgroundTime.current;
           const timeoutMs = AUTO_LOCK_OPTIONS[autoLockTimeout];
 
-          // never가 아니고, 타임아웃 시간이 지났으면 잠금
-          if (
-            autoLockTimeout !== 'never' &&
-            timeoutMs > 0 &&
-            timeInBackground > timeoutMs
-          ) {
+          if (timeoutMs > 0 && timeInBackground > timeoutMs) {
             lock();
             logger.info(
               `Auto-locked after ${timeInBackground}ms in background`,
@@ -80,6 +78,19 @@ export function useAppState() {
       subscription.remove();
     };
   }, [handleAppStateChange]);
+
+  useEffect(() => {
+    if (!hasWallet || isLocked || autoLockTimeout === 'immediate') return;
+
+    const interval = setInterval(() => {
+      if (AppState.currentState === 'active' && shouldAutoLock()) {
+        lock();
+        logger.info('Auto-locked after foreground inactivity');
+      }
+    }, 5_000);
+
+    return () => clearInterval(interval);
+  }, [autoLockTimeout, hasWallet, isLocked, lock, shouldAutoLock]);
 
   // 사용자 활동 시 호출할 함수
   const trackUserActivity = useCallback(() => {
