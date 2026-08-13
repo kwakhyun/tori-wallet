@@ -31,7 +31,7 @@
   },
   "dependencies": {
     "@noble/hashes": "^1.8.0",
-    "@react-native-async-storage/async-storage": "^2.2.0",
+    "@react-native-async-storage/async-storage": "^3.1.1",
     "@react-native-community/netinfo": "^11.4.1",
     "@react-native/new-app-screen": "0.83.1",
     "@react-navigation/bottom-tabs": "^7.9.0",
