@@ -7,10 +7,10 @@
 [![Coverage](https://img.shields.io/badge/Services-89.14%25-brightgreen)](/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-> **React Native + TypeScript 기반 셀프 커스터디 Web3 모바일 지갑**
+> **React Native + TypeScript 기반 셀프 커스터디 Web3 모바일 핫월렛**
 > 멀티체인, Reown WalletKit 기반 WalletConnect v2, 0x Swap API v2 연동을 지원하는 소프트웨어 지갑
 
-> 토리월렛은 하드웨어 콜드월렛이 아닙니다. 키를 서버로 전송하지 않지만, 실행 중인 모바일 OS의 무결성을 보안 경계로 신뢰합니다. 외부 전문 보안 감사를 완료했다는 의미는 아닙니다.
+> 토리월렛은 네트워크에 연결된 모바일 OS에서 키를 보관하고 서명하는 소프트웨어 핫월렛입니다. 키를 서버로 전송하지 않지만, 실행 중인 모바일 OS와 앱의 무결성을 보안 경계로 신뢰합니다. 하드웨어 콜드월렛이 아니며, 외부 전문 보안 감사를 완료했다는 의미도 아닙니다.
 
 ---
 
@@ -211,7 +211,7 @@ src/
 - **앱 생명주기**: 백그라운드 전환 시 서명 세션과 온보딩 니모닉을 폐기하고 자동 잠금 정책 적용
 - **공급망 검사**: 해시 고정 GitHub Actions, Dependabot, CodeQL, dependency-review, 주간 OSV 검사
 
-2026년 8월 COLDCARD 예측 가능 난수 사건과 토리월렛 적용성은 [보안 검토 보고서](docs/SECURITY_REVIEW_2026-08.md)에 기록했습니다. 현재 코드에서 동일한 **비보안 난수로의 조용한 폴백** 경로는 차단했지만, 이는 외부 전문 감사나 기존 지갑 엔트로피의 소급 증명을 대신하지 않습니다.
+2026년 8월 COLDCARD 시드 엔트로피 사건과 토리월렛의 제한적인 적용성은 [보안 검토 보고서](docs/SECURITY_REVIEW_2026-08.md)에 기록했습니다. COLDCARD의 하드웨어·펌웨어 결함은 토리월렛에 직접 적용되지 않습니다. 다만 사건을 계기로 시드 생성 신뢰 경계를 점검해, 구형 Chrome 원격 디버깅 환경에 존재하던 토리월렛 고유의 비보안 RNG 폴백 경로를 차단했습니다. 두 문제의 구현 원인이 동일하다는 의미는 아니며, 외부 전문 감사나 기존 지갑 엔트로피의 소급 증명을 대신하지도 않습니다.
 
 ### API 오류·지연 등 예외 상황 대응
 
