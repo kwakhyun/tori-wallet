@@ -2,9 +2,10 @@
  * 코인 탐색 화면 (인기 코인 목록, 검색)
  */
 
-import React, { useState, useCallback, useEffect } from 'react';
+import React, { useState, useCallback, useEffect, useRef } from 'react';
 import styled from 'styled-components/native';
 import { useTheme } from '@/hooks/useTheme';
+import { useDebounce } from '@/hooks/useDebounce';
 import {
   SafeAreaView,
   StatusBar,
@@ -25,23 +26,6 @@ const styles = StyleSheet.create({
   coinList: { paddingHorizontal: 16, paddingBottom: 20 },
 });
 
-// 간단한 디바운스 구현
-function useDebounce<T>(value: T, delay: number): T {
-  const [debouncedValue, setDebouncedValue] = React.useState<T>(value);
-
-  React.useEffect(() => {
-    const handler = setTimeout(() => {
-      setDebouncedValue(value);
-    }, delay);
-
-    return () => {
-      clearTimeout(handler);
-    };
-  }, [value, delay]);
-
-  return debouncedValue;
-}
-
 type NavigationProp = NativeStackNavigationProp<RootStackParamList>;
 
 function ExploreScreen(): React.JSX.Element {
@@ -61,6 +45,7 @@ function ExploreScreen(): React.JSX.Element {
   const [isLoading, setIsLoading] = useState(true);
   const [isSearching, setIsSearching] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const searchRequestId = useRef(0);
 
   const debouncedQuery = useDebounce(searchQuery, 300);
 
@@ -86,7 +71,10 @@ function ExploreScreen(): React.JSX.Element {
 
   // 검색
   const handleSearch = useCallback(async (query: string) => {
-    if (!query || query.length < 2) {
+    const requestId = ++searchRequestId.current;
+    const normalizedQuery = query.trim();
+
+    if (normalizedQuery.length < 2) {
       setSearchResults([]);
       setIsSearching(false);
       return;
@@ -94,12 +82,16 @@ function ExploreScreen(): React.JSX.Element {
 
     setIsSearching(true);
     try {
-      const result = await coinService.searchCoins(query);
-      setSearchResults(result.coins.slice(0, 20));
+      const result = await coinService.searchCoins(normalizedQuery);
+      if (requestId === searchRequestId.current) {
+        setSearchResults(result.coins.slice(0, 20));
+      }
     } catch (error) {
       console.error('Search failed:', error);
     } finally {
-      setIsSearching(false);
+      if (requestId === searchRequestId.current) {
+        setIsSearching(false);
+      }
     }
   }, []);
 
@@ -115,6 +107,10 @@ function ExploreScreen(): React.JSX.Element {
     setIsRefreshing(true);
     loadCoins();
   }, [loadCoins]);
+
+  const handleClearSearch = useCallback(() => {
+    setSearchQuery('');
+  }, []);
 
   const handleCoinPress = useCallback(
     (
@@ -182,11 +178,11 @@ function ExploreScreen(): React.JSX.Element {
           handleCoinPress(item.id, item.name, item.symbol, item.thumb)
         }
       >
-        {item.market_cap_rank && (
+        {item.market_cap_rank > 0 ? (
           <RankBadge>
             <RankText>{item.market_cap_rank}</RankText>
           </RankBadge>
-        )}
+        ) : null}
         <CoinImage source={{ uri: item.thumb }} />
         <CoinInfo>
           <CoinName>{item.name}</CoinName>
@@ -217,11 +213,11 @@ function ExploreScreen(): React.JSX.Element {
           autoCapitalize="none"
           autoCorrect={false}
         />
-        {searchQuery.length > 0 && (
-          <ClearButton onPress={() => setSearchQuery('')}>
+        {searchQuery.length > 0 ? (
+          <ClearButton onPress={handleClearSearch}>
             <ClearButtonText>✕</ClearButtonText>
           </ClearButton>
-        )}
+        ) : null}
       </SearchContainer>
 
       {isLoading ? (
@@ -251,7 +247,7 @@ function ExploreScreen(): React.JSX.Element {
         </>
       ) : (
         <>
-          <SectionTitle>인기 코인 Top 100</SectionTitle>
+          <SectionTitle>인기 코인 Top 20</SectionTitle>
           <FlatList
             data={coins}
             keyExtractor={item => item.id}

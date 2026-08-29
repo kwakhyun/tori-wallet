@@ -4,6 +4,7 @@
 
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import styled from 'styled-components/native';
+import { useShallow } from 'zustand/react/shallow';
 import { useTheme } from '@/hooks/useTheme';
 import { SafeAreaView, StatusBar, Alert, Animated } from 'react-native';
 import { useWalletStore } from '@/store/walletStore';
@@ -13,7 +14,9 @@ import { ToriCatFace } from '@/components/common/Logo';
 
 function UnlockScreen(): React.JSX.Element {
   const { isDarkMode } = useTheme();
-  const { unlock } = useWalletStore();
+  const { unlock } = useWalletStore(
+    useShallow(state => ({ unlock: state.unlock })),
+  );
   const [pin, setPin] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [displayProgress, setDisplayProgress] = useState(0);

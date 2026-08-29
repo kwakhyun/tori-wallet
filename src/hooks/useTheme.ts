@@ -5,6 +5,7 @@
 import { useCallback, useEffect } from 'react';
 import { Appearance } from 'react-native';
 import { useTheme as useStyledTheme } from 'styled-components/native';
+import { useShallow } from 'zustand/react/shallow';
 import { useThemeStore, themeModeOptions } from '@/store/themeStore';
 import { Theme, ThemeMode, palette } from '@/styles/theme';
 
@@ -39,7 +40,15 @@ export function useTheme(): UseThemeReturn {
     setThemeMode,
     toggleTheme,
     updateSystemTheme,
-  } = useThemeStore();
+  } = useThemeStore(
+    useShallow(state => ({
+      themeMode: state.themeMode,
+      isDarkMode: state.isDarkMode,
+      setThemeMode: state.setThemeMode,
+      toggleTheme: state.toggleTheme,
+      updateSystemTheme: state.updateSystemTheme,
+    })),
+  );
 
   // 시스템 테마 변경 감지
   useEffect(() => {

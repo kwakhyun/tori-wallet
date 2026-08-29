@@ -4,6 +4,7 @@
 
 import React, { useCallback } from 'react';
 import styled from 'styled-components/native';
+import { useShallow } from 'zustand/react/shallow';
 import { useTheme } from '@/hooks/useTheme';
 import {
   SafeAreaView,
@@ -30,7 +31,14 @@ function TokenDetailScreen(): React.JSX.Element {
   const { symbol, name, balance, contractAddress } = route.params;
 
   const { wallets, activeWalletIndex, activeNetworkChainId, networks } =
-    useWalletStore();
+    useWalletStore(
+      useShallow(state => ({
+        wallets: state.wallets,
+        activeWalletIndex: state.activeWalletIndex,
+        activeNetworkChainId: state.activeNetworkChainId,
+        networks: state.networks,
+      })),
+    );
   const activeWallet = wallets[activeWalletIndex];
   const activeNetwork = networks.find(n => n.chainId === activeNetworkChainId);
 

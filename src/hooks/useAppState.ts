@@ -4,6 +4,7 @@
 
 import { useEffect, useRef, useCallback } from 'react';
 import { AppState, AppStateStatus } from 'react-native';
+import { useShallow } from 'zustand/react/shallow';
 import { useWalletStore } from '@/store/walletStore';
 import { useSecurityStore, AUTO_LOCK_OPTIONS } from '@/store/securityStore';
 import { createLogger } from '@/utils/logger';
@@ -15,9 +16,21 @@ export function useAppState() {
   const appState = useRef<AppStateStatus>(AppState.currentState);
   const backgroundTime = useRef<number | null>(null);
 
-  const { hasWallet, isLocked, lock } = useWalletStore();
+  const { hasWallet, isLocked, lock } = useWalletStore(
+    useShallow(state => ({
+      hasWallet: state.hasWallet,
+      isLocked: state.isLocked,
+      lock: state.lock,
+    })),
+  );
   const { autoLockTimeout, updateLastActiveTime, shouldAutoLock } =
-    useSecurityStore();
+    useSecurityStore(
+      useShallow(state => ({
+        autoLockTimeout: state.autoLockTimeout,
+        updateLastActiveTime: state.updateLastActiveTime,
+        shouldAutoLock: state.shouldAutoLock,
+      })),
+    );
 
   const handleAppStateChange = useCallback(
     (nextAppState: AppStateStatus) => {

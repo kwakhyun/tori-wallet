@@ -4,6 +4,7 @@
 
 import React, { useCallback, useState, useEffect } from 'react';
 import styled from 'styled-components/native';
+import { useShallow } from 'zustand/react/shallow';
 import { useTheme } from '@/hooks/useTheme';
 import {
   StatusBar,
@@ -24,11 +25,31 @@ import { HomeScreenSkeleton } from '@/components/common/Skeleton';
 
 type NavigationProp = NativeStackNavigationProp<RootStackParamList>;
 
+function formatBalance(value: string | undefined): string {
+  if (!value) return '0.0000';
+  const num = parseFloat(value);
+  if (num === 0) return '0.0000';
+  if (num < 0.0001) return '< 0.0001';
+  return num.toFixed(4);
+}
+
+function truncateAddress(address: string): string {
+  if (!address) return '';
+  return `${address.slice(0, 6)}...${address.slice(-4)}`;
+}
+
 function HomeScreen(): React.JSX.Element {
   const { theme, isDarkMode } = useTheme();
   const navigation = useNavigation<NavigationProp>();
   const { wallets, activeWalletIndex, activeNetworkChainId, networks } =
-    useWalletStore();
+    useWalletStore(
+      useShallow(state => ({
+        wallets: state.wallets,
+        activeWalletIndex: state.activeWalletIndex,
+        activeNetworkChainId: state.activeNetworkChainId,
+        networks: state.networks,
+      })),
+    );
 
   const activeWallet = wallets[activeWalletIndex];
   const activeNetwork = networks.find(n => n.chainId === activeNetworkChainId);
@@ -42,52 +63,39 @@ function HomeScreen(): React.JSX.Element {
 
   // USD 가격 상태
   const [usdPrice, setUsdPrice] = useState<number>(0);
-  const [usdValue, setUsdValue] = useState<string>('$0.00');
   const [isPriceLoading, setIsPriceLoading] = useState(true);
 
   // 가격 조회
   useEffect(() => {
+    let isCancelled = false;
+
     const fetchPrice = async () => {
       setIsPriceLoading(true);
       try {
         const price = await coinService.getNativeTokenPrice(
           activeNetworkChainId,
         );
-        setUsdPrice(price);
+        if (!isCancelled) setUsdPrice(price);
       } catch (error) {
         console.warn('Failed to fetch price:', error);
       } finally {
-        setIsPriceLoading(false);
+        if (!isCancelled) setIsPriceLoading(false);
       }
     };
     fetchPrice();
+
+    return () => {
+      isCancelled = true;
+    };
   }, [activeNetworkChainId]);
 
-  // USD 가치 계산
-  useEffect(() => {
-    if (balance?.formatted && usdPrice > 0) {
-      const amount = parseFloat(balance.formatted);
-      setUsdValue(coinService.calculateUsdValue(amount, usdPrice));
-    } else {
-      setUsdValue('$0.00');
-    }
-  }, [balance?.formatted, usdPrice]);
+  const usdValue =
+    balance?.formatted && usdPrice > 0
+      ? coinService.calculateUsdValue(parseFloat(balance.formatted), usdPrice)
+      : '$0.00';
 
   // 초기 로딩 상태
   const isInitialLoading = isLoading || isPriceLoading;
-
-  const formatBalance = (value: string | undefined) => {
-    if (!value) return '0.0000';
-    const num = parseFloat(value);
-    if (num === 0) return '0.0000';
-    if (num < 0.0001) return '< 0.0001';
-    return num.toFixed(4);
-  };
-
-  const truncateAddress = (address: string) => {
-    if (!address) return '';
-    return `${address.slice(0, 6)}...${address.slice(-4)}`;
-  };
 
   const handleCopyAddress = useCallback(() => {
     if (activeWallet?.address) {

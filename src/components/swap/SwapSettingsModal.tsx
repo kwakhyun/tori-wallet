@@ -5,6 +5,7 @@
 import React, { useState } from 'react';
 import { Modal, Switch } from 'react-native';
 import styled from 'styled-components/native';
+import { useShallow } from 'zustand/react/shallow';
 import { useSwapStore, SwapSettings } from '@/store/swapStore';
 
 interface Props {
@@ -16,7 +17,13 @@ export function SwapSettingsModal({
   visible,
   onClose,
 }: Props): React.JSX.Element {
-  const { settings, updateSettings, resetSettings } = useSwapStore();
+  const { settings, updateSettings, resetSettings } = useSwapStore(
+    useShallow(state => ({
+      settings: state.settings,
+      updateSettings: state.updateSettings,
+      resetSettings: state.resetSettings,
+    })),
+  );
   const [localSettings, setLocalSettings] = useState<SwapSettings>(settings);
 
   const handleSave = () => {

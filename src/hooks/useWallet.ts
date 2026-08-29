@@ -3,6 +3,7 @@
  */
 
 import { useCallback } from 'react';
+import { useShallow } from 'zustand/react/shallow';
 import { useWalletStore } from '../store/walletStore';
 import { walletService } from '../services/walletService';
 import { signerVault } from '../services/signerVault';
@@ -20,7 +21,19 @@ export function useWallet() {
     setActiveWallet,
     lock,
     unlock: unlockStore,
-  } = useWalletStore();
+  } = useWalletStore(
+    useShallow(state => ({
+      wallets: state.wallets,
+      activeWalletIndex: state.activeWalletIndex,
+      isLocked: state.isLocked,
+      hasWallet: state.hasWallet,
+      activeNetworkChainId: state.activeNetworkChainId,
+      addWallet: state.addWallet,
+      setActiveWallet: state.setActiveWallet,
+      lock: state.lock,
+      unlock: state.unlock,
+    })),
+  );
 
   const activeWallet = wallets[activeWalletIndex] || null;
 

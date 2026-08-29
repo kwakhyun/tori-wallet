@@ -4,6 +4,7 @@
 
 import React, { useState, useCallback, useEffect } from 'react';
 import styled from 'styled-components/native';
+import { useShallow } from 'zustand/react/shallow';
 import { useTheme } from '@/hooks/useTheme';
 import {
   SafeAreaView,
@@ -62,9 +63,20 @@ function WalletConnectScreen(): React.JSX.Element {
   const route = useRoute<WalletConnectRouteProp>();
 
   const { wallets, activeWalletIndex, activeNetworkChainId, networks } =
-    useWalletStore();
+    useWalletStore(
+      useShallow(state => ({
+        wallets: state.wallets,
+        activeWalletIndex: state.activeWalletIndex,
+        activeNetworkChainId: state.activeNetworkChainId,
+        networks: state.networks,
+      })),
+    );
   const activeWallet = wallets[activeWalletIndex];
-  const { requiresTransactionPin } = useSecurityStore();
+  const { requiresTransactionPin } = useSecurityStore(
+    useShallow(state => ({
+      requiresTransactionPin: state.requiresTransactionPin,
+    })),
+  );
 
   const [wcUri, setWcUri] = useState(route.params?.uri || '');
   const [isConnecting, setIsConnecting] = useState(false);

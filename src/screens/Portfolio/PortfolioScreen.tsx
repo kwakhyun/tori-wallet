@@ -2,8 +2,9 @@
  * 포트폴리오 화면 (토큰 목록, 자산 현황, 차트)
  */
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import styled from 'styled-components/native';
+import { useShallow } from 'zustand/react/shallow';
 import { useTheme } from '@/hooks/useTheme';
 import {
   SafeAreaView,
@@ -32,10 +33,33 @@ const { width: SCREEN_WIDTH } = Dimensions.get('window');
 type ViewMode = 'overview' | 'tokens';
 type TimeRange = '7d' | '30d' | '90d';
 
+const TIME_RANGES: TimeRange[] = ['7d', '30d', '90d'];
+
+const formatUSD = (value: number): string => {
+  if (value === 0) return '$0.00';
+  if (Math.abs(value) < 0.01) return value > 0 ? '< $0.01' : '> -$0.01';
+  return `$${value.toLocaleString('en-US', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })}`;
+};
+
+const formatChange = (value: number, showSign: boolean = true): string => {
+  const sign = showSign && value > 0 ? '+' : '';
+  return `${sign}${value.toFixed(2)}%`;
+};
+
 function PortfolioScreen(): React.JSX.Element {
   const { theme, isDarkMode } = useTheme();
   const { wallets, activeWalletIndex, activeNetworkChainId, networks } =
-    useWalletStore();
+    useWalletStore(
+      useShallow(state => ({
+        wallets: state.wallets,
+        activeWalletIndex: state.activeWalletIndex,
+        activeNetworkChainId: state.activeNetworkChainId,
+        networks: state.networks,
+      })),
+    );
 
   const activeWallet = wallets[activeWalletIndex];
   const activeNetwork = networks.find(n => n.chainId === activeNetworkChainId);
@@ -54,6 +78,7 @@ function PortfolioScreen(): React.JSX.Element {
     labels: [],
     values: [],
   });
+  const analyticsRequestId = useRef(0);
 
   const {
     data: tokens,
@@ -72,60 +97,66 @@ function PortfolioScreen(): React.JSX.Element {
 
   // 분석 데이터 로드
   const loadAnalytics = useCallback(async () => {
-    if (!tokens || !activeWallet?.address) return;
+    const requestId = ++analyticsRequestId.current;
+    const address = activeWallet?.address;
 
-    // 스냅샷 저장
-    await portfolioAnalyticsService.saveSnapshot(
-      activeWallet.address,
-      activeNetworkChainId,
-      tokens,
-    );
+    if (!tokens || !address) {
+      setAllocation([]);
+      setStats(null);
+      setPerformance(null);
+      setChartData({ labels: [], values: [] });
+      return;
+    }
 
-    // 자산 배분 계산
-    const alloc = portfolioAnalyticsService.calculateAllocation(tokens);
-    setAllocation(alloc);
+    try {
+      // 현재 스냅샷이 차트에 포함되도록 먼저 저장
+      await portfolioAnalyticsService.saveSnapshot(
+        address,
+        activeNetworkChainId,
+        tokens,
+      );
 
-    // 통계 계산
-    const statsData = await portfolioAnalyticsService.calculateStats(
-      activeWallet.address,
-      activeNetworkChainId,
-      tokens,
-    );
-    setStats(statsData);
+      const alloc = portfolioAnalyticsService.calculateAllocation(tokens);
+      const perfData =
+        portfolioAnalyticsService.calculatePerformance(tokens);
+      const days = timeRange === '7d' ? 7 : timeRange === '30d' ? 30 : 90;
 
-    // 성과 계산
-    const perfData = portfolioAnalyticsService.calculatePerformance(tokens);
-    setPerformance(perfData);
+      // 서로 의존하지 않는 저장소 조회는 병렬 실행
+      const [statsData, chart] = await Promise.all([
+        portfolioAnalyticsService.calculateStats(
+          address,
+          activeNetworkChainId,
+          tokens,
+        ),
+        portfolioAnalyticsService.getChartData(
+          address,
+          activeNetworkChainId,
+          days,
+        ),
+      ]);
 
-    // 차트 데이터
-    const days = timeRange === '7d' ? 7 : timeRange === '30d' ? 30 : 90;
-    const chart = await portfolioAnalyticsService.getChartData(
-      activeWallet.address,
-      activeNetworkChainId,
-      days,
-    );
-    setChartData(chart);
+      if (requestId !== analyticsRequestId.current) return;
+
+      setAllocation(alloc);
+      setStats(statsData);
+      setPerformance(perfData);
+      setChartData(chart);
+    } catch (error) {
+      if (requestId === analyticsRequestId.current) {
+        console.error('Failed to load portfolio analytics:', error);
+      }
+    }
   }, [tokens, activeWallet?.address, activeNetworkChainId, timeRange]);
 
   useEffect(() => {
     loadAnalytics();
+
+    return () => {
+      analyticsRequestId.current += 1;
+    };
   }, [loadAnalytics]);
 
-  const formatUSD = (value: number): string => {
-    if (value === 0) return '$0.00';
-    if (Math.abs(value) < 0.01) return value > 0 ? '< $0.01' : '> -$0.01';
-    return `$${value.toLocaleString('en-US', {
-      minimumFractionDigits: 2,
-      maximumFractionDigits: 2,
-    })}`;
-  };
-
-  const formatChange = (value: number, showSign: boolean = true): string => {
-    const sign = showSign && value > 0 ? '+' : '';
-    return `${sign}${value.toFixed(2)}%`;
-  };
-
-  const renderToken = ({ item }: { item: Token }) => (
+  const renderToken = useCallback(({ item }: { item: Token }) => (
     <TokenItem>
       {item.logoUrl ? (
         <TokenLogo source={{ uri: item.logoUrl }} />
@@ -156,7 +187,7 @@ function PortfolioScreen(): React.JSX.Element {
         </TokenRow>
       </TokenInfo>
     </TokenItem>
-  );
+  ), []);
 
   const renderOverview = () => (
     <ScrollView showsVerticalScrollIndicator={false}>
@@ -178,7 +209,7 @@ function PortfolioScreen(): React.JSX.Element {
 
       {/* 기간 선택 */}
       <TimeRangeContainer>
-        {(['7d', '30d', '90d'] as TimeRange[]).map(range => (
+        {TIME_RANGES.map(range => (
           <TimeRangeButton
             key={range}
             $active={timeRange === range}

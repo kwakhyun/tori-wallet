@@ -6,6 +6,7 @@ import React, { useCallback, useMemo } from 'react';
 import { FlatList, StyleSheet } from 'react-native';
 import styled, { useTheme } from 'styled-components/native';
 import { useNavigation } from '@react-navigation/native';
+import { useShallow } from 'zustand/react/shallow';
 import { useSwapStore, SwapHistoryItem } from '@/store/swapStore';
 import { useWalletStore } from '@/store/walletStore';
 
@@ -25,8 +26,18 @@ const ItemSeparator = () => <Separator />;
 function SwapHistoryScreen(): React.JSX.Element {
   const theme = useTheme();
   const navigation = useNavigation();
-  const { history, clearHistory } = useSwapStore();
-  const { activeNetworkChainId, networks } = useWalletStore();
+  const { history, clearHistory } = useSwapStore(
+    useShallow(state => ({
+      history: state.history,
+      clearHistory: state.clearHistory,
+    })),
+  );
+  const { activeNetworkChainId, networks } = useWalletStore(
+    useShallow(state => ({
+      activeNetworkChainId: state.activeNetworkChainId,
+      networks: state.networks,
+    })),
+  );
 
   const filteredHistory = useMemo(() => {
     return history.filter(item => item.chainId === activeNetworkChainId);

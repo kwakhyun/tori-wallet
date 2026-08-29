@@ -4,6 +4,7 @@
 
 import React from 'react';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
+import { useShallow } from 'zustand/react/shallow';
 
 import MainTabNavigator from './MainTabNavigator';
 import { AuthNavigator } from './AuthNavigator';
@@ -51,7 +52,12 @@ export type RootStackParamList = {
 const Stack = createNativeStackNavigator<RootStackParamList>();
 
 function RootNavigator(): React.JSX.Element {
-  const { hasWallet, isLocked } = useWalletStore();
+  const { hasWallet, isLocked } = useWalletStore(
+    useShallow(state => ({
+      hasWallet: state.hasWallet,
+      isLocked: state.isLocked,
+    })),
+  );
 
   return (
     <Stack.Navigator

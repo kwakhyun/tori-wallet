@@ -4,6 +4,7 @@
 
 import React, { useCallback, useState, useEffect, useRef } from 'react';
 import styled, { ThemeProvider } from 'styled-components/native';
+import { useShallow } from 'zustand/react/shallow';
 import { useTheme } from '@/hooks/useTheme';
 import {
   SafeAreaView,
@@ -49,10 +50,25 @@ function SettingsScreen(): React.JSX.Element {
     activeNetworkChainId,
     setActiveNetwork,
     lock,
-  } = useWalletStore();
+  } = useWalletStore(
+    useShallow(state => ({
+      wallets: state.wallets,
+      activeWalletIndex: state.activeWalletIndex,
+      networks: state.networks,
+      activeNetworkChainId: state.activeNetworkChainId,
+      setActiveNetwork: state.setActiveNetwork,
+      lock: state.lock,
+    })),
+  );
 
   // 테마 상태
-  const { themeMode, setThemeMode, activeTheme } = useThemeStore();
+  const { themeMode, setThemeMode, activeTheme } = useThemeStore(
+    useShallow(state => ({
+      themeMode: state.themeMode,
+      setThemeMode: state.setThemeMode,
+      activeTheme: state.activeTheme,
+    })),
+  );
 
   const activeWallet = wallets[activeWalletIndex];
   const activeNetwork = networks.find(n => n.chainId === activeNetworkChainId);

@@ -4,6 +4,7 @@
 
 import React, { useCallback, useEffect, useState } from 'react';
 import styled from 'styled-components/native';
+import { useShallow } from 'zustand/react/shallow';
 import { useTheme } from '@/hooks/useTheme';
 import {
   SafeAreaView,
@@ -26,7 +27,14 @@ import { ActivityScreenSkeleton } from '@/components/common/Skeleton';
 function ActivityScreen(): React.JSX.Element {
   const { theme, isDarkMode } = useTheme();
   const { wallets, activeWalletIndex, activeNetworkChainId, networks } =
-    useWalletStore();
+    useWalletStore(
+      useShallow(state => ({
+        wallets: state.wallets,
+        activeWalletIndex: state.activeWalletIndex,
+        activeNetworkChainId: state.activeNetworkChainId,
+        networks: state.networks,
+      })),
+    );
 
   const activeWallet = wallets[activeWalletIndex];
   const activeNetwork = networks.find(n => n.chainId === activeNetworkChainId);

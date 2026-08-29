@@ -4,6 +4,7 @@
 
 import React, { useState, useCallback, useRef, useEffect } from 'react';
 import styled from 'styled-components/native';
+import { useShallow } from 'zustand/react/shallow';
 import { useTheme } from '@/hooks/useTheme';
 import { SafeAreaView, StatusBar, Alert, Vibration } from 'react-native';
 import { CommonActions, useNavigation } from '@react-navigation/native';
@@ -35,7 +36,13 @@ function SetPinScreen(): React.JSX.Element {
   const [loadingMessage, setLoadingMessage] = useState('');
   const firstPin = useRef('');
 
-  const { addWallet, setHasWallet, unlock } = useWalletStore();
+  const { addWallet, setHasWallet, unlock } = useWalletStore(
+    useShallow(state => ({
+      addWallet: state.addWallet,
+      setHasWallet: state.setHasWallet,
+      unlock: state.unlock,
+    })),
+  );
 
   const handleComplete = useCallback(
     async (confirmedPin: string, firstPinValue: string) => {

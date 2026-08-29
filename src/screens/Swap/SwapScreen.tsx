@@ -3,6 +3,7 @@
  */
 
 import React, { useState, useCallback, useEffect, useMemo } from 'react';
+import { useShallow } from 'zustand/react/shallow';
 import {
   StatusBar,
   ScrollView,
@@ -42,7 +43,14 @@ function SwapScreen(): React.JSX.Element {
   const { isDarkMode } = useTheme();
   const navigation = useNavigation<NavigationProp>();
   const { wallets, activeWalletIndex, activeNetworkChainId, networks } =
-    useWalletStore();
+    useWalletStore(
+      useShallow(state => ({
+        wallets: state.wallets,
+        activeWalletIndex: state.activeWalletIndex,
+        activeNetworkChainId: state.activeNetworkChainId,
+        networks: state.networks,
+      })),
+    );
 
   const activeWallet = wallets[activeWalletIndex];
   const activeNetwork = networks.find(n => n.chainId === activeNetworkChainId);
@@ -79,8 +87,19 @@ function SwapScreen(): React.JSX.Element {
 
   // 스왑 스토어
   const { addHistoryItem, updateHistoryStatus, addFavoritePair, getTopPairs } =
-    useSwapStore();
-  const { requiresTransactionPin } = useSecurityStore();
+    useSwapStore(
+      useShallow(state => ({
+        addHistoryItem: state.addHistoryItem,
+        updateHistoryStatus: state.updateHistoryStatus,
+        addFavoritePair: state.addFavoritePair,
+        getTopPairs: state.getTopPairs,
+      })),
+    );
+  const { requiresTransactionPin } = useSecurityStore(
+    useShallow(state => ({
+      requiresTransactionPin: state.requiresTransactionPin,
+    })),
+  );
 
   // 잔액 조회 (네이티브 토큰)
   const { data: nativeBalance } = useBalance(

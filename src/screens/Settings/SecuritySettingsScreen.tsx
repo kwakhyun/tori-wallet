@@ -4,6 +4,7 @@
 
 import React, { useState, useCallback } from 'react';
 import styled from 'styled-components/native';
+import { useShallow } from 'zustand/react/shallow';
 import { useTheme } from '@/hooks/useTheme';
 import {
   SafeAreaView,
@@ -37,7 +38,18 @@ export function SecuritySettingsScreen() {
     setTransactionLimit,
     addressBook,
     clearRecentAddresses,
-  } = useSecurityStore();
+  } = useSecurityStore(
+    useShallow(state => ({
+      autoLockTimeout: state.autoLockTimeout,
+      setAutoLockTimeout: state.setAutoLockTimeout,
+      requirePinForTransaction: state.requirePinForTransaction,
+      setRequirePinForTransaction: state.setRequirePinForTransaction,
+      transactionLimit: state.transactionLimit,
+      setTransactionLimit: state.setTransactionLimit,
+      addressBook: state.addressBook,
+      clearRecentAddresses: state.clearRecentAddresses,
+    })),
+  );
 
   const [showAutoLockModal, setShowAutoLockModal] = useState(false);
   const [showLimitModal, setShowLimitModal] = useState(false);
