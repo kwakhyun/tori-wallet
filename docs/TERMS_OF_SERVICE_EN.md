@@ -1,6 +1,6 @@
 # Terms of Service
 
-**Effective Date: January 13, 2026**
+**Effective Date: August 30, 2026**
 
 ## Article 1 (Purpose)
 
@@ -26,7 +26,7 @@ The App provides the following services:
 
 ## Article 4 (Service Use)
 
-1. You may use the Service by agreeing to these Terms.
+1. You can review these Terms in the App. If you do not agree to them, you must not use the Service.
 2. No separate registration or personal information submission is required to use the Service.
 3. You are responsible for safely managing all information related to your wallet (mnemonic, PIN, etc.).
 
@@ -42,8 +42,9 @@ Users must comply with the following:
 ## Article 6 (Asset Management Responsibility)
 
 1. **Non-Custodial Wallet**: The App is a non-custodial wallet, meaning only you have control over your assets.
-2. **No Recovery**: If you lose your mnemonic, no one, including the App operator, can recover your wallet.
-3. **Self-Responsibility**: You are solely responsible for managing your mnemonic, PIN, and verifying transactions.
+2. **Software Hot Wallet**: The App stores keys and signs on a network-connected mobile operating system. It is not a hardware cold wallet.
+3. **No Recovery**: If you lose your mnemonic, no one, including the App operator, can recover your wallet.
+4. **Self-Responsibility**: You are solely responsible for managing your mnemonic, PIN, and verifying transactions.
 
 ## Article 7 (Disclaimer)
 
@@ -87,4 +88,4 @@ For service-related inquiries, please contact us at:
 ---
 
 **Tori Wallet**  
-Last Updated: January 13, 2026
+Last Updated: August 30, 2026

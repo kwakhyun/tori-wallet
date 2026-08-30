@@ -3,7 +3,7 @@
  * MSW를 사용한 API 모킹 테스트
  */
 
-import { server } from '../mocks/server';
+import { server, setupMSW } from '../mocks/server';
 import { http, HttpResponse } from 'msw';
 
 // 기본 URL 상수
@@ -70,14 +70,7 @@ interface PriceResponse {
 }
 
 describe('MSW Integration', () => {
-  // 모든 테스트 전 서버 시작
-  beforeAll(() => server.listen());
-
-  // 각 테스트 후 핸들러 리셋
-  afterEach(() => server.resetHandlers());
-
-  // 모든 테스트 후 서버 종료
-  afterAll(() => server.close());
+  setupMSW();
 
   describe('Balance API', () => {
     it('should return mock balance', async () => {

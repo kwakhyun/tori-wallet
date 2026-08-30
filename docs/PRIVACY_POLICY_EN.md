@@ -1,71 +1,69 @@
 # Privacy Policy
 
-**Effective Date: January 13, 2026**
+**Effective Date: August 30, 2026**
 
 Tori Wallet ("App") respects your privacy and is committed to protecting your personal data in compliance with applicable laws and regulations.
 
 ## 1. Information We Collect
 
-### Automatically Collected Information
+### Information the App Does Not Automatically Collect
 
-- **Device Information**: Device model, operating system version
-- **App Usage Data**: Crash logs, performance metrics
+- No advertising, user analytics, remote crash-reporting, or performance-monitoring SDK is currently integrated.
+- The App does not automatically transmit device models, crash logs, or performance metrics to the operator. Development and production logs remain on the device or in the developer console.
 
-### Information We Do NOT Collect
+### Information Sent Externally When You Use a Feature
 
-- **Mnemonic (Recovery Phrase)**: Stored only on your device in encrypted form and never transmitted externally.
-- **Private Keys**: Stored only in your device's secure storage.
-- **Transaction History**: Publicly recorded on the blockchain; not stored on our servers.
+- **Support Email**: When you choose Contact Us, the App adds the app version and operating-system type to an email draft. This information is sent only if you send the email.
+- **Blockchain Features**: Wallet addresses and request data may be sent to RPC providers, blockchain explorer APIs, or public blockchains for balance queries, transaction queries, and transfers.
+- **WalletConnect**: When connecting to a dApp, your wallet address, approved chains and methods, and session metadata are sent to the Reown network and that dApp.
+- **Swap and Market Data**: Requests may send token details, amounts, and the taker address to 0x or the production proxy. Market prices are retrieved from CoinGecko with CoinCap as a fallback.
+
+### Information Stored on Your Device
+
+- The mnemonic is encrypted with the PIN and stored in EncryptedStorage. A device-only Keychain/Keystore copy is added only if you enable biometric authentication.
+- Private keys are not stored separately. They are derived from the mnemonic during an unlocked signing session and removed from the session when the wallet locks or the App enters the background.
+- Public wallet addresses, settings, address-book entries, transaction caches, and WalletConnect records may be stored locally in AsyncStorage and Realm.
 
 ## 2. How We Use Your Information
 
-- To provide and improve app services
-- To analyze errors and enhance service stability
+- To provide app features
+- To analyze local errors and improve stability
 - To respond to user inquiries
 
 ## 3. Data Retention and Deletion
 
-- **Retention Period**: Until app deletion
-- **Deletion Method**: All data is automatically deleted when the app is uninstalled.
+- **In-App Reset**: Reset Wallet attempts to disconnect WalletConnect sessions and delete the encrypted wallet storage, Realm records, and persisted state. The App reports an error if cleanup is incomplete.
+- **App Uninstallation**: Regular app data is removed according to operating-system policy, but iOS Keychain data may remain after uninstallation. If complete deletion is required, use Reset Wallet before uninstalling the App.
+- Requests sent to third-party services and on-chain transactions cannot be deleted by the App and remain subject to each service's policy and blockchain properties.
 
 ## 4. Third-Party Sharing
 
-We do not share your personal information with third parties, except:
+The operator does not sell user data or store it on a separate account server. When you use a feature, information required to provide it may be sent to:
 
-- When required by law or requested by law enforcement
-- When you have given prior consent
+- Public blockchains, RPC providers, and blockchain explorer APIs
+- The Reown WalletConnect relay and dApps you connect
+- The 0x Swap API or the production swap proxy
+- CoinGecko and CoinCap
+- The email service you select
 
 ## 5. Third-Party Services
 
-The app may use the following third-party services:
-
-### Blockchain Networks
-
-- Ethereum, Polygon, Arbitrum, Optimism, Base, and other public blockchains
-- Transactions are publicly recorded on these blockchains.
-
-### WalletConnect
-
-- dApp connection service
-- Your wallet address is shared with dApps when connected.
-
-### External APIs
-
-- CoinGecko (price information)
-- Blockchain RPC providers
+External services may process network metadata such as your IP address, and their own privacy policies apply. Transactions recorded on public blockchains such as Ethereum, Polygon, Arbitrum, Optimism, and Base are public and cannot be reversed or deleted.
 
 ## 6. Your Rights
 
 You have the following rights:
 
-- **Data Deletion**: Delete all data via "Reset Wallet" in app or by uninstalling the app
-- **Data Access**: All stored data is on your device and viewable within the app
+- **Local Data Deletion**: Use Reset Wallet in the App
+- **Data Access**: View wallet addresses, address-book entries, transactions, connected sessions, and primary settings in the App
+- **Questions**: Contact us at the email address below
 
 ## 7. Security
 
-- Mnemonic and private keys are encrypted and stored in iOS Keychain / Android Keystore
+- The mnemonic is stored in a PIN-encrypted vault. A biometric copy uses a device-only Keychain/Keystore policy only when enabled by the user.
+- Private keys are not stored separately and are derived only during an unlocked session.
 - App access is protected by PIN and biometric authentication
-- All network communications are encrypted via HTTPS
+- External-service communications use HTTPS or WSS encrypted channels
 
 ## 8. Children's Privacy
 
@@ -85,4 +83,4 @@ For privacy-related inquiries, please contact us at:
 ---
 
 **Tori Wallet**  
-Last Updated: January 13, 2026
+Last Updated: August 30, 2026

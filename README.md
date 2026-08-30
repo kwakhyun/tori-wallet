@@ -3,8 +3,8 @@
 [![React Native](https://img.shields.io/badge/React%20Native-0.83-61DAFB?logo=react)](https://reactnative.dev/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.8-3178C6?logo=typescript)](https://www.typescriptlang.org/)
 [![Viem](https://img.shields.io/badge/Viem-2.55-646CFF)](https://viem.sh/)
-[![Tests](https://img.shields.io/badge/Tests-1292%20passed-brightgreen)](/)
-[![Coverage](https://img.shields.io/badge/Services-89.14%25-brightgreen)](/)
+[![Tests](https://img.shields.io/badge/Tests-1339%20passed-brightgreen)](/)
+[![Coverage](https://img.shields.io/badge/Services-89.22%25-brightgreen)](/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 > **React Native + TypeScript 기반 셀프 커스터디 Web3 모바일 핫월렛**
@@ -57,14 +57,14 @@ cp .env.example .env
 
 `.env` 파일을 생성하고 다음 값들을 설정하세요:
 
-| 변수                       | 필수 | 용도                      | 발급처                                                 |
-| -------------------------- | :--: | ------------------------- | ------------------------------------------------------ |
-| `WALLETCONNECT_PROJECT_ID` |  ⚠️  | dApp 연결                 | [WalletConnect Cloud](https://cloud.walletconnect.com) |
-| `SWAP_API_BASE_URL`        | 운영 | 0x 키를 보관하는 스왑 프록시 | 자체 백엔드 |
-| `ALCHEMY_API_KEY`          | 권장 | 안정적인 RPC              | [Alchemy](https://dashboard.alchemy.com)               |
-| `COINGECKO_API_KEY`        | 선택 | 가격 조회 Rate Limit 상향 | [CoinGecko](https://www.coingecko.com/en/api)          |
+| 변수                       | 필수 | 용도                         | 발급처                                                 |
+| -------------------------- | :--: | ---------------------------- | ------------------------------------------------------ |
+| `WALLETCONNECT_PROJECT_ID` |  ⚠️  | dApp 연결                    | [WalletConnect Cloud](https://cloud.walletconnect.com) |
+| `SWAP_API_BASE_URL`        | 운영 | 0x 키를 보관하는 스왑 프록시 | 자체 백엔드                                            |
 
 > ⚠️ 모바일 앱의 환경 변수는 비밀이 아닙니다. 0x API 키는 반드시 서버에만 보관하세요. 개발 빌드는 키 없이 0x를 직접 호출하며, 운영 빌드는 `SWAP_API_BASE_URL`이 없으면 스왑을 비활성화합니다.
+
+> RPC와 시세 조회는 현재 코드에 정의된 공개 엔드포인트를 사용합니다. 별도 RPC 또는 CoinGecko API 키 설정은 아직 지원하지 않습니다.
 
 ```bash
 # 실행
@@ -124,7 +124,7 @@ yarn android # Android
 ├─────────────────────────────────────────────────────────────┤
 │  State Management                                            │
 │  ├── Zustand: 클라이언트 상태 (지갑, 설정)                    │
-│  └── React Query: 서버 상태 (잔액, 가스, TX)                 │
+│  └── React Query: 서버 상태 (잔액, 토큰, TX)                 │
 ├─────────────────────────────────────────────────────────────┤
 │  Local Storage                                               │
 │  ├── Realm: 주소록, TX 캐시, 토큰 설정, WC 로그              │
@@ -151,7 +151,7 @@ src/
 ├── hooks/            # useBalance, useWallet, useAppState 등
 ├── navigation/       # React Navigation 설정
 ├── realm/            # Realm 로컬 데이터베이스
-│   ├── schemas/      # 스키마 정의 (6개)
+│   ├── schemas/      # 스키마 정의 (8개)
 │   ├── services/     # CRUD 서비스
 │   └── hooks/        # React 훅
 ├── screens/          # 화면 컴포넌트 (15+)
@@ -181,18 +181,18 @@ src/
 | **로컬 DB**       | Realm                                     |
 | **스타일링**      | styled-components/native                  |
 | **네비게이션**    | React Navigation 7                        |
-| **보안 저장소**   | react-native-keychain                     |
+| **보안 저장소**   | EncryptedStorage + react-native-keychain  |
 | **테스트**        | Jest, React Testing Library, Detox        |
 | **패키지 매니저** | Yarn                                      |
 
 ### 💡 기술 선택 이유
 
-| 기술            | 선택 이유                                                           |
-| --------------- | ------------------------------------------------------------------- |
-| **Viem**        | ethers.js 대비 번들 크기 50% 감소, 우수한 TypeScript 지원, 모던 API |
-| **Zustand**     | Redux 대비 보일러플레이트 최소화, 직관적 API, 2KB 번들 크기         |
-| **React Query** | 서버 상태 캐싱 자동화, 중복 요청 제거, stale-while-revalidate 전략  |
-| **Realm**       | React Native 통합 우수, 실시간 동기화, 오프라인 퍼스트 지원         |
+| 기술            | 선택 이유                                                       |
+| --------------- | --------------------------------------------------------------- |
+| **Viem**        | 타입 안전한 체인 API와 필요한 함수 단위의 모듈 임포트 지원      |
+| **Zustand**     | 작은 상태 모델과 선택 구독으로 화면별 의존 상태를 명확하게 관리 |
+| **React Query** | 서버 상태 캐싱, 재시도, 네트워크와 앱 포커스 상태 연동          |
+| **Realm**       | React Native 로컬 객체 DB, 최근 데이터 캐시와 반응형 조회 지원  |
 
 ---
 
@@ -218,10 +218,10 @@ src/
 | 상황              | 대응 전략                                 |
 | ----------------- | ----------------------------------------- |
 | **네트워크 오류** | React Query 지수 백오프 재시도 (최대 3회) |
-| **API 지연**      | 로딩 상태 표시 + 타임아웃 처리            |
-| **오프라인**      | Realm 캐시 데이터 표시 + 동기화 상태 안내 |
-| **Rate Limit**    | 요청 큐잉 + 백오프 재시도                 |
-| **트랜잭션 실패** | 상세 에러 메시지 + 재시도 가이드          |
+| **RPC 지연**      | 주요 화면 로딩 상태 + RPC 30초 타임아웃   |
+| **오프라인**      | 거래 화면의 최근 Realm 캐시 표시          |
+| **시세 제한**     | 요청 간격 제어 + CoinCap 대체 경로        |
+| **트랜잭션 실패** | 사용자 오류 메시지 + 로컬 상태 갱신       |
 
 ### 에러 처리
 
@@ -229,23 +229,25 @@ src/
 - **체계적인 에러 코드**: 사용자 친화적 한국어 메시지
 - **에러 로깅**: 디버깅을 위한 상세 로그 기록
 
-### 오프라인 UX (Realm 기반)
+### 로컬 캐시 범위와 제한
 
-- 잔액 스냅샷: 마지막 동기화 잔액 로컬 저장
-- 토큰 리스트 캐싱: 네트워크 없이도 토큰 정보 표시
-- 펜딩 트랜잭션 추적: 로컬에서 생성한 TX 상태 자동 추적
+- 거래 내역: API 결과를 Realm에 저장하고 조회 실패 또는 빈 응답 시 최근 캐시 표시
+- 주소록, WalletConnect 기록, 사용자 설정: Realm 기반 로컬 조회 지원
+- 전송과 스왑: 제출한 거래를 로컬에 기록하고 앱이 실행 중인 동안 영수증 결과를 반영
+- 현재 잔액과 토큰 가격은 네트워크 조회가 필요합니다. `BalanceSnapshot`과 `TokenList` 저장 API는 있지만 화면의 오프라인 대체 데이터로 연결되어 있지 않습니다.
 
 ---
 
 ## ⚡ 성능 최적화
 
-| 최적화 기법         | 적용 범위   | 효과                   |
-| ------------------- | ----------- | ---------------------- |
-| useCallback/useMemo | 전체 화면   | 불필요한 리렌더링 방지 |
-| FlatList 가상화     | 리스트 화면 | 메모리 효율화          |
-| React Query 캐싱    | API 전체    | 네트워크 요청 감소     |
-| Realm 캐싱          | 6개 서비스  | 오프라인 UX            |
-| 지수 백오프 재시도  | API 에러    | 서버 부하 분산         |
+| 최적화 기법         | 적용 범위                         | 효과                             |
+| ------------------- | --------------------------------- | -------------------------------- |
+| Zustand 선택 구독   | 19개 화면, 컴포넌트, 공용 훅      | 무관한 상태 변경의 리렌더링 차단 |
+| useCallback/useMemo | 목록 렌더러와 비용이 큰 계산      | 참조 안정화와 계산 중복 감소     |
+| FlatList 가상화     | 리스트 화면 6개                   | 화면 밖 항목 렌더링 비용 절감    |
+| React Query 캐싱    | 잔액, 토큰, 거래, 포트폴리오 조회 | 중복 네트워크 요청 감소          |
+| Realm 캐싱          | 6개 로컬 데이터 서비스            | 오프라인 조회 지원               |
+| 지수 백오프 재시도  | 재시도 가능한 쿼리와 뮤테이션     | 일시적 네트워크 오류 대응        |
 
 ---
 
@@ -262,14 +264,14 @@ yarn e2e:android       # E2E 테스트 (Android)
 
 ### 테스트 현황
 
-| 항목              | 2026-08-12 검증 결과                     |
-| ----------------- | ---------------------------------------- |
-| **테스트 스위트** | 88개 통과                               |
-| **테스트 케이스** | 1,292개 통과                            |
-| **정적 검사**     | TypeScript, ESLint 통과                 |
-| **의존성 검사**   | OSV 1,229개 잠금 패키지, 조치 대상 0개 |
-| **네이티브 빌드** | Android Debug / iOS Simulator 통과      |
-| **E2E 테스트**    | 이번 보안 개선에서는 재실행하지 않음    |
+| 항목              | 검증 결과                              | 기준일     |
+| ----------------- | -------------------------------------- | ---------- |
+| **테스트 스위트** | 단위·통합 테스트 91개 통과             | 2026-08-30 |
+| **테스트 케이스** | 1,339개 통과                           | 2026-08-30 |
+| **정적 검사**     | TypeScript, ESLint 통과                | 2026-08-30 |
+| **의존성 검사**   | OSV 1,229개 잠금 패키지, 조치 대상 0개 | 2026-08-14 |
+| **네이티브 빌드** | Android Debug / iOS Simulator 통과     | 2026-08-14 |
+| **E2E 테스트**    | 이번 보안 개선 이후 재실행하지 않음    | 미검증     |
 
 > OSV의 `image-size@1.2.1` 고위험 DoS 2건은 업스트림 수정 버전이 없어 로컬 패치와 종료 회귀 테스트로 완화했으며, 예외는 2026-10-01에 만료됩니다. 만료 전 업스트림 릴리스로 교체해야 합니다.
 
@@ -277,10 +279,10 @@ yarn e2e:android       # E2E 테스트 (Android)
 
 | 레이어     | Statements | Branches | Functions | Lines  |
 | ---------- | ---------- | -------- | --------- | ------ |
-| **전체**   | 61.98%     | 50.51%   | 57.37%    | 62.57% |
-| **서비스** | 89.14%     | 77.54%   | 97.10%    | 90.64% |
+| **전체**   | 60.85%     | 49.04%   | 55.41%    | 61.38% |
+| **서비스** | 89.22%     | 77.68%   | 97.10%    | 90.64% |
 | **스토어** | 93.62%     | 77.36%   | 95.12%    | 93.50% |
-| **유틸**   | 91.25%     | 86.70%   | 93.05%    | 92.21% |
+| **유틸**   | 91.25%     | 86.71%   | 93.06%    | 92.21% |
 
 ---
 
@@ -293,8 +295,6 @@ cp .env.example .env
 ```env
 WALLETCONNECT_PROJECT_ID=your_project_id
 SWAP_API_BASE_URL=https://your-swap-proxy.example
-ALCHEMY_API_KEY=your_alchemy_key
-COINGECKO_API_KEY=optional_key
 ```
 
 > 운영 빌드에서 `SWAP_API_BASE_URL`은 필수이며 0x API 키는 프록시 서버에만 저장합니다.
@@ -303,18 +303,19 @@ COINGECKO_API_KEY=optional_key
 
 ## 📝 스크립트
 
-| Script               | Description             |
-| -------------------- | ----------------------- |
-| `yarn start`         | Metro 개발 서버         |
-| `yarn ios`           | iOS 시뮬레이터 실행     |
-| `yarn android`       | Android 에뮬레이터 실행 |
-| `yarn test`          | Jest 테스트             |
-| `yarn test:coverage` | 커버리지 리포트         |
-| `yarn lint`          | ESLint 검사             |
-| `yarn typecheck`     | TypeScript 타입 검사    |
-| `yarn security:audit` | OSV 잠금 의존성 검사   |
-| `yarn e2e:build:ios` | E2E용 iOS 앱 빌드       |
-| `yarn e2e:ios`       | E2E 테스트 실행 (iOS)   |
+| Script                | Description                |
+| --------------------- | -------------------------- |
+| `yarn start`          | Metro 개발 서버            |
+| `yarn ios`            | iOS 시뮬레이터 실행        |
+| `yarn android`        | Android 에뮬레이터 실행    |
+| `yarn test`           | Jest 테스트                |
+| `yarn test:ci`        | 단위·통합 테스트 일괄 실행 |
+| `yarn test:coverage`  | 커버리지 리포트            |
+| `yarn lint`           | ESLint 검사                |
+| `yarn typecheck`      | TypeScript 타입 검사       |
+| `yarn security:audit` | OSV 잠금 의존성 검사       |
+| `yarn e2e:build:ios`  | E2E용 iOS 앱 빌드          |
+| `yarn e2e:ios`        | E2E 테스트 실행 (iOS)      |
 
 ---
 

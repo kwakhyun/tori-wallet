@@ -10,9 +10,11 @@ jest.setTimeout(60000);
 global.nativeCallSyncHook = jest.fn();
 
 // MSW를 위한 폴리필 (Node 18 이상에서 필요)
+import { performance } from 'perf_hooks';
 import { TextEncoder, TextDecoder } from 'util';
 global.TextEncoder = TextEncoder;
 global.TextDecoder = TextDecoder;
+global.performance = performance;
 
 // fetch polyfill for MSW (Jest 환경)
 import { fetch, Headers, Request, Response } from 'undici';
@@ -40,8 +42,6 @@ jest.mock('react-native-keychain', () => ({
 jest.mock('react-native-config', () => ({
   WALLETCONNECT_PROJECT_ID: 'test_project_id',
   SWAP_API_BASE_URL: '',
-  ALCHEMY_API_KEY: 'test_alchemy_key',
-  COINGECKO_API_KEY: 'test_coingecko_key',
 }));
 
 jest.mock('react-native-bootsplash', () => ({

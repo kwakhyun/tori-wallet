@@ -1,114 +1,107 @@
 # Tori Wallet 테스트 가이드
 
-## 최신 React Native Testing Library 패턴
+이 문서는 현재 Jest와 React Native Testing Library 설정을 기준으로 테스트 작성 및 실행 방법을 설명합니다.
 
-### 1. 기본 테스트 구조
+## 실행 명령
+
+```bash
+yarn test             # 변경 중 대화형 실행
+yarn test:ci          # CI와 최종 확인용 단일 프로세스 실행
+yarn test:coverage    # 전체 커버리지 측정
+```
+
+`jest.config.js`는 단위, 화면, 서비스, Realm, 통합 테스트를 모두 포함합니다. Detox E2E 테스트는 별도 `yarn e2e:*` 명령으로 실행합니다.
+
+## React Native Testing Library 패턴
+
+### 기본 구조
 
 ```tsx
-import { render, screen, fireEvent, waitFor } from '../test-utils';
+import { fireEvent, render, screen } from '../test-utils';
 import { MyComponent } from '@/components/MyComponent';
 
 describe('MyComponent', () => {
-  // 테스트 전 설정
   beforeEach(() => {
     jest.clearAllMocks();
   });
 
-  it('should render correctly', () => {
-    render(<MyComponent />);
+  it('전송 동작을 실행한다', () => {
+    const onSubmit = jest.fn();
+    render(<MyComponent onSubmit={onSubmit} />);
 
-    // screen 객체 사용 권장 (최신 패턴)
-    expect(screen.getByTestId('my-component')).toBeTruthy();
+    fireEvent.press(screen.getByRole('button', { name: '전송' }));
+
+    expect(onSubmit).toHaveBeenCalledTimes(1);
   });
 });
 ```
 
-### 2. 권장 쿼리 우선순위
+### 쿼리 우선순위
 
-1. **getByTestId** - 테스트 안정성 최고
-2. **getByText** - 사용자에게 보이는 텍스트
-3. **getByRole** - 접근성 기반 (버튼, 링크 등)
-4. **getByPlaceholderText** - 입력 필드
+사용자가 화면을 인식하고 조작하는 방식에 가까운 쿼리를 먼저 사용합니다.
+
+1. `getByRole`과 접근 가능한 이름
+2. `getByLabelText`
+3. `getByPlaceholderText`
+4. `getByText`
+5. `getByDisplayValue`
+6. 다른 방법으로 안정적으로 찾기 어려울 때 `getByTestId`
 
 ```tsx
-// ✅ 권장: testID 사용
-screen.getByTestId('submit-button');
+// 권장: 역할과 접근 가능한 이름으로 동작을 표현
+screen.getByRole('button', { name: '전송' });
 
-// ✅ 권장: 사용자에게 보이는 텍스트
-screen.getByText('전송');
+// 권장: 입력 필드의 접근성 레이블 사용
+screen.getByLabelText('받는 주소');
 
-// ⚠️ 피하기: 구현 세부사항에 의존
+// 허용: 사용자에게 보이는 고유 텍스트
+screen.getByText('1.5 ETH');
+
+// 마지막 수단: 사용자 의미를 표현할 쿼리가 없는 내부 요소
+screen.getByTestId('line-chart-canvas');
+
+// 피하기: 스타일이나 구현 세부사항에 의존
 screen.getByProps({ style: { color: 'red' } });
 ```
 
-### 3. 비동기 테스트 패턴
+`testID`는 유용하지만 접근성 품질을 대신하지 않습니다. 버튼과 입력에는 적절한 `accessibilityRole`과 `accessibilityLabel`을 함께 제공합니다.
+
+### 비동기 테스트
+
+요소가 나타나는 시점을 기다릴 때는 `findBy*`를 우선 사용하고, 여러 단언이나 요소가 사라지는 조건에는 `waitFor`를 사용합니다.
 
 ```tsx
-// waitFor 사용
-it('should load data', async () => {
-  render(<DataComponent />);
-
-  // 로딩 상태 확인
-  expect(screen.getByTestId('loading')).toBeTruthy();
-
-  // 데이터 로드 대기
-  await waitFor(() => {
-    expect(screen.getByTestId('data-content')).toBeTruthy();
-  });
-});
-
-// findBy 사용 (waitFor + getBy 조합)
-it('should show result', async () => {
+it('조회 결과를 표시한다', async () => {
   render(<SearchComponent />);
 
-  fireEvent.press(screen.getByTestId('search-button'));
+  fireEvent.changeText(screen.getByLabelText('코인 검색'), 'ethereum');
 
-  // findBy는 자동으로 대기함
-  const result = await screen.findByTestId('search-result');
-  expect(result).toBeTruthy();
+  expect(await screen.findByText('Ethereum')).toBeTruthy();
+});
+
+it('로딩 상태를 종료한다', async () => {
+  render(<DataComponent />);
+
+  await waitFor(() => {
+    expect(screen.queryByText('불러오는 중')).toBeNull();
+  });
 });
 ```
 
-### 4. 사용자 이벤트 시뮬레이션
-
-```tsx
-import { fireEvent, render, screen } from '../test-utils';
-
-it('should handle button press', () => {
-  const onPress = jest.fn();
-  render(<Button onPress={onPress} testID="my-button" />);
-
-  fireEvent.press(screen.getByTestId('my-button'));
-
-  expect(onPress).toHaveBeenCalledTimes(1);
-});
-
-it('should handle text input', () => {
-  render(<TextInput testID="my-input" />);
-
-  fireEvent.changeText(screen.getByTestId('my-input'), 'Hello');
-
-  expect(screen.getByTestId('my-input').props.value).toBe('Hello');
-});
-```
-
-### 5. Mock 패턴
-
-#### 서비스 모킹
+### 서비스와 내비게이션 모킹
 
 ```tsx
 jest.mock('@/services/walletService', () => ({
   walletService: {
-    getBalance: jest.fn().mockResolvedValue('1.5'),
-    sendTransaction: jest.fn().mockResolvedValue({ hash: '0x123' }),
+    validateMnemonic: jest.fn().mockReturnValue(true),
+    retrieveMnemonicWithPin: jest.fn().mockResolvedValue('test mnemonic'),
   },
 }));
 ```
 
-#### Navigation 모킹
-
 ```tsx
 const mockNavigate = jest.fn();
+
 jest.mock('@react-navigation/native', () => ({
   ...jest.requireActual('@react-navigation/native'),
   useNavigation: () => ({
@@ -118,106 +111,104 @@ jest.mock('@react-navigation/native', () => ({
 }));
 ```
 
-### 6. MSW를 사용한 API 모킹
+## MSW 통합 테스트
+
+`__tests__/mocks/server.ts`는 MSW의 Node 서버를 실제로 시작하고, `__tests__/mocks/handlers.ts`의 기본 핸들러를 등록합니다. 통합 테스트도 일반 Jest 실행에 포함됩니다.
 
 ```tsx
-import { server } from '../mocks/server';
 import { http, HttpResponse } from 'msw';
+import { server, setupMSW } from '../mocks/server';
 
-describe('API Integration', () => {
-  beforeAll(() => server.listen());
-  afterEach(() => server.resetHandlers());
-  afterAll(() => server.close());
+describe('API integration', () => {
+  setupMSW();
 
-  it('should fetch balance', async () => {
-    render(<BalanceComponent />);
-
-    await waitFor(() => {
-      expect(screen.getByText('1.5 ETH')).toBeTruthy();
-    });
-  });
-
-  it('should handle API error', async () => {
-    // 에러 시나리오 오버라이드
+  it('서버 오류를 처리한다', async () => {
     server.use(
-      http.get('*/api/balance', () =>
+      http.get('*/api/v1/balance/:address', () =>
         HttpResponse.json({ error: 'Network error' }, { status: 500 }),
       ),
     );
 
-    render(<BalanceComponent />);
+    const response = await fetch('http://localhost:3000/api/v1/balance/0x123');
 
-    await waitFor(() => {
-      expect(screen.getByTestId('error-message')).toBeTruthy();
-    });
+    expect(response.status).toBe(500);
   });
 });
 ```
 
-### 7. 스냅샷 테스트
+등록되지 않은 네트워크 요청은 `setupMSW()`에서 오류로 처리합니다. 테스트마다 `server.resetHandlers()`가 실행되므로 시나리오별 핸들러가 다른 테스트로 새지 않습니다.
+
+## 스냅샷과 접근성
+
+스냅샷은 넓은 화면 전체보다 변경 의도가 명확한 작은 컴포넌트에 사용합니다.
 
 ```tsx
-it('should match snapshot', () => {
-  const { toJSON } = render(<MyComponent />);
+it('정해진 마크업을 유지한다', () => {
+  const { toJSON } = render(<Logo />);
   expect(toJSON()).toMatchSnapshot();
 });
 ```
 
-### 8. 접근성 테스트
+접근성 테스트는 속성 존재뿐 아니라 실제 사용자 쿼리가 성공하는지도 확인합니다.
 
 ```tsx
-it('should be accessible', () => {
-  render(<Button title="Submit" testID="submit-button" />);
+it('접근 가능한 전송 버튼을 제공한다', () => {
+  render(
+    <Pressable accessibilityRole="button" accessibilityLabel="전송">
+      <Text>전송</Text>
+    </Pressable>,
+  );
 
-  const button = screen.getByTestId('submit-button');
-
-  // 접근성 레이블 확인
-  expect(button.props.accessibilityLabel).toBeDefined();
-  expect(button.props.accessibilityRole).toBe('button');
+  expect(screen.getByRole('button', { name: '전송' })).toBeTruthy();
 });
 ```
 
-### 9. 커버리지 목표
+## 커버리지 기준과 현재 상태
 
-| 지표       | 목표 | 현재 |
-| ---------- | ---- | ---- |
-| Statements | 80%  | -    |
-| Branches   | 70%  | -    |
-| Functions  | 75%  | -    |
-| Lines      | 80%  | -    |
+`jest.config.js`의 임계값은 회귀 방지를 위한 최소 기준입니다. 현재 수치는 2026년 8월 30일 `yarn test:coverage` 실행 결과입니다.
 
-### 10. testID 네이밍 컨벤션
+| 범위           | Statements | Branches | Functions |  Lines |
+| -------------- | ---------: | -------: | --------: | -----: |
+| 전역 최소 기준 |        53% |      38% |       48% |    53% |
+| 전체 현재      |     60.85% |   49.04% |    55.41% | 61.38% |
+| 서비스 현재    |     89.22% |   77.68% |    97.10% | 90.64% |
+| 스토어 현재    |     93.62% |   77.36% |    95.12% | 93.50% |
+| 유틸리티 현재  |     91.25% |   86.71% |    93.06% | 92.21% |
 
-```
+서비스와 스토어에는 전역보다 높은 별도 최소 기준이 적용됩니다. Statements와 Lines는 75%, Branches는 55%, Functions는 80%입니다.
+
+같은 날짜 기준으로 91개 테스트 스위트, 1,339개 테스트와 스냅샷 2개가 통과했습니다.
+
+## `testID` 네이밍
+
+역할이나 레이블 쿼리로 표현하기 어려운 요소에만 다음 형식을 사용합니다.
+
+```text
 [screen/component]-[element]-[action/state]
 
-예시:
-- home-screen
-- home-balance-value
-- home-send-button
-- send-address-input
-- send-amount-input
-- pin-confirm-keypad
-- error-boundary-retry-button
+home-balance-value
+send-address-input
+pin-confirm-keypad
+error-boundary-retry-button
 ```
 
-## 파일 구조
+## 테스트 디렉터리
 
-```
+```text
 __tests__/
-├── mocks/
-│   ├── handlers.ts      # MSW 핸들러
-│   └── server.ts        # MSW 서버 설정
-├── screens/
-│   └── HomeScreen.test.tsx
-├── components/
-│   └── Button.test.tsx
-├── hooks/
-│   └── useBalance.test.tsx
-├── integration/
-│   ├── apiMocking.test.ts
-│   └── errorHandling.test.tsx
-├── store/
-│   └── walletStore.test.ts
-└── test-utils.tsx       # 테스트 유틸리티
+├── app/              # 앱 루트
+├── components/       # 공통 컴포넌트
+├── config/           # QueryClient 등 설정
+├── database/         # 로컬 DB 어댑터
+├── hooks/            # React 훅
+├── integration/      # MSW와 핵심 흐름 통합 테스트
+├── mocks/            # MSW 핸들러와 서버
+├── navigation/       # 내비게이션
+├── realm/            # Realm 스키마, 서비스, 훅
+├── screens/          # 화면
+├── security/         # 보안 관련 회귀 테스트
+├── services/         # 비즈니스 서비스
+├── store/            # Zustand 스토어
+├── utils/            # 유틸리티
+└── test-utils.tsx    # 공통 렌더링 유틸리티
 ```

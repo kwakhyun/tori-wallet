@@ -10,8 +10,9 @@ module.exports = {
   },
   testTimeout: 15000,
   maxWorkers: 2,
-  forceExit: true,
   moduleNameMapper: {
+    // React Native export condition은 msw/node를 숨기므로 Jest에서는 Node 빌드를 직접 사용
+    '^msw/node$': '<rootDir>/node_modules/msw/lib/node/index.js',
     // NativeAnimatedHelper mock - RN 0.83+ 경로 변경 대응
     '^react-native/Libraries/Animated/NativeAnimatedHelper$':
       '<rootDir>/__mocks__/NativeAnimatedHelper.js',
@@ -32,13 +33,14 @@ module.exports = {
     '**/__tests__/**/*.test.{ts,tsx}',
     '**/__tests__/**/*.spec.{ts,tsx}',
   ],
-  testPathIgnorePatterns: [
-    '<rootDir>/node_modules/',
-    '<rootDir>/e2e/',
-    '<rootDir>/__tests__/integration/',
-  ],
+  testPathIgnorePatterns: ['<rootDir>/node_modules/', '<rootDir>/e2e/'],
+  transform: {
+    '^.+\\.(js|mjs|ts|tsx)$': 'babel-jest',
+    '^.+\\.(bmp|gif|jpg|jpeg|mp4|png|psd|svg|webp)$':
+      '<rootDir>/node_modules/react-native/jest/assetFileTransformer.js',
+  },
   transformIgnorePatterns: [
-    'node_modules/(?!(react-native|@react-native|@react-navigation|react-native-.*|@react-native-community|@walletconnect|msw|@mswjs|@open-draft|outvariant|strict-event-emitter|until-async|headers-polyfill)/)',
+    'node_modules/(?!(react-native|@react-native|@react-navigation|react-native-.*|@react-native-community|@walletconnect|msw|@mswjs|@open-draft|outvariant|strict-event-emitter|until-async|headers-polyfill|rettime)/)',
   ],
   collectCoverageFrom: [
     'src/**/*.{ts,tsx}',

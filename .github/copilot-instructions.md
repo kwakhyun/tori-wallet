@@ -4,13 +4,13 @@
 
 ## 프로젝트 개요
 
-Tori Wallet은 React Native + TypeScript 기반의 Web3 모바일 지갑 앱입니다.
+Tori Wallet은 React Native + TypeScript 기반의 셀프 커스터디 Web3 모바일 핫월렛입니다. 하드웨어 콜드월렛을 전제로 한 코드를 작성하거나 설명하지 않습니다.
 
 ## 기술 스택
 
 - **Framework**: React Native 0.83 (TypeScript)
 - **Blockchain**: Viem (이더리움 인터랙션)
-- **dApp 연결**: WalletConnect Web3Wallet
+- **dApp 연결**: Reown WalletKit + WalletConnect v2
 - **상태 관리**: Zustand
 - **서버 상태**: TanStack Query (React Query)
 - **스타일링**: styled-components/native
@@ -181,9 +181,13 @@ const SUPPORTED_CHAINS = {
 
 ## 보안 주의사항
 
-- 니모닉/개인키는 절대 콘솔에 로깅하지 않음
-- 민감한 데이터는 `react-native-keychain` 사용
-- API 키는 환경변수로 관리
+- 니모닉 기본 저장은 PIN 암호화된 EncryptedStorage 볼트를 사용
+- Keychain/Keystore에는 사용자가 생체인증을 활성화한 경우에만 기기 전용 보호 사본 저장
+- 개인키는 별도 영구 저장하지 않고 잠금 해제 세션에서만 파생
+- 니모닉과 개인키를 콘솔, 원격 로그, 분석 이벤트에 포함하지 않음
+- 모바일 환경 변수는 비밀로 취급하지 않으며 0x 같은 비밀 API 키는 서버 프록시에만 저장
+- 지갑 생성에는 OS CSPRNG만 허용하고 안전한 난수원을 확인할 수 없으면 실패 처리
+- 서명 직전 계정, 체인, 대상과 요청 지문을 다시 검증
 
 ## 테스트 작성
 
