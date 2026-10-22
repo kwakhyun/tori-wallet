@@ -64,6 +64,8 @@ jobs:
       - name: Install locked CocoaPods dependencies
         working-directory: ios
         run: bundle exec pod install --deployment 2>&1 | tee ../artifacts/ios/pod-install.log
+      - name: Verify portable podspec checksums
+        run: bundle exec ruby ios/tests/podspec_checksums_test.rb
       - name: Build signed Release simulator app
         timeout-minutes: 35
         run: yarn e2e:build:ios 2>&1 | tee artifacts/ios/build.log

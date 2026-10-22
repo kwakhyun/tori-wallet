@@ -311,6 +311,8 @@ API 비밀 키는 필요하지 않습니다. 빌드 로그, Detox 로그와 실�
 React Native의 Hermes 컴파일러 경로는 프로젝트 기준으로 기록하고 Yoga
 헤더 목록을 정렬하는 패치를 적용해, 체크아웃 위치와 Ruby 버전이 달라도
 동일한 `Podfile.lock` 체크섬으로 설치되도록 합니다.
+CI는 생성된 podspec JSON의 체크섬, Hermes 실행 경로와 Yoga 헤더 정렬도
+Ruby 회귀 테스트 3개로 검사합니다.
 
 회귀 테스트에는 PIN 인증 취소와 앱 종료, 영구 시도 제한, WalletConnect
 요청 교체와 수수료 변경, 토큰 소수점 정밀도, RPC 오류 후 거래 상태 복구,
