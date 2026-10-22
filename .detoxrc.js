@@ -1,3 +1,11 @@
+const iosE2EApp = {
+  type: 'ios.app',
+  binaryPath:
+    'ios/build/e2e/Build/Products/Release-iphonesimulator/ToriWallet.app',
+  build:
+    'xcodebuild -workspace ios/ToriWallet.xcworkspace -scheme ToriWallet -configuration Release -sdk iphonesimulator -destination "generic/platform=iOS Simulator" -derivedDataPath ios/build/e2e -jobs 2 CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=- PRODUCT_BUNDLE_IDENTIFIER=com.toriwallet.e2e',
+};
+
 /** @type {Detox.DetoxConfig} */
 module.exports = {
   testRunner: {
@@ -10,12 +18,11 @@ module.exports = {
     },
   },
   apps: {
-    'ios.e2e': {
-      type: 'ios.app',
-      binaryPath:
-        'ios/build/e2e/Build/Products/Release-iphonesimulator/ToriWallet.app',
-      build:
-        'xcodebuild -workspace ios/ToriWallet.xcworkspace -scheme ToriWallet -configuration Release -sdk iphonesimulator -destination "generic/platform=iOS Simulator" -derivedDataPath ios/build/e2e -jobs 2 CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=- PRODUCT_BUNDLE_IDENTIFIER=com.toriwallet.e2e',
+    'ios.e2e': iosE2EApp,
+    'ios.ci': {
+      ...iosE2EApp,
+      // The hosted macos-26 runner and its simulator both use Apple Silicon.
+      build: `${iosE2EApp.build} ARCHS=arm64 ONLY_ACTIVE_ARCH=YES`,
     },
     'android.e2e': {
       type: 'android.apk',
@@ -74,6 +81,10 @@ module.exports = {
     },
   },
   configurations: {
+    'ios.sim.ci': {
+      device: 'simulator',
+      app: 'ios.ci',
+    },
     'ios.sim.e2e': {
       device: 'simulator',
       app: 'ios.e2e',

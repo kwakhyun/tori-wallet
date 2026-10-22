@@ -68,11 +68,11 @@ jobs:
         run: bundle exec ruby ios/tests/podspec_checksums_test.rb
       - name: Build signed Release simulator app
         timeout-minutes: 35
-        run: yarn e2e:build:ios 2>&1 | tee artifacts/ios/build.log
+        run: yarn e2e:build:ios:ci 2>&1 | tee artifacts/ios/build.log
       - name: Run all iOS E2E tests
         timeout-minutes: 20
         run: |
-          yarn e2e:ios --headless --record-logs all --take-screenshots failing --artifacts-location artifacts/ios/detox 2>&1 | tee artifacts/ios/e2e.log
+          yarn e2e:ios --configuration ios.sim.ci --headless --record-logs all --take-screenshots failing --artifacts-location artifacts/ios/detox 2>&1 | tee artifacts/ios/e2e.log
       - name: Upload build and E2E diagnostics
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
