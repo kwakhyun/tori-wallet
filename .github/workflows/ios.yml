@@ -13,20 +13,24 @@ concurrency:
   group: ios-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+defaults:
+  run:
+    shell: bash
+
+env:
+  DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+  DETOX_IOS_DEVICE: iPhone 17 Pro
+  DETOX_IOS_RUNTIME: '26.5'
+  HOMEBREW_NO_AUTO_UPDATE: '1'
+  CI: 'true'
+
 jobs:
-  ios:
-    name: Release build and Detox E2E
+  build:
+    name: Release simulator build
     runs-on: macos-26
-    timeout-minutes: 90
-    defaults:
-      run:
-        shell: bash
-    env:
-      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
-      DETOX_IOS_DEVICE: iPhone 17 Pro
-      DETOX_IOS_RUNTIME: '26.5'
-      HOMEBREW_NO_AUTO_UPDATE: '1'
-      CI: 'true'
+    timeout-minutes: 75
+    outputs:
+      app-artifact-id: ${{ steps.upload-app.outputs.artifact-id }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -58,9 +62,6 @@ jobs:
         with:
           path: .yarn/cache
           key: ${{ steps.yarn-cache.outputs.cache-primary-key }}
-      - name: Install simulator tools
-        # Qualifying the formula grants Homebrew trust only to this dependency.
-        run: brew install wix/brew/applesimutils
       - name: Install locked CocoaPods dependencies
         working-directory: ios
         run: bundle exec pod install --deployment 2>&1 | tee ../artifacts/ios/pod-install.log
@@ -70,15 +71,79 @@ jobs:
         # A cold source build of React Native exceeds 35 minutes on this runner.
         timeout-minutes: 60
         run: yarn e2e:build:ios:ci 2>&1 | tee artifacts/ios/build.log
-      - name: Run all iOS E2E tests
-        timeout-minutes: 20
+      - name: Package simulator app
+        # Preserve executable modes, symlinks and the ad-hoc signature.
         run: |
-          yarn e2e:ios --configuration ios.sim.ci --headless --record-logs all --take-screenshots failing --artifacts-location artifacts/ios/detox 2>&1 | tee artifacts/ios/e2e.log
-      - name: Upload build and E2E diagnostics
+          tar -czf artifacts/ToriWallet.app.tar.gz -C ios/build/e2e/Build/Products/Release-iphonesimulator ToriWallet.app
+      - name: Upload simulator app
+        id: upload-app
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ios-simulator-app-${{ github.run_attempt }}
+          path: artifacts/ToriWallet.app.tar.gz
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 7
+      - name: Upload build diagnostics
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: ios-build-e2e-${{ github.run_attempt }}
+          name: ios-build-${{ github.run_attempt }}
+          path: artifacts/ios/
+          if-no-files-found: warn
+          retention-days: 7
+
+  e2e:
+    name: Detox E2E (${{ matrix.suite }})
+    needs: build
+    runs-on: macos-26
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        suite: [onboarding, sendTransaction, walletLock]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+      - name: Restore Yarn package cache
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: .yarn/cache
+          key: ios-yarn-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('yarn.lock') }}
+      - name: Install JavaScript dependencies
+        run: |
+          mkdir -p artifacts/ios
+          corepack enable
+          yarn install --immutable 2>&1 | tee artifacts/ios/yarn-install.log
+      - name: Install simulator tools
+        # Qualifying the formula grants Homebrew trust only to this dependency.
+        run: brew install wix/brew/applesimutils
+      - name: Download built app
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          artifact-ids: ${{ needs.build.outputs.app-artifact-id }}
+          path: artifacts/app
+          merge-multiple: true
+      - name: Restore and verify simulator app
+        run: |
+          mkdir -p ios/build/e2e/Build/Products/Release-iphonesimulator
+          tar -xzf artifacts/app/ToriWallet.app.tar.gz -C ios/build/e2e/Build/Products/Release-iphonesimulator
+          codesign --verify --deep --strict ios/build/e2e/Build/Products/Release-iphonesimulator/ToriWallet.app
+          xcodebuild -version | tee artifacts/ios/toolchain.log
+          xcrun simctl list --json > artifacts/ios/simulators.json
+      - name: Run iOS E2E suite
+        timeout-minutes: 35
+        env:
+          E2E_SUITE: ${{ matrix.suite }}
+        run: |
+          yarn e2e:ios --configuration ios.sim.ci --headless --record-logs all --take-screenshots failing --artifacts-location artifacts/ios/detox "e2e/${E2E_SUITE}.test.ts" 2>&1 | tee artifacts/ios/e2e.log
+      - name: Upload E2E diagnostics
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ios-e2e-${{ matrix.suite }}-${{ github.run_attempt }}
           path: artifacts/ios/
           if-no-files-found: warn
           retention-days: 7

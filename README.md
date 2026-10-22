@@ -304,10 +304,13 @@ iOS 27 SDK의 [UIScene 생명주기 요구사항](https://developer.apple.com/do
 GitHub Actions의 `iOS Build and E2E`는 `main` 푸시와 모든 PR에서 자동으로
 실행되며 수동 실행도 지원합니다. macOS 26의 Xcode 26.6으로 Release
 시뮬레이터 앱을 `arm64`로 빌드하고, iOS 26.5의 임시 iPhone 17 Pro에서 E2E 6개를
-실행합니다. Ruby 3.3 이상을 사용하고, CocoaPods와 Ruby 의존성은 `Gemfile.lock`으로 고정하며
+실행합니다. 빌드한 앱을 아티팩트로 전달하고, 온보딩, 전송 입력 검증,
+지갑 잠금 테스트를 각각 새 러너와 임시 시뮬레이터에서 병렬 실행합니다.
+실패한 테스트 작업만 재실행할 때는 성공한 빌드 결과를 재사용합니다.
+Ruby 3.3 이상을 사용하고, CocoaPods와 Ruby 의존성은 `Gemfile.lock`으로 고정하며
 `bundle exec pod install --deployment`로 설치합니다. 배포용 인증서나
 API 비밀 키는 필요하지 않습니다. 빌드 로그, Detox 로그와 실패 화면은
-실행 결과의 `ios-build-e2e-*` 아티팩트에서 7일간 확인할 수 있습니다.
+실행 결과의 `ios-build-*`, `ios-e2e-*` 아티팩트에서 7일간 확인할 수 있습니다.
 React Native의 Hermes 컴파일러 경로는 프로젝트 기준으로 기록하고 Yoga
 헤더 목록을 정렬하는 패치를 적용해, 체크아웃 위치와 Ruby 버전이 달라도
 동일한 `Podfile.lock` 체크섬으로 설치되도록 합니다.
