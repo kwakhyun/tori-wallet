@@ -6,6 +6,7 @@ import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { signerVault } from '@/services/signerVault';
+import { useSecurityStore } from './securityStore';
 
 export interface Wallet {
   address: string;
@@ -148,6 +149,9 @@ export const useWalletStore = create<WalletState>()(
         if (!signerVault.isUnlocked()) {
           throw new Error('Cannot unlock without an authenticated signer session');
         }
+        // PIN derivation can outlast the inactivity window on slow devices.
+        // Start the new session's window before publishing its unlocked state.
+        useSecurityStore.getState().updateLastActiveTime();
         set({ isLocked: false });
       },
 

@@ -10,6 +10,11 @@ jest.mock('../../src/services/signerVault', () => ({
  */
 
 import { useWalletStore, Wallet, Network } from '../../src/store/walletStore';
+import {
+  AUTO_LOCK_OPTIONS,
+  useSecurityStore,
+} from '../../src/store/securityStore';
+import { signerVault } from '../../src/services/signerVault';
 
 // 초기 상태 저장
 const initialState = useWalletStore.getState();
@@ -18,6 +23,12 @@ describe('WalletStore', () => {
   beforeEach(() => {
     // 각 테스트 전에 스토어 초기화
     useWalletStore.setState(initialState);
+    useSecurityStore.getState().resetSecurityState();
+  });
+
+  afterEach(() => {
+    jest.useRealTimers();
+    jest.restoreAllMocks();
   });
 
   describe('Initial State', () => {
@@ -141,6 +152,42 @@ describe('WalletStore', () => {
   });
 
   describe('Lock/Unlock', () => {
+    it.each(['30s', '1m', '5m'] as const)(
+      'starts the %s inactivity window after slow authentication completes',
+      timeout => {
+        jest.useFakeTimers();
+        const now = Date.now();
+        const timeoutMs = AUTO_LOCK_OPTIONS[timeout];
+        useSecurityStore.setState({
+          autoLockTimeout: timeout,
+          lastActiveTime: now - timeoutMs - 1,
+        });
+        expect(useSecurityStore.getState().shouldAutoLock()).toBe(true);
+
+        useWalletStore.getState().unlock();
+
+        expect(useWalletStore.getState().isLocked).toBe(false);
+        expect(useSecurityStore.getState().shouldAutoLock()).toBe(false);
+        jest.setSystemTime(now + timeoutMs - 1);
+        expect(useSecurityStore.getState().shouldAutoLock()).toBe(false);
+        jest.setSystemTime(now + timeoutMs + 1);
+        expect(useSecurityStore.getState().shouldAutoLock()).toBe(true);
+      },
+    );
+
+    it('does not renew activity or unlock without an authenticated signer', () => {
+      const lastActiveTime = Date.now() - 120_000;
+      useSecurityStore.setState({ lastActiveTime });
+      jest.spyOn(signerVault, 'isUnlocked').mockReturnValueOnce(false);
+
+      expect(() => useWalletStore.getState().unlock()).toThrow(
+        'Cannot unlock without an authenticated signer session',
+      );
+      expect(useWalletStore.getState().isLocked).toBe(true);
+      expect(useSecurityStore.getState().lastActiveTime).toBe(lastActiveTime);
+      expect(useSecurityStore.getState().shouldAutoLock()).toBe(true);
+    });
+
     it('should lock wallet', () => {
       const { unlock, lock } = useWalletStore.getState();
       unlock();
