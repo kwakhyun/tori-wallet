@@ -48,9 +48,8 @@ jobs:
           corepack enable
           yarn install --immutable 2>&1 | tee artifacts/ios/yarn-install.log
       - name: Install simulator tools
-        run: |
-          brew tap wix/brew
-          brew install applesimutils
+        # Qualifying the formula grants Homebrew trust only to this dependency.
+        run: brew install wix/brew/applesimutils
       - name: Install locked CocoaPods dependencies
         working-directory: ios
         run: bundle exec pod install --deployment 2>&1 | tee ../artifacts/ios/pod-install.log
