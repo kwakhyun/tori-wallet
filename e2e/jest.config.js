@@ -3,7 +3,8 @@ module.exports = {
   rootDir: '..',
   testMatch: ['<rootDir>/e2e/**/*.test.ts'],
   // These flows run the real 64 MiB scrypt KDF several times on an emulator.
-  testTimeout: 600000,
+  // The lock flow takes ~8 minutes locally; hosted simulators need more margin.
+  testTimeout: process.env.CI ? 1200000 : 600000,
   maxWorkers: 1,
   globalSetup: 'detox/runners/jest/globalSetup',
   globalTeardown: 'detox/runners/jest/globalTeardown',

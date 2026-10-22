@@ -5,7 +5,7 @@ const MNEMONIC =
   'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about';
 export const TEST_PIN = '135790';
 // Emulator timing includes the production-strength KDF, without crypto mocks.
-export const PIN_DERIVATION_TIMEOUT = 180_000;
+export const PIN_DERIVATION_TIMEOUT = process.env.CI ? 300_000 : 180_000;
 export async function importTestWallet() {
   await element(by.text('기존 지갑 가져오기')).tap();
   // Enter each field without the paste handler's automatic keyboard focus jump.
