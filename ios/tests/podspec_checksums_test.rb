@@ -15,7 +15,10 @@ class PodspecChecksumsTest < Minitest::Test
   end.to_h { |spec| [spec.name, spec] }
 
   def test_lockfile_matches_generated_json_checksums
-    checksums = YAML.safe_load(File.read(File.join(ROOT, 'ios/Podfile.lock'))).fetch('SPEC CHECKSUMS')
+    checksums = YAML.safe_load(
+      File.read(File.join(ROOT, 'ios/Podfile.lock')),
+      permitted_classes: [Symbol],
+    ).fetch('SPEC CHECKSUMS')
     SPECS.each do |name, spec|
       # CocoaPods hashes the generated JSON for local pods, not the Ruby source.
       assert_equal checksums.fetch(name), Digest::SHA1.hexdigest(spec.to_pretty_json), name
