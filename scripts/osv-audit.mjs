@@ -3,27 +3,26 @@
 import { readFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const OSV_BATCH_URL = 'https://api.osv.dev/v1/querybatch';
 const LOCKFILE = new URL('../yarn.lock', import.meta.url);
 const CONFIG_FILE = new URL('../osv-scanner.toml', import.meta.url);
 const BATCH_SIZE = 1000;
 
-async function parseActiveIgnores() {
-  let config;
-  try {
-    config = await readFile(CONFIG_FILE, 'utf8');
-  } catch (error) {
-    if (error?.code === 'ENOENT') return new Map();
-    throw error;
-  }
-
-  const today = new Date().toISOString().slice(0, 10);
+export async function parseActiveIgnores(
+  config,
+  today = new Date().toISOString().slice(0, 10),
+) {
+  config ??= await readFile(CONFIG_FILE, 'utf8');
   const ignores = new Map();
   const blocks = config.matchAll(/\[\[IgnoredVulns\]\]([\s\S]*?)(?=\n\[\[|$)/g);
 
   for (const [, block] of blocks) {
+    for (const [, key] of block.matchAll(/^([\w.]+)\s*=/gm)) {
+      if (!['id', 'reason', 'ignoreUntil'].includes(key))
+        throw new Error(`Unsupported native OSV configuration key: ${key}`);
+    }
     const id = block.match(/^id\s*=\s*"([^"]+)"\s*$/m)?.[1];
     const reason = block.match(/^reason\s*=\s*"([^"]+)"\s*$/m)?.[1];
     const ignoreUntil = block.match(
@@ -32,7 +31,9 @@ async function parseActiveIgnores() {
 
     if (!id || !reason || !ignoreUntil || ignoreUntil < today) continue;
     const field = name =>
-      block.match(new RegExp(`^${name}\\s*=\\s*"([^"\\n]+)"\\s*$`, 'm'))?.[1];
+      block.match(
+        new RegExp(`^#\\s*audit\\.${name}\\s*=\\s*"([^"\\n]+)"\\s*$`, 'm'),
+      )?.[1];
     const packageName = field('package');
     const version = field('version');
     const patch = field('patch');
@@ -164,7 +165,12 @@ async function main() {
   process.exitCode = 1;
 }
 
-main().catch(error => {
-  console.error(`OSV audit could not complete: ${error.message}`);
-  process.exitCode = 2;
-});
+if (
+  process.argv[1] &&
+  pathToFileURL(process.argv[1]).href === import.meta.url
+) {
+  main().catch(error => {
+    console.error(`OSV audit could not complete: ${error.message}`);
+    process.exitCode = 2;
+  });
+}

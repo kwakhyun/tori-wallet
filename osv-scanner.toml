@@ -1,73 +1,74 @@
 # Reassessed 2026-10-22. Exceptions require exact versions, patch hashes and executable regressions.
+# audit.* comments are enforced by yarn security:audit; native OSV accepts only its documented keys.
 
 [[IgnoredVulns]]
 id = "GHSA-5p2g-fcmc-qvqq"
-package = "image-size"
-version = "1.2.1"
-patch = "patches/image-size+1.2.1.patch"
-patchSha256 = "fd40611aacd9635e28974b41a548e8f9f14760fcb4192d673fc15fd2f04d55b5"
+# audit.package = "image-size"
+# audit.version = "1.2.1"
+# audit.patch = "patches/image-size+1.2.1.patch"
+# audit.patchSha256 = "fd40611aacd9635e28974b41a548e8f9f14760fcb4192d673fc15fd2f04d55b5"
 ignoreUntil = 2027-01-20
 reason = "Metro requires the v1 CommonJS API. The existing JXL size guard is verified by the installed-package regression; upstream v2.0.3 fixes this but changes the API."
 
 [[IgnoredVulns]]
 id = "GHSA-w3rx-r6r6-pgpr"
-package = "image-size"
-version = "1.2.1"
-patch = "patches/image-size+1.2.1.patch"
-patchSha256 = "fd40611aacd9635e28974b41a548e8f9f14760fcb4192d673fc15fd2f04d55b5"
+# audit.package = "image-size"
+# audit.version = "1.2.1"
+# audit.patch = "patches/image-size+1.2.1.patch"
+# audit.patchSha256 = "fd40611aacd9635e28974b41a548e8f9f14760fcb4192d673fc15fd2f04d55b5"
 ignoreUntil = 2027-01-20
 reason = "Metro requires v1. The ICNS entry-length backport rejects zero-length entries, verified against the installed package."
 
 [[IgnoredVulns]]
 id = "GHSA-vcc3-ghjq-m6fr"
-package = "decode-uri-component"
-version = "0.2.2"
-patch = "patches/decode-uri-component+0.2.2.patch"
-patchSha256 = "d47c67e3d6c6852200d36413c0b8e1a17f8c308c1787c23f7c7a9f80956fc042"
+# audit.package = "decode-uri-component"
+# audit.version = "0.2.2"
+# audit.patch = "patches/decode-uri-component+0.2.2.patch"
+# audit.patchSha256 = "d47c67e3d6c6852200d36413c0b8e1a17f8c308c1787c23f7c7a9f80956fc042"
 ignoreUntil = 2027-01-20
 reason = "Backported the upstream v0.5.0 linear UTF-8 decoder while retaining the CommonJS and plus-decoding API required by query-string. Regression covers malformed long input and Unicode."
 
 [[IgnoredVulns]]
 id = "GHSA-mjw6-4jj6-33hc"
-package = "stream-json"
-version = "1.9.1"
-patch = "patches/stream-json+1.9.1.patch"
-patchSha256 = "740e43c44f9647aaef234fc2742e9eb1575cb3a74a540b2848f1c5bf6f61ab22"
+# audit.package = "stream-json"
+# audit.version = "1.9.1"
+# audit.patch = "patches/stream-json+1.9.1.patch"
+# audit.patchSha256 = "740e43c44f9647aaef234fc2742e9eb1575cb3a74a540b2848f1c5bf6f61ab22"
 ignoreUntil = 2027-01-20
 reason = "Detox requires v1 CommonJS entry points. Assembler and reviver now create own data properties; regressions prove __proto__ cannot replace parsed object prototypes."
 
 [[IgnoredVulns]]
 id = "GHSA-528h-pc64-c93x"
-package = "stream-json"
-version = "1.9.1"
-patch = "patches/stream-json+1.9.1.patch"
-patchSha256 = "740e43c44f9647aaef234fc2742e9eb1575cb3a74a540b2848f1c5bf6f61ab22"
+# audit.package = "stream-json"
+# audit.version = "1.9.1"
+# audit.patch = "patches/stream-json+1.9.1.patch"
+# audit.patchSha256 = "740e43c44f9647aaef234fc2742e9eb1575cb3a74a540b2848f1c5bf6f61ab22"
 ignoreUntil = 2027-01-20
 reason = "Backported a 1024-level filter nesting guard. Regressions exercise Pick, Ignore, Filter and Replace with deep input; v3 is incompatible with Detox entry points."
 
 [[IgnoredVulns]]
 id = "GHSA-hqr4-qq8f-hg3x"
-package = "stream-json"
-version = "1.9.1"
-patch = "patches/stream-json+1.9.1.patch"
-patchSha256 = "740e43c44f9647aaef234fc2742e9eb1575cb3a74a540b2848f1c5bf6f61ab22"
+# audit.package = "stream-json"
+# audit.version = "1.9.1"
+# audit.patch = "patches/stream-json+1.9.1.patch"
+# audit.patchSha256 = "740e43c44f9647aaef234fc2742e9eb1575cb3a74a540b2848f1c5bf6f61ab22"
 ignoreUntil = 2027-01-20
 reason = "Not affected: v1.9.1 does not ship the JSONC parser or verifier. The installed-package regression asserts the JSONC entry points remain absent; exception is version-scoped."
 
 [[IgnoredVulns]]
 id = "GHSA-hp3w-g68c-fv3c"
-package = "sprintf-js"
-version = "1.0.3"
-patch = "patches/sprintf-js+1.0.3.patch"
-patchSha256 = "c839b3a8610013c1b7bca748af6dd29831f230aa1abc18fd619f6f5f35652610"
+# audit.package = "sprintf-js"
+# audit.version = "1.0.3"
+# audit.patch = "patches/sprintf-js+1.0.3.patch"
+# audit.patchSha256 = "c839b3a8610013c1b7bca748af6dd29831f230aa1abc18fd619f6f5f35652610"
 ignoreUntil = 2027-01-20
 reason = "No fixed upstream version. Local patch caps numeric precision at ECMAScript limits; regressions cover all three numeric formatters and normal formatting."
 
 [[IgnoredVulns]]
 id = "GHSA-vfj7-8cjw-p6xm"
-package = "braces"
-version = "3.0.3"
-patch = "patches/braces+3.0.3.patch"
-patchSha256 = "fe724330f58d639b97b60f57398acf2a93997bf23982d59a5f3205bac999598d"
+# audit.package = "braces"
+# audit.version = "3.0.3"
+# audit.patch = "patches/braces+3.0.3.patch"
+# audit.patchSha256 = "ae91059bc47a7ad998fc538689043c7a7a78c06cea6d5a381f426e25d1f95bf6"
 ignoreUntil = 2027-01-20
 reason = "No fixed upstream version. Local patch bounds parsing and preflights caller-provided AST depth before recursive walkers. Regressions cover compile, expand, stringify and normal patterns."
