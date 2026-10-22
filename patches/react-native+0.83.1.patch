@@ -1,0 +1,25 @@
+diff --git a/node_modules/react-native/ReactCommon/yoga/Yoga.podspec b/node_modules/react-native/ReactCommon/yoga/Yoga.podspec
+--- a/node_modules/react-native/ReactCommon/yoga/Yoga.podspec
++++ b/node_modules/react-native/ReactCommon/yoga/Yoga.podspec
+@@ -61,6 +61,6 @@
+   # Fabric must be able to access private headers (which should not be included in the umbrella header)
+   all_header_files = 'yoga/**/*.h'
+   all_header_files = File.join('ReactCommon/yoga', all_header_files) if ENV['INSTALL_YOGA_WITHOUT_PATH_OPTION']
+-  spec.private_header_files = Dir.glob(all_header_files) - Dir.glob(public_header_files)
++  spec.private_header_files = (Dir.glob(all_header_files) - Dir.glob(public_header_files)).sort
+   spec.preserve_paths = [all_header_files]
+ end
+diff --git a/node_modules/react-native/sdks/hermes-engine/hermes-engine.podspec b/node_modules/react-native/sdks/hermes-engine/hermes-engine.podspec
+--- a/node_modules/react-native/sdks/hermes-engine/hermes-engine.podspec
++++ b/node_modules/react-native/sdks/hermes-engine/hermes-engine.podspec
+@@ -75,8 +75,9 @@
+         "require.resolve(\"hermes-compiler\", {paths: [\"#{react_native_path}\"]})", __dir__]).strip
+       )
+ 
++      hermes_compiler_relative_path = Pathname.new(hermes_compiler_path).relative_path_from(Pod::Config.instance.installation_root)
+       spec.user_target_xcconfig = {
+-        'HERMES_CLI_PATH' => "#{hermes_compiler_path}/hermesc/osx-bin/hermesc"
++        'HERMES_CLI_PATH' => "$(PODS_ROOT)/../#{hermes_compiler_relative_path}/hermesc/osx-bin/hermesc"
+       }
+     end
+ 

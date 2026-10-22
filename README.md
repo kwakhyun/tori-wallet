@@ -308,6 +308,9 @@ GitHub Actions의 `iOS Build and E2E`는 `main` 푸시와 모든 PR에서 자동
 `bundle exec pod install --deployment`로 설치합니다. 배포용 인증서나
 API 비밀 키는 필요하지 않습니다. 빌드 로그, Detox 로그와 실패 화면은
 실행 결과의 `ios-build-e2e-*` 아티팩트에서 7일간 확인할 수 있습니다.
+React Native의 Hermes 컴파일러 경로는 프로젝트 기준으로 기록하고 Yoga
+헤더 목록을 정렬하는 패치를 적용해, 체크아웃 위치와 Ruby 버전이 달라도
+동일한 `Podfile.lock` 체크섬으로 설치되도록 합니다.
 
 회귀 테스트에는 PIN 인증 취소와 앱 종료, 영구 시도 제한, WalletConnect
 요청 교체와 수수료 변경, 토큰 소수점 정밀도, RPC 오류 후 거래 상태 복구,
