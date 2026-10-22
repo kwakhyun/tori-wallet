@@ -123,15 +123,23 @@ class WCService {
   /**
    * 세션 제안 콜백 설정
    */
-  onSessionProposal(callback: SessionProposalCallback): void {
+  onSessionProposal(callback: SessionProposalCallback): () => void {
     this.sessionProposalCallback = callback;
+    return () => {
+      if (this.sessionProposalCallback === callback)
+        this.sessionProposalCallback = null;
+    };
   }
 
   /**
    * 세션 요청 콜백 설정
    */
-  onSessionRequest(callback: SessionRequestCallback): void {
+  onSessionRequest(callback: SessionRequestCallback): () => void {
     this.sessionRequestCallback = callback;
+    return () => {
+      if (this.sessionRequestCallback === callback)
+        this.sessionRequestCallback = null;
+    };
   }
 
   /**

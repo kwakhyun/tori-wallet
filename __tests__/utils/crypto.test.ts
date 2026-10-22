@@ -60,6 +60,17 @@ describe('crypto vault format', () => {
     expect(isNewEncryptionFormat(encryptedV2)).toBe(true);
   });
 
+  it('handles host events while deriving a PIN key so cancellation is not starved', async () => {
+    let eventHandled = false;
+    const timer = setTimeout(() => { eventHandled = true; }, 0);
+    try {
+      await decrypt(encryptedV2, PIN);
+      expect(eventHandled).toBe(true);
+    } finally {
+      clearTimeout(timer);
+    }
+  });
+
   it.each([
     ['kdf', 'pbkdf2'],
     ['n', 2 ** 15],

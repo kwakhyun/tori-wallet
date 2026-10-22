@@ -2,14 +2,20 @@
  * 잠금 해제 PIN 입력 화면
  */
 
-import React, { useState, useCallback, useEffect, useRef } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import styled from 'styled-components/native';
 import { useShallow } from 'zustand/react/shallow';
 import { useTheme } from '@/hooks/useTheme';
-import { SafeAreaView, StatusBar, Alert, Animated } from 'react-native';
+import {
+  SafeAreaView,
+  StatusBar,
+  Alert,
+  ActivityIndicator,
+} from 'react-native';
 import { useWalletStore } from '@/store/walletStore';
 import { walletService } from '@/services/walletService';
-import { signerVault } from '@/services/signerVault';
+import { useAuthentication } from '@/hooks/useAuthentication';
+import { PinLockedError } from '@/services/pinAttemptService';
 import { ToriCatFace } from '@/components/common/Logo';
 
 function UnlockScreen(): React.JSX.Element {
@@ -18,144 +24,52 @@ function UnlockScreen(): React.JSX.Element {
     useShallow(state => ({ unlock: state.unlock })),
   );
   const [pin, setPin] = useState('');
-  const [isLoading, setIsLoading] = useState(false);
-  const [displayProgress, setDisplayProgress] = useState(0);
-  const [attempts, setAttempts] = useState(0);
-  const pendingTimers = useRef<ReturnType<typeof setTimeout>[]>([]);
+  const { authenticate, isAuthenticating: isLoading } = useAuthentication();
 
-  // 애니메이션 값
-  const animatedProgress = useRef(new Animated.Value(0)).current;
-
-  // 애니메이션 값 변화 리스너 (텍스트 동기화)
   useEffect(() => {
-    const listenerId = animatedProgress.addListener(({ value }) => {
-      setDisplayProgress(Math.round(value));
-    });
-    return () => {
-      animatedProgress.removeListener(listenerId);
-    };
-  }, [animatedProgress]);
+    if (!isLoading) setPin('');
+  }, [isLoading]);
 
-  // 구간별 진행률 표시 (부드러운 애니메이션)
-  const setProgress = useCallback(
-    (value: number) => {
-      Animated.timing(animatedProgress, {
-        toValue: value,
-        duration: 300,
-        useNativeDriver: false,
-      }).start();
-    },
-    [animatedProgress],
-  );
-
-  const delay = useCallback(
-    (milliseconds: number) =>
-      new Promise<void>(resolve => {
-        const timer = setTimeout(() => {
-          pendingTimers.current = pendingTimers.current.filter(
-            pending => pending !== timer,
-          );
-          resolve();
-        }, milliseconds);
-        pendingTimers.current.push(timer);
-      }),
-    [],
-  );
-
-  useEffect(
-    () => () => {
-      pendingTimers.current.forEach(timer => clearTimeout(timer));
-      pendingTimers.current = [];
-      animatedProgress.stopAnimation();
-    },
-    [animatedProgress],
-  );
-
-  // 생체인증 시도
   const tryBiometric = useCallback(async () => {
     try {
-      if (!(await walletService.isBiometricEnabled())) return;
-
-      const supported = await walletService.isBiometricSupported();
-      if (!supported) return;
-
-      // Keychain의 생체인증으로 니모닉 조회 시도
-      setIsLoading(true);
-      if (await signerVault.unlockWithBiometric()) {
-        // 생체인증 성공 - 잠금 해제
-        unlock();
-      }
+      if (
+        !(await walletService.isBiometricEnabled()) ||
+        !(await walletService.isBiometricSupported())
+      )
+        return;
+      if (await authenticate()) unlock();
     } catch {
-      // 생체인증 실패 시 무시 (PIN 입력으로 진행)
-      // 사용자가 취소했거나 인증 실패
-    } finally {
-      setIsLoading(false);
+      // 생체인증 취소/실패 후에는 PIN을 사용할 수 있다.
     }
-  }, [unlock]);
+  }, [authenticate, unlock]);
 
-  // 컴포넌트 마운트 시 생체인증 시도
-  React.useEffect(() => {
+  useEffect(() => {
     tryBiometric();
   }, [tryBiometric]);
 
-  useEffect(() => {
-    if (attempts === 0) return;
-    if (attempts >= 5) {
-      Alert.alert(
-        '경고',
-        `PIN을 ${attempts}회 틀렸습니다. 반복 실패 시 입력을 잠시 중단하고 다시 시도하세요.`,
-      );
-    } else {
-      Alert.alert('오류', 'PIN이 올바르지 않습니다.');
-    }
-  }, [attempts]);
-
   const handlePinInput = useCallback(
     async (digit: string) => {
-      if (pin.length >= 6) return;
-
-      const newPin = pin + digit;
-      setPin(newPin);
-
-      if (newPin.length === 6) {
-        setIsLoading(true);
-        setProgress(10);
-
-        // 진행률 업데이트 간 딜레이
-        await delay(200);
-        setProgress(30);
-        await delay(200);
-        setProgress(50);
-
-        try {
-          const authenticated = await signerVault.unlockWithPin(newPin);
-
-          await delay(150);
-          setProgress(70);
-          await delay(150);
-          setProgress(85);
-
-          if (authenticated) {
-            await delay(100);
-            setProgress(100);
-            unlock();
-            setPin('');
-            setAttempts(0);
-          } else {
-            setProgress(0);
-            setPin('');
-            setAttempts(current => current + 1);
-          }
-        } catch {
-          setProgress(0);
-          setPin('');
-          Alert.alert('오류', 'PIN 확인에 실패했습니다.');
-        } finally {
-          setIsLoading(false);
-        }
+      if (isLoading || pin.length >= 6) return;
+      const next = pin + digit;
+      setPin(next);
+      if (next.length !== 6) return;
+      try {
+        const authenticated = await authenticate(next);
+        if (authenticated === null) return;
+        setPin('');
+        if (authenticated) unlock();
+        else Alert.alert('오류', 'PIN이 올바르지 않습니다.');
+      } catch (error) {
+        setPin('');
+        Alert.alert(
+          error instanceof PinLockedError ? '접근 제한' : '오류',
+          error instanceof PinLockedError
+            ? error.message
+            : 'PIN 확인에 실패했습니다.',
+        );
       }
     },
-    [delay, pin, unlock, setProgress],
+    [authenticate, isLoading, pin, unlock],
   );
 
   const handleDelete = useCallback(() => {
@@ -191,14 +105,22 @@ function UnlockScreen(): React.JSX.Element {
             {row.map(key => {
               if (key === 'bio') {
                 return (
-                  <KeypadButton key={key} onPress={handleBiometric}>
+                  <KeypadButton
+                    key={key}
+                    onPress={handleBiometric}
+                    disabled={isLoading}
+                  >
                     <KeypadButtonText>🔐</KeypadButtonText>
                   </KeypadButton>
                 );
               }
               if (key === 'del') {
                 return (
-                  <KeypadButton key={key} onPress={handleDelete}>
+                  <KeypadButton
+                    key={key}
+                    onPress={handleDelete}
+                    disabled={isLoading}
+                  >
                     <KeypadButtonText>⌫</KeypadButtonText>
                   </KeypadButton>
                 );
@@ -206,6 +128,7 @@ function UnlockScreen(): React.JSX.Element {
               return (
                 <KeypadButton
                   key={key}
+                  testID={`unlock-key-${key}`}
                   onPress={() => handlePinInput(key)}
                   disabled={isLoading}
                 >
@@ -220,7 +143,7 @@ function UnlockScreen(): React.JSX.Element {
   };
 
   return (
-    <Container>
+    <Container testID="unlock-screen">
       <StatusBar barStyle={isDarkMode ? 'light-content' : 'dark-content'} />
       <Content>
         <LogoContainer>
@@ -233,17 +156,7 @@ function UnlockScreen(): React.JSX.Element {
 
         {isLoading ? (
           <LoadingContainer>
-            <LoadingPercentText>{displayProgress}%</LoadingPercentText>
-            <LoadingBarContainer>
-              <AnimatedLoadingBarFill
-                style={{
-                  width: animatedProgress.interpolate({
-                    inputRange: [0, 100],
-                    outputRange: ['0%', '100%'],
-                  }),
-                }}
-              />
-            </LoadingBarContainer>
+            <ActivityIndicator />
             <LoadingText>잠금 해제 중...</LoadingText>
           </LoadingContainer>
         ) : (
@@ -300,29 +213,6 @@ const LoadingContainer = styled.View`
   align-items: center;
   margin-bottom: ${({ theme }) => theme.spacing.lg}px;
 `;
-
-const LoadingPercentText = styled.Text`
-  color: ${({ theme }) => theme.colors.primary};
-  font-size: 32px;
-  font-weight: 700;
-  margin-bottom: ${({ theme }) => theme.spacing.sm}px;
-`;
-
-const LoadingBarContainer = styled.View`
-  width: 200px;
-  height: 6px;
-  background-color: ${({ theme }) => theme.colors.surface};
-  border-radius: 3px;
-  overflow: hidden;
-`;
-
-const LoadingBarFill = styled.View`
-  height: 100%;
-  background-color: ${({ theme }) => theme.colors.primary};
-  border-radius: 3px;
-`;
-
-const AnimatedLoadingBarFill = Animated.createAnimatedComponent(LoadingBarFill);
 
 const LoadingText = styled.Text`
   color: ${({ theme }) => theme.colors.textSecondary};

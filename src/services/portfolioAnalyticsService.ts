@@ -62,8 +62,21 @@ const CHART_COLORS = [
 const STORAGE_KEY = 'tori_portfolio_history';
 const MAX_SNAPSHOTS = 365; // 최대 1년치 데이터
 
-class PortfolioAnalyticsService {
-  private historyCache: PortfolioSnapshot[] | null = null;
+export class PortfolioAnalyticsService {
+  private historyCache = new Map<string, PortfolioSnapshot[]>();
+  private writes = new Map<string, Promise<void>>();
+  private generation = 0;
+  private clearing: Promise<void> | null = null;
+
+  private key(address: string, chainId: number) {
+    return `${STORAGE_KEY}_${address.toLowerCase()}_${chainId}`;
+  }
+  private copy(history: PortfolioSnapshot[]) {
+    return history.map(snapshot => ({
+      ...snapshot,
+      tokens: snapshot.tokens.map(token => ({ ...token })),
+    }));
+  }
 
   /**
    * 포트폴리오 스냅샷 저장
@@ -73,8 +86,32 @@ class PortfolioAnalyticsService {
     chainId: number,
     tokens: Token[],
   ): Promise<void> {
-    const key = `${STORAGE_KEY}_${address}_${chainId}`;
-    const history = await this.getHistory(address, chainId);
+    if (this.clearing) return;
+    const key = this.key(address, chainId);
+    const generation = this.generation;
+    const task = (this.writes.get(key) ?? Promise.resolve())
+      .catch(() => undefined)
+      .then(() => {
+        if (generation !== this.generation) return;
+        return this.writeSnapshot(address, chainId, tokens);
+      });
+    this.writes.set(key, task);
+    try {
+      await task;
+    } finally {
+      if (this.writes.get(key) === task) this.writes.delete(key);
+    }
+  }
+
+  private async writeSnapshot(
+    address: string,
+    chainId: number,
+    tokens: Token[],
+  ) {
+    const key = this.key(address, chainId);
+    const generation = this.generation;
+    const history = await this.readHistory(address, chainId);
+    if (generation !== this.generation) return;
 
     const totalValue = tokens.reduce((sum, t) => sum + t.value, 0);
 
@@ -106,7 +143,8 @@ class PortfolioAnalyticsService {
     }
 
     await AsyncStorage.setItem(key, JSON.stringify(history));
-    this.historyCache = history;
+    if (generation === this.generation)
+      this.historyCache.set(key, this.copy(history));
   }
 
   /**
@@ -116,17 +154,51 @@ class PortfolioAnalyticsService {
     address: string,
     chainId: number,
   ): Promise<PortfolioSnapshot[]> {
-    if (this.historyCache) return this.historyCache;
+    await this.writes.get(this.key(address, chainId));
+    return this.readHistory(address, chainId);
+  }
 
-    const key = `${STORAGE_KEY}_${address}_${chainId}`;
+  private async readHistory(
+    address: string,
+    chainId: number,
+  ): Promise<PortfolioSnapshot[]> {
+    const key = this.key(address, chainId);
+    const cached = this.historyCache.get(key);
+    if (cached) return this.copy(cached);
+    const generation = this.generation;
     try {
-      const data = await AsyncStorage.getItem(key);
-      const history = data ? JSON.parse(data) : [];
-      this.historyCache = history;
-      return history;
+      const data =
+        (await AsyncStorage.getItem(key)) ??
+        (address !== address.toLowerCase()
+          ? await AsyncStorage.getItem(`${STORAGE_KEY}_${address}_${chainId}`)
+          : null);
+      const history: PortfolioSnapshot[] = data ? JSON.parse(data) : [];
+      if (!Array.isArray(history)) return [];
+      if (generation === this.generation)
+        this.historyCache.set(key, this.copy(history));
+      return this.copy(history);
     } catch {
       return [];
     }
+  }
+
+  clearHistory(): Promise<void> {
+    if (this.clearing) return this.clearing;
+    this.clearCache();
+    const task = (async () => {
+      await Promise.allSettled(this.writes.values());
+      const keys = await AsyncStorage.getAllKeys();
+      await Promise.all(
+        keys
+          .filter(key => key.startsWith(`${STORAGE_KEY}_`))
+          .map(key => AsyncStorage.removeItem(key)),
+      );
+    })().finally(() => {
+      this.clearCache();
+      this.clearing = null;
+    });
+    this.clearing = task;
+    return task;
   }
 
   /**
@@ -302,7 +374,8 @@ class PortfolioAnalyticsService {
    * 히스토리 캐시 클리어
    */
   clearCache() {
-    this.historyCache = null;
+    this.generation += 1;
+    this.historyCache.clear();
   }
 }
 

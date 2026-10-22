@@ -17,6 +17,7 @@ interface SignRequestModalProps {
   dAppVerification?: DAppVerification;
   onApprove: () => void;
   onReject: () => void;
+  isProcessing?: boolean;
 }
 
 export interface SignRequest {
@@ -27,6 +28,8 @@ export interface SignRequest {
   chainId: number;
   account: string;
   intent: SigningIntent;
+  referenceGasPrice?: string;
+  expiresAt?: number;
 }
 
 export function SignRequestModal({
@@ -38,6 +41,7 @@ export function SignRequestModal({
   dAppVerification,
   onApprove,
   onReject,
+  isProcessing = false,
 }: SignRequestModalProps): React.JSX.Element | null {
   const [riskAcknowledged, setRiskAcknowledged] = useState(false);
 
@@ -59,6 +63,7 @@ export function SignRequestModal({
   const verificationNeedsAcknowledgement =
     dAppVerification !== undefined && dAppVerification.validation !== 'VALID';
   const approveDisabled =
+    isProcessing ||
     intent.blocked ||
     verificationBlocked ||
     ((intent.requiresRiskAcknowledgement || verificationNeedsAcknowledgement) &&
@@ -189,7 +194,7 @@ export function SignRequestModal({
 
             {/* 버튼 */}
             <ButtonSection>
-              <RejectButton onPress={onReject}>
+              <RejectButton onPress={onReject} disabled={isProcessing}>
                 <RejectButtonText>거부</RejectButtonText>
               </RejectButton>
               <ApproveButton

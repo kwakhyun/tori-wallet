@@ -23,6 +23,7 @@ jobs:
       - run: yarn typecheck
       - run: yarn lint
       - run: yarn test:ci
+      - run: yarn security:audit
 
   dependency-review:
     if: github.event_name == 'pull_request'

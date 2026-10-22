@@ -2,6 +2,8 @@
  * 지갑과 연결된 모든 로컬 상태를 하나의 경계에서 정리한다.
  */
 
+import { transactionTracker } from './transactionTracker';
+import { portfolioAnalyticsService } from './portfolioAnalyticsService';
 import { realmDB } from '@/realm/database';
 import { useSecurityStore } from '@/store/securityStore';
 import { useSwapStore } from '@/store/swapStore';
@@ -20,7 +22,13 @@ export interface WalletResetDependencies {
 const defaultDependencies: WalletResetDependencies = {
   disconnectAllSessions: () => wcService.disconnectAllSessions(),
   clearWalletStorage: () => walletService.clearAll(),
-  deleteLocalRecords: () => realmDB.deleteAll(),
+  deleteLocalRecords: async () => {
+    transactionTracker.invalidate();
+    await Promise.all([
+      realmDB.deleteAll(),
+      portfolioAnalyticsService.clearHistory(),
+    ]);
+  },
   resetRuntimeStores: () => {
     useWalletStore.getState().reset();
     useSecurityStore.getState().resetSecurityState();

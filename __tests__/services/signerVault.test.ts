@@ -118,3 +118,37 @@ describe('signerVault', () => {
     );
   });
 });
+
+it('does not recreate a session when the wallet is locked while PIN verification is pending', async () => {
+  signerVault.lock();
+  let resolve!: (value: string) => void;
+  mockedWalletService.retrieveMnemonicWithPin.mockReturnValue(
+    new Promise(r => {
+      resolve = r;
+    }),
+  );
+  const result = signerVault.unlockWithPin('123456');
+  signerVault.lock();
+  resolve(MNEMONIC);
+  await expect(result).resolves.toBe(false);
+  expect(signerVault.isUnlocked()).toBe(false);
+});
+
+it('rejects a retained signer after locking, including delayed viem transaction signing', async () => {
+  mockedWalletService.validateMnemonic.mockReturnValue(true);
+  const signTransaction = jest.fn();
+  mockedWalletService.retrieveAccounts.mockResolvedValue([
+    { address: ADDRESS, derivationPath: PATH, name: 'A' },
+  ]);
+  mockedWalletService.deriveAccountAtPath.mockReturnValue({
+    address: ADDRESS,
+    signTransaction,
+  } as any);
+  signerVault.startSession(MNEMONIC);
+  const account = await signerVault.getAccount(ADDRESS);
+  signerVault.lock();
+  await expect(
+    account.signTransaction({ chainId: 1, to: ADDRESS }),
+  ).rejects.toThrow('expired');
+  expect(signTransaction).not.toHaveBeenCalled();
+});

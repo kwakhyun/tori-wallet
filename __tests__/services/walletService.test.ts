@@ -29,6 +29,7 @@ import * as Keychain from 'react-native-keychain';
 import EncryptedStorage from 'react-native-encrypted-storage';
 import { WalletService, walletService } from '../../src/services/walletService';
 import { SecureRandomGenerator } from '../../src/utils/secureRandom';
+import * as crypto from '../../src/utils/crypto';
 
 const VALID_MNEMONIC =
   'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about';
@@ -48,6 +49,8 @@ const storage = EncryptedStorage as unknown as {
 };
 
 describe('WalletService', () => {
+  afterEach(() => jest.restoreAllMocks());
+
   beforeEach(async () => {
     jest.clearAllMocks();
     keychain.resetGenericPassword.mockResolvedValue(true);
@@ -126,7 +129,11 @@ describe('WalletService', () => {
     await walletService.storeMnemonic(VALID_MNEMONIC, PIN);
 
     storage.getItem.mockImplementation(async key =>
-      key === 'tori_wallet_mnemonic' ? encrypted : '2',
+      key === 'tori_wallet_mnemonic'
+        ? encrypted
+        : key === 'tori_wallet_vault_version'
+        ? '2'
+        : null,
     );
     await expect(walletService.retrieveMnemonicWithPin(PIN)).resolves.toBe(
       VALID_MNEMONIC,
@@ -218,7 +225,42 @@ describe('WalletService', () => {
     await walletService.clearAll();
 
     expect(keychain.resetGenericPassword).toHaveBeenCalled();
-    expect(storage.removeItem).toHaveBeenCalledTimes(4);
+    expect(storage.removeItem).toHaveBeenCalledTimes(5);
+  });
+
+  it('does not restore a deleted mnemonic when an in-flight legacy PIN migration finishes', async () => {
+    const data = new Map([
+      ['tori_wallet_vault_version', '2'],
+      ['tori_wallet_mnemonic', 'legacy-ciphertext'],
+    ]);
+    storage.getItem.mockImplementation(async key => data.get(key) ?? null);
+    storage.setItem.mockImplementation(async (key, value) => {
+      data.set(key, value);
+    });
+    storage.removeItem.mockImplementation(async key => {
+      data.delete(key);
+    });
+    let finishDecrypt!: (value: string) => void;
+    let started!: () => void;
+    const decryptStarted = new Promise<void>(resolve => {
+      started = resolve;
+    });
+    jest.spyOn(crypto, 'decrypt').mockImplementation(() => {
+      started();
+      return new Promise(resolve => {
+        finishDecrypt = resolve;
+      });
+    });
+    jest.spyOn(crypto, 'encrypt').mockResolvedValue('migrated-ciphertext');
+
+    const authentication = walletService.retrieveMnemonicWithPin(PIN);
+    await decryptStarted;
+    const deletion = walletService.clearAll();
+    finishDecrypt(VALID_MNEMONIC);
+    await Promise.all([authentication, deletion]);
+
+    expect(data.has('tori_wallet_mnemonic')).toBe(false);
+    expect(data.has('tori_pin_attempts_v1')).toBe(false);
   });
 
   it('surfaces partial deletion failures after attempting all locations', async () => {
@@ -227,6 +269,18 @@ describe('WalletService', () => {
     await expect(walletService.clearAll()).rejects.toThrow(
       '일부 지갑 데이터를 삭제하지 못했습니다.',
     );
-    expect(storage.removeItem).toHaveBeenCalledTimes(4);
+    expect(storage.removeItem).toHaveBeenCalledTimes(5);
+  });
+
+  it('attempts vault deletion even when clearing PIN attempts fails', async () => {
+    storage.removeItem.mockImplementation(async key => {
+      if (key === 'tori_pin_attempts_v1') throw new Error('failed');
+    });
+
+    await expect(walletService.clearAll()).rejects.toThrow(
+      '일부 지갑 데이터를 삭제하지 못했습니다.',
+    );
+    expect(storage.removeItem).toHaveBeenCalledTimes(5);
+    expect(keychain.resetGenericPassword).toHaveBeenCalled();
   });
 });

@@ -344,22 +344,18 @@ describe('TxService - Error Handling', () => {
       expect(status).toBe('FAILED');
     });
 
-    it('should continue polling when receipt not found', async () => {
+    it('continues polling until a receipt is available', async () => {
       jest.useFakeTimers();
       const { chainClient } = require('../../src/services/chainClient');
-
-      // 처음 2번 null 반환, 3번째에 성공
+      chainClient.getTransactionReceipt.mockReset();
       chainClient.getTransactionReceipt
         .mockResolvedValueOnce(null)
         .mockResolvedValueOnce(null)
-        .mockResolvedValueOnce({
-          status: 'success',
-          blockNumber: BigInt(12345678),
-        });
-
-      // 폴링 시작 확인 (타이머 테스트는 비동기 복잡성으로 인해 생략)
-      expect(chainClient.getTransactionReceipt).toBeDefined();
-
+        .mockResolvedValueOnce({ status: 'success' });
+      const result = txService.waitForTransaction('0xabc', 1);
+      await jest.advanceTimersByTimeAsync(6000);
+      await expect(result).resolves.toBe('CONFIRMED');
+      expect(chainClient.getTransactionReceipt).toHaveBeenCalledTimes(3);
       jest.useRealTimers();
     });
 
@@ -406,7 +402,7 @@ describe('TxService - Error Handling', () => {
       expect(result.estimatedFee).toBeDefined();
     });
 
-    it('should use default gas limit on estimation failure', async () => {
+    it('should reject token gas estimation failure', async () => {
       const { chainClient } = require('../../src/services/chainClient');
       chainClient.estimateGas.mockRejectedValueOnce(
         new Error('estimation failed'),
@@ -418,18 +414,9 @@ describe('TxService - Error Handling', () => {
       const tokenAddress =
         '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48' as `0x${string}`;
 
-      const result = await txService.estimateTokenTransfer(
-        from,
-        to,
-        tokenAddress,
-        '100',
-        6,
-        1,
-      );
-
-      // 기본 가스 리밋 65000n 사용
-      expect(result.gasLimit).toBe(65000n);
-      expect(result.estimatedFee).toBeDefined();
+      await expect(
+        txService.estimateTokenTransfer(from, to, tokenAddress, '100', 6, 1),
+      ).rejects.toThrow('토큰 전송을 확인할 수 없습니다.');
     });
   });
 

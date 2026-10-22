@@ -3,7 +3,23 @@
  */
 
 import { chainClient, ChainError } from './chainClient';
-import { parseEther, formatEther } from 'viem';
+import { parseEther, formatEther, parseUnits } from 'viem';
+
+export function parseTransferAmount(amount: string, decimals = 18): bigint {
+  if (
+    !Number.isInteger(decimals) ||
+    decimals < 0 ||
+    decimals > 255 ||
+    !/^\d+(\.\d+)?$/.test(amount) ||
+    (amount.split('.')[1]?.length ?? 0) > decimals
+  ) {
+    throw new Error('토큰의 소수 자릿수에 맞는 금액을 입력해주세요.');
+  }
+  const units = parseUnits(amount, decimals);
+  if (units <= 0n || units >= 2n ** 256n)
+    throw new Error('유효하지 않은 금액입니다.');
+  return units;
+}
 
 export enum TransactionStatus {
   CREATED = 'CREATED',
@@ -60,9 +76,12 @@ class TransactionService {
    * 금액 유효성 검증
    */
   validateAmount(amount: string): boolean {
-    if (!amount || amount === '') return false;
-    const num = parseFloat(amount);
-    return !isNaN(num) && num > 0;
+    try {
+      parseTransferAmount(amount);
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   /**
@@ -265,9 +284,7 @@ class TransactionService {
     rpcUrl?: string,
   ): Promise<TransactionEstimate> {
     try {
-      const tokenAmount = BigInt(
-        Math.floor(parseFloat(amount) * Math.pow(10, decimals)),
-      );
+      const tokenAmount = parseTransferAmount(amount, decimals);
       const data = this.encodeERC20Transfer(to, tokenAmount);
 
       const [gasLimit, gasPrice] = await Promise.all([
@@ -293,17 +310,9 @@ class TransactionService {
         estimatedFeeWei,
       };
     } catch {
-      // 기본 가스 추정값 사용 (토큰 전송 평균)
-      const defaultGasLimit = 65000n;
-      const gasPrice = await chainClient.getGasPrice({ chainId, rpcUrl });
-      const estimatedFeeWei = defaultGasLimit * gasPrice;
-
-      return {
-        gasLimit: defaultGasLimit,
-        gasPrice,
-        estimatedFee: formatEther(estimatedFeeWei),
-        estimatedFeeWei,
-      };
+      throw new Error(
+        '토큰 전송을 확인할 수 없습니다. 금액, 잔액과 네트워크를 확인해주세요.',
+      );
     }
   }
 
@@ -317,9 +326,7 @@ class TransactionService {
     amount: string,
     decimals: number,
   ): { to: `0x${string}`; data: `0x${string}`; value: bigint } {
-    const tokenAmount = BigInt(
-      Math.floor(parseFloat(amount) * Math.pow(10, decimals)),
-    );
+    const tokenAmount = parseTransferAmount(amount, decimals);
     const data = this.encodeERC20Transfer(to, tokenAmount);
 
     return {

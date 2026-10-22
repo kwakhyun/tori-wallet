@@ -8,6 +8,8 @@ require Pod::Executable.execute_command('node', ['-p',
 # QR 스캔에는 위치 메타데이터가 필요하지 않으므로 CLLocation 코드를 빌드하지 않는다.
 $VCEnableLocation = false
 
+require_relative './scripts/deployment_targets'
+
 platform :ios, min_ios_version_supported
 prepare_react_native_project!
 
@@ -51,5 +53,6 @@ target 'ToriWallet' do
       # :ccache_enabled => true
     )
     patch_fmt_consteval_for_apple_clang(installer)
+    raise_ios_deployment_targets(installer.pods_project, min_ios_version_supported)
   end
 end

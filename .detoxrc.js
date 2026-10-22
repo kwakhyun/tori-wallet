@@ -10,6 +10,21 @@ module.exports = {
     },
   },
   apps: {
+    'ios.e2e': {
+      type: 'ios.app',
+      binaryPath:
+        'ios/build/e2e/Build/Products/Release-iphonesimulator/ToriWallet.app',
+      build:
+        'xcodebuild -workspace ios/ToriWallet.xcworkspace -scheme ToriWallet -configuration Release -sdk iphonesimulator -destination "generic/platform=iOS Simulator" -derivedDataPath ios/build/e2e -jobs 2 CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=- PRODUCT_BUNDLE_IDENTIFIER=com.toriwallet.e2e',
+    },
+    'android.e2e': {
+      type: 'android.apk',
+      binaryPath: 'android/app/build/outputs/apk/e2e/app-e2e.apk',
+      testBinaryPath:
+        'android/app/build/outputs/apk/androidTest/e2e/app-e2e-androidTest.apk',
+      build:
+        'cd android && ./gradlew :app:assembleE2e :app:assembleAndroidTest -DtestBuildType=e2e',
+    },
     'ios.debug': {
       type: 'ios.app',
       binaryPath:
@@ -41,9 +56,9 @@ module.exports = {
   devices: {
     simulator: {
       type: 'ios.simulator',
-      device: {
-        type: process.env.DETOX_IOS_DEVICE || 'iPhone 15 Pro',
-      },
+      device: process.env.DETOX_IOS_UDID
+        ? { id: process.env.DETOX_IOS_UDID }
+        : { type: process.env.DETOX_IOS_DEVICE || 'iPhone 15 Pro' },
     },
     attached: {
       type: 'android.attached',
@@ -59,6 +74,18 @@ module.exports = {
     },
   },
   configurations: {
+    'ios.sim.e2e': {
+      device: 'simulator',
+      app: 'ios.e2e',
+    },
+    'android.att.e2e': {
+      device: 'attached',
+      app: 'android.e2e',
+    },
+    'android.emu.e2e': {
+      device: 'emulator',
+      app: 'android.e2e',
+    },
     'ios.sim.debug': {
       device: 'simulator',
       app: 'ios.debug',

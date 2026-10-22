@@ -6,7 +6,8 @@ module.exports = {
     [
       'module-resolver',
       {
-        root: ['./src'],
+        // Bare package names must resolve from node_modules. A src root would
+        // redirect `realm` to src/realm and create a circular database import.
         extensions: ['.ios.js', '.android.js', '.js', '.ts', '.tsx', '.json'],
         alias: {
           '@': './src',

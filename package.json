@@ -5,20 +5,21 @@
   "scripts": {
     "android": "react-native run-android",
     "ios": "react-native run-ios",
-    "lint": "eslint .",
-    "lint:fix": "eslint . --fix",
+    "lint": "eslint . --ext .js,.jsx,.ts,.tsx,.cjs,.mjs",
+    "lint:fix": "eslint . --ext .js,.jsx,.ts,.tsx,.cjs,.mjs --fix",
     "start": "react-native start",
     "start:reset": "react-native start --reset-cache",
     "test": "jest",
     "test:ci": "jest --runInBand --no-watchman",
+    "test:ios:config": "ruby ios/tests/deployment_targets_test.rb",
     "test:watch": "jest --watch",
     "test:coverage": "jest --coverage",
-    "e2e:ios": "detox test --configuration ios.sim.debug",
-    "e2e:ios:release": "detox test --configuration ios.sim.release",
-    "e2e:android": "detox test --configuration android.emu.debug",
-    "e2e:build:ios": "detox build --configuration ios.sim.debug",
+    "e2e:ios": "node scripts/ios-e2e.cjs",
+    "e2e:ios:release": "node scripts/ios-e2e.cjs --configuration ios.sim.release",
+    "e2e:android": "detox test --configuration android.emu.e2e",
+    "e2e:build:ios": "yarn test:ios:config && detox build --configuration ios.sim.e2e",
     "e2e:build:ios:release": "detox build --configuration ios.sim.release",
-    "e2e:build:android": "detox build --configuration android.emu.debug",
+    "e2e:build:android": "detox build --configuration android.emu.e2e",
     "clean": "watchman watch-del-all && rm -rf node_modules && rm -rf $TMPDIR/metro-* && yarn install",
     "clean:android": "cd android && ./gradlew clean && cd ..",
     "clean:ios": "cd ios && xcodebuild clean && cd ..",
@@ -104,7 +105,8 @@
     "@walletconnect/types": "2.23.10",
     "@walletconnect/utils": "2.23.10",
     "fast-xml-parser": "5.10.1",
-    "uuid": "11.1.1"
+    "uuid": "11.1.1",
+    "qs": "6.16.1"
   },
   "packageManager": "yarn@3.6.4"
 }

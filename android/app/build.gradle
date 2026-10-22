@@ -2,11 +2,27 @@ apply plugin: "com.android.application"
 apply plugin: "org.jetbrains.kotlin.android"
 apply plugin: "com.facebook.react"
 
+apply from: project(':react-native-config').projectDir.getPath() + "/dotenv.gradle"
+
+repositories {
+    // Use the native artifact shipped with the locked JavaScript Detox version.
+    maven {
+        url "$rootDir/../node_modules/detox/Detox-android"
+        content { includeGroup "com.wix" }
+    }
+}
+
+def detoxVersion = new groovy.json.JsonSlurper()
+    .parse(file("../../node_modules/detox/package.json")).version
+
 /**
  * This is the configuration block to customize your React Native Android app.
  * By default you don't need to apply any configuration, just uncomment the lines you need.
  */
 react {
+    if (System.getProperty("testBuildType") == "e2e") {
+        extraPackagerArgs = ["--max-workers", "2"]
+    }
     /* Folders */
     //   The root of your project, i.e. where "package.json" lives. Default is '../..'
     // root = file("../../")
@@ -89,12 +105,14 @@ android {
     compileSdk rootProject.ext.compileSdkVersion
 
     namespace "com.toriwallet"
+    testBuildType System.getProperty("testBuildType", "debug")
     defaultConfig {
         applicationId "com.toriwallet"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
         versionCode 1
         versionName "1.0"
+        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
     }
     signingConfigs {
         debug {
@@ -116,16 +134,30 @@ android {
         debug {
             signingConfig signingConfigs.debug
         }
+        e2e {
+            initWith debug
+            // Keep the C++ ABI aligned with the debug dependency variants.
+            // Metro still bundles production JavaScript for this custom variant.
+            matchingFallbacks = ["debug"]
+            applicationIdSuffix ".e2e"
+            resValue "string", "build_config_package", "com.toriwallet"
+            // The test runner connects over localhost; production keeps its policy.
+            manifestPlaceholders = [usesCleartextTraffic: "true"]
+        }
         release {
             signingConfig signingConfigs.release
             minifyEnabled enableProguardInReleaseBuilds
             shrinkResources enableProguardInReleaseBuilds
             proguardFiles getDefaultProguardFile("proguard-android.txt"), "proguard-rules.pro"
+            if (System.getProperty("testBuildType") == "release") {
+                proguardFile "$rootDir/../node_modules/detox/android/detox/proguard-rules-app.pro"
+            }
         }
     }
 }
 
 dependencies {
+    androidTestImplementation("com.wix:detox:${detoxVersion}")
     // The version of react-native is set by the React Native Gradle Plugin
     implementation("com.facebook.react:react-android")
 

@@ -2,7 +2,7 @@
  * 온보딩 E2E 테스트
  */
 
-import { by, element, expect } from 'detox';
+import { by, device, element, expect } from 'detox';
 
 describe('Onboarding Flow', () => {
   it('should show welcome screen on first launch', async () => {
@@ -21,5 +21,13 @@ describe('Onboarding Flow', () => {
     await element(by.text('기존 지갑 가져오기')).tap();
     // ImportWallet 화면의 타이틀 확인 (첫 번째 요소)
     await expect(element(by.text('지갑 가져오기')).atIndex(0)).toBeVisible();
+  });
+
+  it('restores the scene and removes the privacy cover after backgrounding', async () => {
+    await device.sendToHome();
+    await device.launchApp({ newInstance: false });
+    await expect(element(by.text('기존 지갑 가져오기'))).toBeVisible();
+    await element(by.text('기존 지갑 가져오기')).tap();
+    await expect(element(by.id('import-word-0'))).toBeVisible();
   });
 });

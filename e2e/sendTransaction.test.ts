@@ -1,16 +1,25 @@
-/**
- * 토큰 전송 E2E 테스트 (스모크 테스트)
- *
- * 참고: 전체 전송 플로우 테스트는 지갑이 설정된 상태에서 실행해야 합니다.
- * 현재는 앱 초기 상태에서의 기본 동작만 검증합니다.
- */
+import { by, device, element, expect, waitFor } from 'detox';
+import { importTestWallet } from './helpers/wallet';
 
-import { by, element, expect } from 'detox';
-
-describe('Send Transaction - Smoke Test', () => {
-  it('should show welcome screen when no wallet exists', async () => {
-    // 지갑이 없는 상태에서는 웰컴 화면 표시
-    await expect(element(by.text('Tori Wallet'))).toBeVisible();
-    await expect(element(by.text('새 지갑 만들기'))).toBeVisible();
+describe('Send transaction input validation', () => {
+  it('opens the configured-wallet flow and blocks an invalid recipient before signing', async () => {
+    await importTestWallet();
+    await element(by.id('home-send-button')).tap();
+    await expect(element(by.id('send-address-input'))).toBeVisible();
+    await expect(element(by.id('send-confirm-button'))).not.toExist();
+    await element(by.id('send-address-input')).replaceText('invalid-address');
+    await element(by.id('send-amount-input')).replaceText('1');
+    if (device.getPlatform() === 'ios') {
+      await element(by.id('send-scroll')).tap({ x: 4, y: 4 });
+      await waitFor(element(by.id('send-continue-button')))
+        .toBeVisible()
+        .whileElement(by.id('send-scroll'))
+        .scroll(100, 'down', 0.5, 0.25);
+    }
+    await element(by.id('send-continue-button')).tap();
+    await expect(element(by.text('유효하지 않은 주소입니다.'))).toBeVisible();
+    await element(by.text('OK')).tap();
+    await expect(element(by.id('pin-confirm-container'))).not.toBeVisible();
+    await expect(element(by.id('send-confirm-button'))).not.toExist();
   });
 });

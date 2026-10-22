@@ -32,6 +32,7 @@ import { useBalance, useTokenBalance } from '@/hooks/useBalance';
 import { swapService, SwapToken, SwapQuote } from '@/services/swapService';
 import { enhancedSwapService } from '@/services/enhancedSwapService';
 import { signingService } from '@/services/signingService';
+import { transactionTracker } from '@/services/transactionTracker';
 import { chainClient } from '@/services/chainClient';
 import { transactionCacheService } from '@/realm/services';
 import { SwapReviewModal, SwapSettingsModal } from '@/components/swap';
@@ -86,15 +87,12 @@ function SwapScreen(): React.JSX.Element {
   }>({ percent: '0', level: 'low' });
 
   // 스왑 스토어
-  const { addHistoryItem, updateHistoryStatus, addFavoritePair, getTopPairs } =
-    useSwapStore(
-      useShallow(state => ({
-        addHistoryItem: state.addHistoryItem,
-        updateHistoryStatus: state.updateHistoryStatus,
-        addFavoritePair: state.addFavoritePair,
-        getTopPairs: state.getTopPairs,
-      })),
-    );
+  const { addHistoryItem, getTopPairs } = useSwapStore(
+    useShallow(state => ({
+      addHistoryItem: state.addHistoryItem,
+      getTopPairs: state.getTopPairs,
+    })),
+  );
   const { requiresTransactionPin } = useSecurityStore(
     useShallow(state => ({
       requiresTransactionPin: state.requiresTransactionPin,
@@ -329,7 +327,7 @@ function SwapScreen(): React.JSX.Element {
         const rate = (
           parseFloat(confirmedBuyAmount) / parseFloat(sellAmount)
         ).toFixed(6);
-        const historyId = addHistoryItem({
+        addHistoryItem({
           timestamp: Date.now(),
           chainId: activeNetworkChainId,
           sellToken: {
@@ -365,47 +363,7 @@ function SwapScreen(): React.JSX.Element {
           console.warn('Failed to cache pending swap:', cacheError);
         }
 
-        const client = chainClient.getClient(activeNetworkChainId);
-        client
-          .waitForTransactionReceipt({ hash: txHash as `0x${string}` })
-          .then(async receipt => {
-            const succeeded = receipt.status === 'success';
-            updateHistoryStatus(historyId, succeeded ? 'success' : 'failed');
-            await transactionCacheService.updateStatus(
-              txHash,
-              activeNetworkChainId,
-              succeeded
-                ? {
-                    status: 'confirmed',
-                    blockNumber: receipt.blockNumber.toString(),
-                    gasUsed: receipt.gasUsed.toString(),
-                    confirmedAt: new Date(),
-                  }
-                : { status: 'failed' },
-            );
-
-            if (succeeded) {
-              addFavoritePair({
-                chainId: activeNetworkChainId,
-                sellTokenAddress: sellToken.address,
-                sellTokenSymbol: sellToken.symbol,
-                buyTokenAddress: buyToken.address,
-                buyTokenSymbol: buyToken.symbol,
-              });
-            }
-          })
-          .catch(async error => {
-            updateHistoryStatus(historyId, 'failed');
-            await transactionCacheService.updateStatus(
-              txHash,
-              activeNetworkChainId,
-              {
-                status: 'failed',
-                errorMessage:
-                  error instanceof Error ? error.message : 'Receipt failed',
-              },
-            );
-          });
+        transactionTracker.reconcile();
 
         Alert.alert(
           '스왑 제출 완료',
@@ -509,6 +467,7 @@ function SwapScreen(): React.JSX.Element {
           method: 'approve',
         });
 
+        transactionTracker.reconcile();
         const receipt = await client.waitForTransactionReceipt({
           hash: approveTxHash as `0x${string}`,
         });

@@ -1,356 +1,205 @@
-/**
- * SendTransactionScreen 테스트
- * 전송 스크린 테스트
- */
-
 import React from 'react';
-import { render, screen, fireEvent } from '@testing-library/react-native';
-import { ThemeProvider } from 'styled-components/native';
-import { NavigationContainer } from '@react-navigation/native';
+import { render, fireEvent, act, waitFor } from '@testing-library/react-native';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { theme } from '../../src/styles/theme';
+import { ThemeProvider } from 'styled-components/native';
+import { decodeFunctionData, erc20Abi, parseEther } from 'viem';
+import { darkTheme } from '../../src/styles/theme';
+import SendTransactionScreen from '../../src/screens/Send/SendTransactionScreen';
+import { signingService } from '../../src/services/signingService';
+import { chainClient } from '../../src/services/chainClient';
 
-// 네비게이션 모킹
-const mockNavigate = jest.fn();
-const mockGoBack = jest.fn();
-jest.mock('@react-navigation/native', () => {
-  const actualNav = jest.requireActual('@react-navigation/native');
-  return {
-    ...actualNav,
-    useNavigation: () => ({
-      navigate: mockNavigate,
-      goBack: mockGoBack,
-    }),
-    useRoute: () => ({
-      params: {},
-    }),
-  };
-});
-
-// Store 모킹
+const mockAddress = '0x1234567890123456789012345678901234567890';
+const recipient = '0x0987654321098765432109876543210987654321';
+const contract = '0x1111111111111111111111111111111111111111';
+let mockTokenAddress: string | undefined;
+let mockPinProps: any;
+const mockWallet = { address: mockAddress };
+const mockRefetch = jest.fn();
+const mockReadContract = jest.fn();
+const mockNativeBalance = jest.fn();
+jest.mock('@react-navigation/native', () => ({
+  useNavigation: () => ({ goBack: jest.fn() }),
+  useRoute: () => ({ params: { tokenAddress: mockTokenAddress } }),
+}));
+jest.mock('../../src/hooks/useTheme', () => ({
+  useTheme: () => ({ isDarkMode: true }),
+}));
 jest.mock('../../src/store/walletStore', () => ({
   useWalletStore: () => ({
-    wallets: [
-      {
-        address: '0x1234567890123456789012345678901234567890',
-        name: 'Account 1',
-        isHD: true,
-      },
-    ],
+    wallets: [mockWallet],
     activeWalletIndex: 0,
     activeNetworkChainId: 1,
-    networks: [
-      { chainId: 1, name: 'Ethereum', symbol: 'ETH', isTestnet: false },
-    ],
+    networks: [{ chainId: 1, name: 'Ethereum', symbol: 'ETH' }],
   }),
 }));
-
-const mockAddRecentAddress = jest.fn();
-const mockGetAddressBookEntry = jest.fn().mockReturnValue(null);
-
 jest.mock('../../src/store/securityStore', () => ({
   useSecurityStore: () => ({
-    requirePinForTransaction: true,
-    addRecentAddress: mockAddRecentAddress,
-    getAddressBookEntry: mockGetAddressBookEntry,
+    requiresTransactionPin: () => true,
+    addRecentAddress: jest.fn(),
   }),
 }));
-
-// Hooks 모킹
 jest.mock('../../src/hooks/useBalance', () => ({
   useBalance: () => ({
-    data: { formatted: '10', wei: BigInt('10000000000000000000') },
-    refetch: jest.fn(),
-    isLoading: false,
+    data: { wei: 10000000000000000000n, formatted: '10' },
+    refetch: mockRefetch,
   }),
 }));
-
-// Services 모킹
-const mockValidateAddress = jest.fn().mockReturnValue(true);
-const mockValidateAmount = jest.fn().mockReturnValue(true);
-const mockEstimateTransaction = jest.fn().mockResolvedValue({
-  gasLimit: BigInt(21000),
-  gasPrice: BigInt(20000000000),
-  estimatedFee: '0.00042',
-  estimatedFeeWei: BigInt(420000000000000),
-});
-
-jest.mock('../../src/services/txService', () => ({
-  txService: {
-    validateAddress: (...args: unknown[]) => mockValidateAddress(...args),
-    validateAmount: (...args: unknown[]) => mockValidateAmount(...args),
-    validateTransaction: jest.fn().mockResolvedValue({ valid: true }),
-    estimateTransaction: (...args: unknown[]) =>
-      mockEstimateTransaction(...args),
-  },
-}));
-
-jest.mock('../../src/services/walletService', () => ({
-  walletService: {
-    verifyPin: jest.fn().mockResolvedValue(true),
-    signAndSendTransaction: jest.fn().mockResolvedValue('0xhash'),
-    retrieveMnemonicWithPin: jest.fn().mockResolvedValue('test mnemonic'),
-  },
-}));
-
 jest.mock('../../src/services/chainClient', () => ({
   chainClient: {
-    getClient: jest.fn(),
+    getClient: () => ({
+      getBalance: mockNativeBalance,
+      readContract: mockReadContract,
+    }),
+    estimateGas: jest.fn(),
+    getGasPrice: jest.fn(),
   },
+  ChainError: class extends Error {},
 }));
-
-// 컴포넌트 모킹
-jest.mock('../../src/components/common', () => ({
-  QRScanner: () => null,
+jest.mock('../../src/services/signingService', () => ({
+  signingService: { sendTransaction: jest.fn() },
 }));
-
-jest.mock('../../src/components/common/PinConfirmModal', () => () => null);
-
+jest.mock('../../src/services/transactionTracker', () => ({
+  transactionTracker: { reconcile: jest.fn() },
+}));
+jest.mock('../../src/components/common', () => ({ QRScanner: () => null }));
 jest.mock('../../src/screens/Settings/AddressBookScreen', () => () => null);
-
-import SendTransactionScreen from '../../src/screens/Send/SendTransactionScreen';
-
-const queryClient = new QueryClient({
-  defaultOptions: {
-    queries: { retry: false },
-  },
+jest.mock('../../src/components/common/PinConfirmModal', () => (props: any) => {
+  mockPinProps = props;
+  return null;
 });
 
-const renderWithProviders = (component: React.ReactElement) => {
+beforeEach(() => {
+  jest.clearAllMocks();
+  jest.useFakeTimers();
+  mockTokenAddress = undefined;
+  mockNativeBalance.mockResolvedValue(parseEther('10'));
+  mockReadContract.mockImplementation(
+    async ({ functionName }) =>
+      ({ decimals: 18, symbol: 'TEST', balanceOf: 9007199254740993123456789n }[
+        functionName as string
+      ]),
+  );
+  (chainClient.estimateGas as jest.Mock).mockResolvedValue(21000n);
+  (chainClient.getGasPrice as jest.Mock).mockResolvedValue(1000000000n);
+  (signingService.sendTransaction as jest.Mock).mockResolvedValue('0xhash');
+});
+afterEach(() => jest.useRealTimers());
+function mount() {
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false, gcTime: 0 } },
+  });
   return render(
-    <QueryClientProvider client={queryClient}>
-      <ThemeProvider theme={theme}>
-        <NavigationContainer>{component}</NavigationContainer>
+    <QueryClientProvider client={client}>
+      <ThemeProvider theme={darkTheme}>
+        <SendTransactionScreen />
       </ThemeProvider>
     </QueryClientProvider>,
   );
-};
-
-describe('SendTransactionScreen', () => {
-  beforeEach(() => {
-    jest.clearAllMocks();
+}
+async function fill(
+  view: ReturnType<typeof mount>,
+  amount = '1.000000000000000001',
+) {
+  fireEvent.changeText(view.getByTestId('send-address-input'), recipient);
+  fireEvent.changeText(view.getByTestId('send-amount-input'), amount);
+  await act(async () => {
+    await jest.advanceTimersByTimeAsync(600);
   });
+}
 
-  it('should render correctly', () => {
-    renderWithProviders(<SendTransactionScreen />);
-
-    // 스크린이 렌더링 되었는지 확인
-    expect(screen.root).toBeTruthy();
-  });
-
-  it('should display network info', () => {
-    renderWithProviders(<SendTransactionScreen />);
-
-    // 네트워크 관련 텍스트 확인
-    expect(screen.root).toBeTruthy();
-  });
-
-  it('should display balance', () => {
-    renderWithProviders(<SendTransactionScreen />);
-
-    // 잔액이 표시되는지 확인
-    expect(screen.root).toBeTruthy();
-  });
-
-  it('should validate address format', async () => {
-    mockValidateAddress.mockReturnValueOnce(false);
-
-    renderWithProviders(<SendTransactionScreen />);
-
-    // 주소 입력은 유효성 검사 후 에러 표시
-    expect(mockValidateAddress).toBeDefined();
-  });
-
-  it('should validate amount format', () => {
-    mockValidateAmount.mockReturnValueOnce(false);
-
-    renderWithProviders(<SendTransactionScreen />);
-
-    expect(mockValidateAmount).toBeDefined();
-  });
-
-  it('should show gas estimate when valid inputs provided', async () => {
-    renderWithProviders(<SendTransactionScreen />);
-
-    // 가스 추정은 유효한 입력 후 호출됨
-    expect(mockEstimateTransaction).toBeDefined();
-  });
-
-  it('should navigate back when back button pressed', () => {
-    renderWithProviders(<SendTransactionScreen />);
-
-    // 뒤로가기 버튼이 존재하는지 확인
-    try {
-      const backButton = screen.getByText('‹');
-      fireEvent.press(backButton);
-      expect(mockGoBack).toHaveBeenCalled();
-    } catch {
-      // 버튼 텍스트가 다를 수 있음
-      expect(screen.root).toBeTruthy();
-    }
-  });
-
-  it('should lookup address in address book when address entered', () => {
-    renderWithProviders(<SendTransactionScreen />);
-
-    expect(mockGetAddressBookEntry).toBeDefined();
-  });
-});
-
-describe('SendTransactionScreen - Input Validation', () => {
-  beforeEach(() => {
-    jest.clearAllMocks();
-  });
-
-  it('should show error for invalid address', async () => {
-    mockValidateAddress.mockReturnValue(false);
-
-    renderWithProviders(<SendTransactionScreen />);
-
-    // 유효하지 않은 주소에 대한 에러 처리
-    expect(mockValidateAddress).toBeDefined();
-  });
-
-  it('should show error for invalid amount', async () => {
-    mockValidateAmount.mockReturnValue(false);
-
-    renderWithProviders(<SendTransactionScreen />);
-
-    expect(mockValidateAmount).toBeDefined();
-  });
-});
-
-describe('SendTransactionScreen - Gas Estimation', () => {
-  beforeEach(() => {
-    jest.clearAllMocks();
-    mockValidateAddress.mockReturnValue(true);
-    mockValidateAmount.mockReturnValue(true);
-  });
-
-  it('should estimate gas when inputs are valid', async () => {
-    renderWithProviders(<SendTransactionScreen />);
-
-    // 가스 추정 함수가 존재하는지 확인
-    expect(mockEstimateTransaction).toBeDefined();
-  });
-
-  it('should handle gas estimation failure', async () => {
-    mockEstimateTransaction.mockRejectedValueOnce(new Error('Network error'));
-
-    renderWithProviders(<SendTransactionScreen />);
-
-    // 에러가 발생해도 UI가 렌더링되어야 함
-    expect(screen.root).toBeTruthy();
-  });
-});
-
-describe('SendTransactionScreen - User Flow', () => {
-  beforeEach(() => {
-    jest.clearAllMocks();
-    mockValidateAddress.mockReturnValue(true);
-    mockValidateAmount.mockReturnValue(true);
-  });
-
-  it('should render address input field', () => {
-    renderWithProviders(<SendTransactionScreen />);
-
-    // 주소 입력 관련 요소 확인
-    const addressElements = screen.queryAllByPlaceholderText(/주소|address/i);
-    expect(addressElements.length >= 0).toBe(true);
-  });
-
-  it('should render amount input field', () => {
-    renderWithProviders(<SendTransactionScreen />);
-
-    // 금액 입력 관련 요소 확인
-    const amountElements =
-      screen.queryAllByPlaceholderText(/금액|amount|0\.0/i);
-    expect(amountElements.length >= 0).toBe(true);
-  });
-
-  it('should have a send button', () => {
-    renderWithProviders(<SendTransactionScreen />);
-
-    // 전송 버튼 확인
-    const sendButtons = screen.queryAllByText(/전송|보내기|send/i);
-    expect(sendButtons.length >= 0).toBe(true);
-  });
-
-  it('should handle max button press', () => {
-    renderWithProviders(<SendTransactionScreen />);
-
-    // MAX 버튼이 있을 수 있음
-    const maxButtons = screen.queryAllByText(/max|최대/i);
-    if (maxButtons.length > 0) {
-      fireEvent.press(maxButtons[0]);
-    }
-    expect(screen.root).toBeTruthy();
-  });
-
-  it('should show network info header', () => {
-    renderWithProviders(<SendTransactionScreen />);
-
-    // Ethereum 네트워크 표시 확인
-    const ethereumTexts = screen.queryAllByText(/ethereum/i);
-    expect(ethereumTexts.length >= 0).toBe(true);
-  });
-});
-
-describe('SendTransactionScreen - Address Book Integration', () => {
-  beforeEach(() => {
-    jest.clearAllMocks();
-  });
-
-  it('should check address book for entered address', () => {
-    mockGetAddressBookEntry.mockReturnValue({
-      name: 'Test Contact',
-      address: '0x0987654321098765432109876543210987654321',
+it.each([false, true])(
+  'completes review and PIN with the correct native/token transaction (token=%s)',
+  async isToken => {
+    if (isToken) mockTokenAddress = contract;
+    const view = mount();
+    await fill(view);
+    await waitFor(() =>
+      expect(view.getByTestId('send-continue-button')).toBeEnabled(),
+    );
+    await act(async () => {
+      fireEvent.press(view.getByTestId('send-continue-button'));
     });
+    expect(view.getByText('최대 수수료')).toBeTruthy();
+    fireEvent.press(view.getByTestId('send-confirm-button'));
+    expect(mockPinProps.visible).toBe(true);
+    expect(signingService.sendTransaction).not.toHaveBeenCalled();
+    await act(async () => {
+      mockPinProps.onConfirm();
+    });
+    const transaction = (signingService.sendTransaction as jest.Mock).mock
+      .calls[0][0];
+    expect(transaction.to).toBe(isToken ? contract : recipient);
+    expect(transaction.value).toBe(isToken ? '0' : '1000000000000000001');
+    if (isToken)
+      expect(
+        decodeFunctionData({ abi: erc20Abi, data: transaction.data }).args,
+      ).toEqual([recipient, 1000000000000000001n]);
+    expect(view.getByText('전송 제출 완료')).toBeTruthy();
+  },
+);
 
-    renderWithProviders(<SendTransactionScreen />);
-
-    expect(mockGetAddressBookEntry).toBeDefined();
+it('uses the entire exact token balance for maximum amount', async () => {
+  mockTokenAddress = contract;
+  const view = mount();
+  await act(async () => {
+    await jest.advanceTimersByTimeAsync(50);
   });
-
-  it('should handle address not in address book', () => {
-    mockGetAddressBookEntry.mockReturnValue(null);
-
-    renderWithProviders(<SendTransactionScreen />);
-
-    expect(mockGetAddressBookEntry).toBeDefined();
-  });
-});
-
-describe('SendTransactionScreen - Error States', () => {
-  beforeEach(() => {
-    jest.clearAllMocks();
-  });
-
-  it('should handle insufficient balance', () => {
-    mockValidateAmount.mockReturnValue(false);
-
-    renderWithProviders(<SendTransactionScreen />);
-
-    // 잔액 부족 시에도 UI가 렌더링되어야 함
-    expect(screen.root).toBeTruthy();
-  });
-
-  it('should handle network errors gracefully', async () => {
-    mockEstimateTransaction.mockRejectedValue(new Error('Network unavailable'));
-
-    renderWithProviders(<SendTransactionScreen />);
-
-    expect(screen.root).toBeTruthy();
-  });
-});
-
-describe('SendTransactionScreen - Accessibility', () => {
-  it('should have proper testID attributes', () => {
-    renderWithProviders(<SendTransactionScreen />);
-
-    // 테스트 ID가 있는 요소들 확인
+  await waitFor(() =>
     expect(
-      screen.queryByTestId('send-transaction-screen') || screen.root,
-    ).toBeTruthy();
+      view.getByTestId('send-balance-text').props.children.join(''),
+    ).toContain('9007199.254740993123456789'),
+  );
+  fireEvent.press(view.getByTestId('send-max-button'));
+  expect(view.getByTestId('send-amount-input').props.value).toBe(
+    '9007199.254740993123456789',
+  );
+});
+
+it('blocks review when token metadata is unavailable and never sends native currency instead', async () => {
+  mockTokenAddress = contract;
+  mockReadContract.mockRejectedValue(new Error('metadata unavailable'));
+  const view = mount();
+  await fill(view);
+  expect(view.getByTestId('send-continue-button')).toBeDisabled();
+  expect(view.getByText('metadata unavailable')).toBeTruthy();
+  expect(signingService.sendTransaction).not.toHaveBeenCalled();
+});
+
+it('keeps review blocked when token precision is exceeded or gas estimation fails', async () => {
+  mockTokenAddress = contract;
+  const view = mount();
+  await fill(view, '1.0000000000000000001');
+  expect(view.getByTestId('send-continue-button')).toBeDisabled();
+  (chainClient.estimateGas as jest.Mock).mockRejectedValue(
+    new Error('offline'),
+  );
+  await fill(view, '1');
+  expect(view.getByTestId('send-continue-button')).toBeDisabled();
+  expect(signingService.sendTransaction).not.toHaveBeenCalled();
+});
+
+it('shows the prepared recipient even if input changes while review is loading', async () => {
+  const view = mount();
+  await fill(view, '1');
+  let resolve!: (value: bigint) => void;
+  mockNativeBalance.mockReturnValueOnce(
+    new Promise(r => {
+      resolve = r;
+    }),
+  );
+  fireEvent.press(view.getByTestId('send-continue-button'));
+  fireEvent.changeText(view.getByTestId('send-address-input'), contract);
+  await act(async () => {
+    resolve(parseEther('10'));
   });
+  expect(view.getByText(recipient)).toBeTruthy();
+  fireEvent.press(view.getByTestId('send-confirm-button'));
+  await act(async () => {
+    mockPinProps.onConfirm();
+  });
+  expect(signingService.sendTransaction).toHaveBeenCalledWith(
+    expect.objectContaining({ to: recipient }),
+    1,
+    expect.any(Function),
+  );
 });

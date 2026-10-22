@@ -2,7 +2,7 @@
  * dApp 연결 관리 화면
  */
 
-import React, { useState, useCallback, useEffect } from 'react';
+import React, { useState, useCallback, useEffect, useRef } from 'react';
 import styled from 'styled-components/native';
 import { useShallow } from 'zustand/react/shallow';
 import { useTheme } from '@/hooks/useTheme';
@@ -22,6 +22,7 @@ import { useWalletStore } from '@/store/walletStore';
 import { useSecurityStore } from '@/store/securityStore';
 import { wcService, DAppSession, DAppVerification } from '@/services/wcService';
 import { signingService } from '@/services/signingService';
+import { prepareSigningRequest } from '@/services/signingReviewService';
 import {
   analyzeSigningRequest,
   assertSigningIntentUnchanged,
@@ -57,6 +58,10 @@ function getRequestAccount(method: string, params: unknown[]): string | null {
   return null;
 }
 
+interface QueuedRequest extends SignRequest {
+  dApp: { name: string; url: string; verification: DAppVerification };
+}
+
 function WalletConnectScreen(): React.JSX.Element {
   const { isDarkMode } = useTheme();
   const navigation = useNavigation<NavigationProp>();
@@ -84,13 +89,24 @@ function WalletConnectScreen(): React.JSX.Element {
   const [pendingProposal, setPendingProposal] = useState<any>(null);
   const [proposalRiskAcknowledged, setProposalRiskAcknowledged] =
     useState(false);
-  const [signRequest, setSignRequest] = useState<SignRequest | null>(null);
+  const [requests, setRequests] = useState<QueuedRequest[]>([]);
+  const requestsRef = useRef<QueuedRequest[]>([]);
+  const approvedRequest = useRef<QueuedRequest | null>(null);
+  const activeWalletRef = useRef(activeWallet);
+  activeWalletRef.current = activeWallet;
+  const alive = useRef(true);
+  const signing = useRef(false);
+  const [isSigning, setIsSigning] = useState(false);
+  const signRequest = requests[0] || null;
+  const currentRequestDApp = signRequest?.dApp || null;
   const [showSignPinConfirm, setShowSignPinConfirm] = useState(false);
-  const [currentRequestDApp, setCurrentRequestDApp] = useState<{
-    name: string;
-    url: string;
-    verification: DAppVerification;
-  } | null>(null);
+
+  const removeRequest = useCallback((request: SignRequest) => {
+    requestsRef.current = requestsRef.current.filter(
+      item => item.id !== request.id || item.topic !== request.topic,
+    );
+    if (alive.current) setRequests(requestsRef.current);
+  }, []);
 
   // Realm WalletConnect 세션 로그 훅
   const { logSessionConnected, logSessionDisconnected } = useWCActiveSessions();
@@ -99,11 +115,12 @@ function WalletConnectScreen(): React.JSX.Element {
 
   // WalletConnect 초기화
   useEffect(() => {
+    alive.current = true;
     const initWC = async () => {
       try {
         await wcService.initialize();
         const activeSessions = wcService.getActiveSessions();
-        setSessions(activeSessions);
+        if (alive.current) setSessions(activeSessions);
       } catch (error) {
         logger.error('Failed to initialize WalletConnect:', error);
       }
@@ -112,7 +129,7 @@ function WalletConnectScreen(): React.JSX.Element {
     initWC();
 
     // 세션 제안 핸들러
-    wcService.onSessionProposal(async proposal => {
+    const unsubscribeProposals = wcService.onSessionProposal(async proposal => {
       logger.debug('Session proposal received');
       const verification = wcService.getDAppVerification(
         proposal.verifyContext,
@@ -132,7 +149,7 @@ function WalletConnectScreen(): React.JSX.Element {
     });
 
     // 세션 요청 핸들러
-    wcService.onSessionRequest(async request => {
+    const unsubscribeRequests = wcService.onSessionRequest(async request => {
       logger.debug('Session request received:', request.params.request.method);
       const { topic, params } = request;
       const { request: requestParams } = params;
@@ -156,7 +173,9 @@ function WalletConnectScreen(): React.JSX.Element {
         logger.warn('Rejected session request with invalid params');
         return;
       }
-      const requestArguments = requestParams.params as unknown[];
+      const requestArguments = JSON.parse(
+        JSON.stringify(requestParams.params),
+      ) as unknown[];
       const requestAccount = getRequestAccount(
         requestParams.method,
         requestArguments,
@@ -174,41 +193,74 @@ function WalletConnectScreen(): React.JSX.Element {
 
       logger.debug('Processing request method:', requestParams.method);
 
-      let intent;
       try {
-        intent = analyzeSigningRequest({
+        if (
+          !wcService.validateSessionRequest(
+            topic,
+            requestChainId,
+            requestAccount,
+            requestParams.method,
+          )
+        ) {
+          throw new Error('승인되지 않은 세션 요청입니다.');
+        }
+        const prepared = await prepareSigningRequest({
           method: requestParams.method,
           params: requestArguments,
           chainId: requestChainId,
           account: requestAccount,
         });
+        if (!alive.current) {
+          await wcService.rejectRequest(topic, request.id);
+          return;
+        }
+        const intent = analyzeSigningRequest(prepared);
+        if (
+          requestsRef.current.some(
+            item => item.id === request.id && item.topic === topic,
+          )
+        )
+          return;
+        if (requestsRef.current.length >= 20)
+          throw new Error('대기 중인 서명 요청이 너무 많습니다.');
+        const queued: QueuedRequest = {
+          ...prepared,
+          id: request.id,
+          topic,
+          intent,
+          expiresAt: Math.min(
+            (requestParams.expiryTimestamp ?? Infinity) * 1000,
+            Date.now() + (intent.kind === 'transaction' ? 90_000 : 300_000),
+          ),
+          dApp: {
+            name: session?.name || 'Unknown dApp',
+            url: session?.url || '',
+            verification,
+          },
+        };
+        requestsRef.current = [...requestsRef.current, queued];
+        setRequests(requestsRef.current);
       } catch (error) {
         await wcService.rejectRequest(topic, request.id);
         logger.warn(
-          'Rejected request that could not be safely interpreted',
+          'Rejected request that could not be safely reviewed',
           error,
         );
-        return;
       }
-
-      setCurrentRequestDApp({
-        name: session?.name || 'Unknown dApp',
-        url: session?.url || '',
-        verification,
-      });
-
-      // 서명 요청 모달 표시
-      setSignRequest({
-        id: request.id,
-        topic,
-        method: requestParams.method,
-        params: requestArguments,
-        chainId: requestChainId,
-        account: requestAccount,
-        intent,
-      });
     });
-  }, []); // 의존성 배열을 비워서 한 번만 실행
+    return () => {
+      alive.current = false;
+      approvedRequest.current = null;
+      unsubscribeProposals();
+      unsubscribeRequests();
+      requestsRef.current.forEach(request => {
+        wcService
+          .rejectRequest(request.topic, request.id)
+          .catch(error => logger.warn('Request cleanup failed', error));
+      });
+      requestsRef.current = [];
+    };
+  }, []);
 
   const handleConnect = useCallback(async () => {
     if (!wcUri.trim()) {
@@ -318,121 +370,102 @@ function WalletConnectScreen(): React.JSX.Element {
     [logSessionDisconnected],
   );
 
-  // 서명 요청 승인
-  const executeSignRequest = useCallback(async () => {
-    if (!signRequest || !activeWallet) return;
-
-    // Realm에 요청 로그 저장 (pending → approved)
-    await logRequest({
-      sessionTopic: signRequest.topic,
-      requestId: signRequest.id,
-      method: signRequest.method,
-      params: signRequest.params,
-      chainId: signRequest.chainId,
-      dappName: currentRequestDApp?.name,
-    });
-
-    try {
-      logger.debug('Processing sign request:', signRequest.method);
-
-      if (
-        activeWallet.address.toLowerCase() !== signRequest.account.toLowerCase()
-      ) {
-        throw new Error('요청된 계정이 현재 선택된 계정과 다릅니다.');
-      }
-      if (
-        !wcService.validateSessionRequest(
-          signRequest.topic,
-          signRequest.chainId,
-          signRequest.account,
-          signRequest.method,
-        )
-      ) {
-        throw new Error('승인되지 않은 계정, 체인 또는 메서드 요청입니다.');
-      }
-
-      assertSigningIntentUnchanged(signRequest.intent.fingerprint, {
-        method: signRequest.method,
-        params: signRequest.params,
-        chainId: signRequest.chainId,
-        account: signRequest.account,
-      });
-
-      // 실제 서명 처리
-      const result = await signingService.handleRequest(
-        signRequest.method,
-        signRequest.params,
-        signRequest.chainId,
-      );
-
-      logger.info('Sign request completed successfully');
-
-      // 서명 결과를 dApp에 전송
-      await wcService.respondRequest(signRequest.topic, signRequest.id, result);
-
-      // 성공 알림
-      const isTransaction = signRequest.method.includes('Transaction');
-      Alert.alert(
-        isTransaction ? '트랜잭션 전송 완료' : '서명 완료',
-        isTransaction
-          ? `트랜잭션이 블록체인에 전송되었습니다.\n\nTx Hash:\n${result.slice(
-              0,
-              20,
-            )}...`
-          : '서명이 완료되었습니다.',
-        [{ text: '확인' }],
-      );
-
-      setSignRequest(null);
-      setCurrentRequestDApp(null);
-    } catch (error) {
-      logger.error('Failed to sign:', error);
-
-      // 에러 발생 시 dApp에 거부 응답
+  // PIN 인증에는 승인 버튼을 눌렀을 때의 요청 사본만 연결한다.
+  const executeSignRequest = useCallback(
+    async (snapshot: QueuedRequest) => {
+      if (signing.current || approvedRequest.current !== snapshot) return;
+      signing.current = true;
+      setIsSigning(true);
+      const isAuthorized = () =>
+        alive.current &&
+        approvedRequest.current === snapshot &&
+        activeWalletRef.current?.address.toLowerCase() ===
+          snapshot.account.toLowerCase() &&
+        Date.now() < (snapshot.expiresAt ?? 0) &&
+        wcService.validateSessionRequest(
+          snapshot.topic,
+          snapshot.chainId,
+          snapshot.account,
+          snapshot.method,
+        );
       try {
-        await wcService.rejectRequest(signRequest.topic, signRequest.id);
-      } catch (rejectError) {
-        console.error('[WC] Failed to reject after error:', rejectError);
+        if (!isAuthorized())
+          throw new Error(
+            '서명 승인이 만료되었거나 계정이 변경되었습니다. 요청을 다시 확인해주세요.',
+          );
+        assertSigningIntentUnchanged(snapshot.intent.fingerprint, snapshot);
+        await logRequest({
+          sessionTopic: snapshot.topic,
+          requestId: snapshot.id,
+          method: snapshot.method,
+          params: snapshot.params,
+          chainId: snapshot.chainId,
+          dappName: snapshot.dApp.name,
+        });
+        if (!isAuthorized()) throw new Error('서명 승인이 취소되었습니다.');
+        const result = await signingService.handleRequest(
+          snapshot.method,
+          snapshot.params,
+          snapshot.chainId,
+          isAuthorized,
+        );
+        await wcService.respondRequest(snapshot.topic, snapshot.id, result);
+        if (alive.current)
+          Alert.alert(
+            snapshot.method === 'eth_sendTransaction'
+              ? '트랜잭션 제출 완료'
+              : '서명 완료',
+            snapshot.method === 'eth_sendTransaction'
+              ? `트랜잭션이 네트워크에 제출되었습니다.\n${result}`
+              : '서명이 완료되었습니다.',
+          );
+      } catch (error) {
+        await wcService
+          .rejectRequest(snapshot.topic, snapshot.id)
+          .catch(reason => logger.warn('Request rejection failed', reason));
+        if (alive.current)
+          Alert.alert(
+            '서명 실패',
+            error instanceof Error
+              ? error.message
+              : '서명 처리에 실패했습니다.',
+          );
+      } finally {
+        if (approvedRequest.current === snapshot)
+          approvedRequest.current = null;
+        signing.current = false;
+        if (alive.current) setIsSigning(false);
+        removeRequest(snapshot);
       }
-
-      const errorMessage =
-        error instanceof Error ? error.message : '알 수 없는 오류';
-      Alert.alert(
-        '서명 실패',
-        `서명 처리 중 오류가 발생했습니다.\n\n${errorMessage}`,
-        [{ text: '확인' }],
-      );
-
-      setSignRequest(null);
-      setCurrentRequestDApp(null);
-    }
-  }, [signRequest, activeWallet, currentRequestDApp?.name, logRequest]);
+    },
+    [logRequest, removeRequest],
+  );
 
   const handleApproveSignRequest = useCallback(() => {
-    if (requiresTransactionPin()) {
-      setShowSignPinConfirm(true);
+    if (!signRequest || signRequest.intent.blocked || approvedRequest.current)
       return;
-    }
-    executeSignRequest();
-  }, [executeSignRequest, requiresTransactionPin]);
+    const snapshot: QueuedRequest = JSON.parse(JSON.stringify(signRequest));
+    approvedRequest.current = snapshot;
+    if (requiresTransactionPin()) setShowSignPinConfirm(true);
+    else executeSignRequest(snapshot);
+  }, [executeSignRequest, requiresTransactionPin, signRequest]);
 
   const handleSignPinConfirmed = useCallback(() => {
+    const snapshot = approvedRequest.current;
     setShowSignPinConfirm(false);
-    executeSignRequest();
+    if (snapshot) executeSignRequest(snapshot);
   }, [executeSignRequest]);
 
-  // 서명 요청 거부
   const handleRejectSignRequest = useCallback(async () => {
-    if (!signRequest) return;
-
+    if (!signRequest || signing.current) return;
+    approvedRequest.current = null;
     try {
       await wcService.rejectRequest(signRequest.topic, signRequest.id);
-      setSignRequest(null);
-      setCurrentRequestDApp(null);
+      removeRequest(signRequest);
     } catch (error) {
-      console.error('Failed to reject:', error);
+      logger.warn('Failed to reject request', error);
     }
-  }, [signRequest]);
+  }, [removeRequest, signRequest]);
 
   // 현재 네트워크 이름 가져오기
   const requestNetwork = networks.find(
@@ -600,13 +633,17 @@ function WalletConnectScreen(): React.JSX.Element {
         dAppUrl={currentRequestDApp?.url}
         networkName={requestNetwork?.name}
         dAppVerification={currentRequestDApp?.verification}
+        isProcessing={isSigning}
         onApprove={handleApproveSignRequest}
         onReject={handleRejectSignRequest}
       />
       <PinConfirmModal
         visible={showSignPinConfirm}
         onConfirm={handleSignPinConfirmed}
-        onCancel={() => setShowSignPinConfirm(false)}
+        onCancel={() => {
+          approvedRequest.current = null;
+          setShowSignPinConfirm(false);
+        }}
         title="dApp 요청 PIN 확인"
         message="외부 dApp의 서명 또는 트랜잭션 요청을 승인하려면 PIN을 입력하세요."
       />

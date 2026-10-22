@@ -1,6 +1,9 @@
 #!/usr/bin/env node
 
 import { readFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 
 const OSV_BATCH_URL = 'https://api.osv.dev/v1/querybatch';
 const LOCKFILE = new URL('../yarn.lock', import.meta.url);
@@ -18,9 +21,7 @@ async function parseActiveIgnores() {
 
   const today = new Date().toISOString().slice(0, 10);
   const ignores = new Map();
-  const blocks = config.matchAll(
-    /\[\[IgnoredVulns\]\]([\s\S]*?)(?=\n\[\[|$)/g,
-  );
+  const blocks = config.matchAll(/\[\[IgnoredVulns\]\]([\s\S]*?)(?=\n\[\[|$)/g);
 
   for (const [, block] of blocks) {
     const id = block.match(/^id\s*=\s*"([^"]+)"\s*$/m)?.[1];
@@ -30,7 +31,18 @@ async function parseActiveIgnores() {
     )?.[1];
 
     if (!id || !reason || !ignoreUntil || ignoreUntil < today) continue;
-    ignores.set(id, { reason, ignoreUntil });
+    const field = name =>
+      block.match(new RegExp(`^${name}\\s*=\\s*"([^"\\n]+)"\\s*$`, 'm'))?.[1];
+    const packageName = field('package');
+    const version = field('version');
+    const patch = field('patch');
+    const hash = field('patchSha256');
+    if (!packageName || !version || !patch || !hash)
+      throw new Error(`Unscoped security exception: ${id}`);
+    const contents = await readFile(new URL(`../${patch}`, import.meta.url));
+    if (createHash('sha256').update(contents).digest('hex') !== hash)
+      throw new Error(`Security patch hash changed: ${patch}`);
+    ignores.set(`${id}:${packageName}:${version}`, { reason, ignoreUntil });
   }
 
   return ignores;
@@ -65,7 +77,9 @@ async function queryBatch(packages) {
   });
 
   if (!response.ok) {
-    throw new Error(`OSV API failed: ${response.status} ${response.statusText}`);
+    throw new Error(
+      `OSV API failed: ${response.status} ${response.statusText}`,
+    );
   }
 
   const body = await response.json();
@@ -77,6 +91,19 @@ async function queryBatch(packages) {
 }
 
 async function main() {
+  execFileSync(
+    process.execPath,
+    [
+      fileURLToPath(
+        new URL('./verify-dependency-patches.cjs', import.meta.url),
+      ),
+    ],
+    {
+      cwd: fileURLToPath(new URL('..', import.meta.url)),
+      timeout: 30000,
+      stdio: 'inherit',
+    },
+  );
   const lockfile = await readFile(LOCKFILE, 'utf8');
   const activeIgnores = await parseActiveIgnores();
   const packages = parseNpmPackages(lockfile);
@@ -101,9 +128,12 @@ async function main() {
     });
   }
 
-  const mitigated = findings.filter(finding => activeIgnores.has(finding.id));
+  const mitigated = findings.filter(finding =>
+    activeIgnores.has(`${finding.id}:${finding.package}:${finding.version}`),
+  );
   const actionable = findings.filter(
-    finding => !activeIgnores.has(finding.id),
+    finding =>
+      !activeIgnores.has(`${finding.id}:${finding.package}:${finding.version}`),
   );
 
   if (actionable.length === 0) {
@@ -111,7 +141,9 @@ async function main() {
       `OSV audit passed: ${packages.length} locked npm packages, 0 actionable known vulnerabilities.`,
     );
     mitigated.forEach(finding => {
-      const exception = activeIgnores.get(finding.id);
+      const exception = activeIgnores.get(
+        `${finding.id}:${finding.package}:${finding.version}`,
+      );
       console.log(
         `- mitigated until ${exception.ignoreUntil}: ${finding.id} on ${finding.package}@${finding.version}`,
       );

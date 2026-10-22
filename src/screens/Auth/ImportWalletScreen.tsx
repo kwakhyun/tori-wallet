@@ -15,6 +15,7 @@ import {
   Keyboard,
   TextInput,
   StyleSheet,
+  Platform,
 } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -228,7 +229,12 @@ function ImportWalletScreen(): React.JSX.Element {
   return (
     <Container>
       <StatusBar barStyle={isDarkMode ? 'light-content' : 'dark-content'} />
-      <ScrollView keyboardShouldPersistTaps="handled">
+      <ScrollView
+        testID="import-wallet-scroll"
+        keyboardShouldPersistTaps="handled"
+        automaticallyAdjustKeyboardInsets={Platform.OS === 'ios'}
+        keyboardDismissMode={Platform.OS === 'ios' ? 'on-drag' : undefined}
+      >
         <Content>
           <Header>
             <BackButton onPress={() => navigation.goBack()}>
@@ -273,6 +279,7 @@ function ImportWalletScreen(): React.JSX.Element {
               <WordInputContainer key={index}>
                 <WordNumber>{index + 1}</WordNumber>
                 <TextInput
+                  testID={`import-word-${index}`}
                   ref={(ref: TextInput | null) => {
                     inputRefs.current[index] = ref;
                   }}
@@ -319,6 +326,7 @@ function ImportWalletScreen(): React.JSX.Element {
 
           {/* 가져오기 버튼 */}
           <ImportButton
+            testID="import-wallet-confirm"
             onPress={handleImport}
             disabled={!isComplete || isLoading}
           >

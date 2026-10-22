@@ -64,19 +64,13 @@ describe('SigningService', () => {
     mockGetAccount.mockRejectedValueOnce(new Error('Wallet is locked'));
 
     await expect(
-      signingService.sendTransaction(
-        { from: TEST_ADDRESS, to: TO_ADDRESS },
-        1,
-      ),
+      signingService.sendTransaction({ from: TEST_ADDRESS, to: TO_ADDRESS }, 1),
     ).rejects.toThrow('Wallet is locked');
   });
 
   it('rejects transactions without a from account', async () => {
     await expect(
-      signingService.sendTransaction(
-        { from: '', to: TO_ADDRESS },
-        1,
-      ),
+      signingService.sendTransaction({ from: '', to: TO_ADDRESS }, 1),
     ).rejects.toThrow('Transaction account is required');
   });
 
@@ -155,4 +149,42 @@ describe('SigningService', () => {
       ).resolves.toBe('0xmocktxhash');
     },
   );
+  it('preserves reviewed EIP-1559 fees and decimal nonce in signed transactions', async () => {
+    await signingService.signTransaction(
+      {
+        from: TEST_ADDRESS,
+        to: TO_ADDRESS,
+        gas: '21000',
+        maxFeePerGas: '2000000000',
+        maxPriorityFeePerGas: '1000000000',
+        nonce: '10',
+      },
+      1,
+    );
+    expect(mockSignTransaction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        gas: 21000n,
+        maxFeePerGas: 2000000000n,
+        maxPriorityFeePerGas: 1000000000n,
+        nonce: 10,
+        type: 'eip1559',
+      }),
+    );
+  });
+
+  it('rechecks request authorization when viem eventually asks for a signature', async () => {
+    let authorized = true;
+    mockSendTransaction.mockImplementationOnce(async ({ account }) => {
+      authorized = false;
+      return account.signTransaction({ chainId: 1, to: TO_ADDRESS });
+    });
+    await expect(
+      signingService.sendTransaction(
+        { from: TEST_ADDRESS, to: TO_ADDRESS },
+        1,
+        () => authorized,
+      ),
+    ).rejects.toThrow('취소');
+    expect(mockSignTransaction).not.toHaveBeenCalled();
+  });
 });

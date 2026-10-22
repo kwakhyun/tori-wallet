@@ -2,7 +2,7 @@
  * ETH 전송 화면
  */
 
-import React, { useState, useCallback, useEffect } from 'react';
+import React, { useState, useCallback, useEffect, useRef } from 'react';
 import styled from 'styled-components/native';
 import { useShallow } from 'zustand/react/shallow';
 import { useTheme } from '@/hooks/useTheme';
@@ -15,8 +15,10 @@ import {
   Keyboard,
   Clipboard,
   Modal,
+  Platform,
 } from 'react-native';
-import { useNavigation } from '@react-navigation/native';
+import { useQuery } from '@tanstack/react-query';
+import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '@/navigation/RootNavigator';
 import { useWalletStore } from '@/store/walletStore';
@@ -25,12 +27,12 @@ import { useAddressName } from '@/realm/hooks';
 import { useBalance } from '@/hooks/useBalance';
 import { txService } from '@/services/txService';
 import { signingService } from '@/services/signingService';
-import { chainClient } from '@/services/chainClient';
+import { transferService, TransferPlan } from '@/services/transferService';
+import { transactionTracker } from '@/services/transactionTracker';
 import { transactionCacheService } from '@/realm/services';
 import { QRScanner } from '@/components/common';
 import PinConfirmModal from '@/components/common/PinConfirmModal';
 import AddressBookScreen from '@/screens/Settings/AddressBookScreen';
-import { parseEther, formatEther } from 'viem';
 
 type NavigationProp = NativeStackNavigationProp<
   RootStackParamList,
@@ -40,7 +42,8 @@ type NavigationProp = NativeStackNavigationProp<
 function SendTransactionScreen(): React.JSX.Element {
   const { isDarkMode } = useTheme();
   const navigation = useNavigation<NavigationProp>();
-  // route params can be used for pre-filling token address if needed
+  const route = useRoute<RouteProp<RootStackParamList, 'SendTransaction'>>();
+  const tokenAddress = route.params?.tokenAddress;
 
   const { wallets, activeWalletIndex, activeNetworkChainId, networks } =
     useWalletStore(
@@ -58,11 +61,45 @@ function SendTransactionScreen(): React.JSX.Element {
     })),
   );
   const activeWallet = wallets[activeWalletIndex];
+  const activeAddress = activeWallet?.address;
   const activeNetwork = networks.find(n => n.chainId === activeNetworkChainId);
 
   const { data: balance, refetch: refetchBalance } = useBalance(
     activeWallet?.address,
     activeNetworkChainId,
+  );
+
+  const { data: tokenBalance, refetch: refetchToken } = useQuery({
+    queryKey: [
+      'transferToken',
+      activeWallet?.address,
+      tokenAddress,
+      activeNetworkChainId,
+    ],
+    queryFn: () =>
+      transferService.readToken(
+        activeWallet.address as `0x${string}`,
+        tokenAddress as `0x${string}`,
+        activeNetworkChainId,
+      ),
+    enabled: !!activeWallet && !!tokenAddress,
+  });
+  const assetBalance = tokenAddress ? tokenBalance : balance;
+  const assetSymbol = tokenAddress
+    ? tokenBalance?.symbol || '토큰'
+    : activeNetwork?.symbol || 'ETH';
+  const [plan, setPlan] = useState<TransferPlan | null>(null);
+  const sending = useRef(false);
+  const mounted = useRef(true);
+  const currentAccount = useRef(activeWallet?.address);
+  currentAccount.current = activeWallet?.address;
+  const currentChain = useRef(activeNetworkChainId);
+  currentChain.current = activeNetworkChainId;
+  useEffect(
+    () => () => {
+      mounted.current = false;
+    },
+    [],
   );
 
   const [toAddress, setToAddress] = useState('');
@@ -74,7 +111,6 @@ function SendTransactionScreen(): React.JSX.Element {
   );
   const [amount, setAmount] = useState('');
   const [estimatedGas, setEstimatedGas] = useState<string | null>(null);
-  const [_estimatedGasWei, setEstimatedGasWei] = useState<bigint | null>(null);
   const [isEstimating, setIsEstimating] = useState(false);
   const [isSending, setIsSending] = useState(false);
   const [isCalculatingMax, setIsCalculatingMax] = useState(false);
@@ -129,224 +165,139 @@ function SendTransactionScreen(): React.JSX.Element {
     }
   }, []);
 
-  // 가스 추정
-  const estimateGas = useCallback(async () => {
-    if (!toAddress || !amount || !activeWallet) return;
-
-    if (!txService.validateAddress(toAddress)) {
-      setEstimatedGas(null);
-      setEstimatedGasWei(null);
-      setInsufficientFundsError(null);
-      return;
-    }
-
-    if (!txService.validateAmount(amount)) {
-      setEstimatedGas(null);
-      setEstimatedGasWei(null);
-      setInsufficientFundsError(null);
-      return;
-    }
-
-    setIsEstimating(true);
-    setInsufficientFundsError(null);
-
-    try {
-      const estimate = await txService.estimateTransaction({
-        from: activeWallet.address as `0x${string}`,
-        to: toAddress as `0x${string}`,
-        value: amount,
-        chainId: activeNetworkChainId,
-      });
-      setEstimatedGas(estimate.estimatedFee);
-      setEstimatedGasWei(estimate.estimatedFeeWei);
-
-      // 잔액 부족 체크 (전송액 + 가스비)
-      if (balance?.wei) {
-        const valueWei = parseEther(amount);
-        const totalRequired = valueWei + estimate.estimatedFeeWei;
-
-        if (totalRequired > balance.wei) {
-          const shortfall = totalRequired - balance.wei;
-          const shortfallEth = parseFloat(formatEther(shortfall)).toFixed(6);
-          setInsufficientFundsError(
-            `잔액이 ${shortfallEth} ${
-              activeNetwork?.symbol || 'ETH'
-            } 부족합니다. 금액을 줄이거나 "최대" 버튼을 사용하세요.`,
-          );
-        }
-      }
-    } catch (error) {
-      console.error('Gas estimation failed:', error);
-      setEstimatedGas(null);
-      setEstimatedGasWei(null);
-
-      // 가스 추정 실패도 잔액 부족일 수 있음
-      if (error instanceof Error && error.message.includes('insufficient')) {
-        setInsufficientFundsError('가스 추정 실패: 잔액이 부족합니다.');
-      }
-    } finally {
-      setIsEstimating(false);
-    }
-  }, [
-    toAddress,
-    amount,
-    activeWallet,
-    activeNetworkChainId,
-    balance,
-    activeNetwork,
-  ]);
+  const prepareTransfer = useCallback(() => {
+    if (!activeAddress) throw new Error('활성 계정을 찾을 수 없습니다.');
+    return transferService.prepare({
+      from: activeAddress as `0x${string}`,
+      to: toAddress as `0x${string}`,
+      amount,
+      chainId: activeNetworkChainId,
+      tokenAddress: tokenAddress as `0x${string}` | undefined,
+    });
+  }, [activeAddress, toAddress, amount, activeNetworkChainId, tokenAddress]);
 
   useEffect(() => {
+    let cancelled = false;
+    setEstimatedGas(null);
+    setInsufficientFundsError(null);
+    if (step !== 'input' || !amount || !txService.validateAddress(toAddress)) {
+      setIsEstimating(false);
+      return;
+    }
+    setIsEstimating(true);
     const timer = setTimeout(() => {
-      estimateGas();
+      prepareTransfer()
+        .then(next => {
+          if (!cancelled) setEstimatedGas(next.fee);
+        })
+        .catch(error => {
+          if (!cancelled)
+            setInsufficientFundsError(
+              error instanceof Error
+                ? error.message
+                : '전송을 확인할 수 없습니다.',
+            );
+        })
+        .finally(() => {
+          if (!cancelled) setIsEstimating(false);
+        });
     }, 500);
-    return () => clearTimeout(timer);
-  }, [toAddress, amount, estimateGas]);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [prepareTransfer, step, amount, toAddress]);
 
   const handleContinue = useCallback(async () => {
     Keyboard.dismiss();
-
-    if (!txService.validateAddress(toAddress)) {
-      Alert.alert('오류', '유효하지 않은 주소입니다.');
-      return;
-    }
-
-    if (!txService.validateAmount(amount)) {
-      Alert.alert('오류', '유효하지 않은 금액입니다.');
-      return;
-    }
-
-    if (balance?.wei) {
-      const validation = await txService.validateTransaction(
-        {
-          from: activeWallet.address as `0x${string}`,
-          to: toAddress as `0x${string}`,
-          value: amount,
-          chainId: activeNetworkChainId,
-        },
-        balance.wei,
+    setIsEstimating(true);
+    try {
+      const next = await prepareTransfer();
+      if (!mounted.current) return;
+      setPlan(next);
+      setEstimatedGas(next.fee);
+      setStep('confirm');
+    } catch (error) {
+      Alert.alert(
+        '오류',
+        error instanceof Error ? error.message : '전송을 확인할 수 없습니다.',
       );
-
-      if (!validation.valid) {
-        Alert.alert(
-          '오류',
-          validation.error || '트랜잭션 검증에 실패했습니다.',
-        );
-        return;
-      }
+    } finally {
+      if (mounted.current) setIsEstimating(false);
     }
+  }, [prepareTransfer]);
 
-    setStep('confirm');
-  }, [toAddress, amount, balance, activeWallet, activeNetworkChainId]);
-
-  const handleSendTransaction = useCallback(
-    async () => {
-      setIsSending(true);
-
-      try {
-        if (!activeWallet) throw new Error('활성 계정을 찾을 수 없습니다.');
-        const valueWei = parseEther(amount);
-        const hash = await signingService.sendTransaction(
-          {
-            from: activeWallet.address,
-            to: toAddress as `0x${string}`,
-            value: valueWei.toString(),
-          },
-          activeNetworkChainId,
-        );
-
+  const handleSendTransaction = useCallback(async () => {
+    if (!plan || sending.current) return;
+    const snapshot = plan;
+    const isAuthorized = () =>
+      mounted.current &&
+      currentAccount.current === snapshot.from &&
+      currentChain.current === snapshot.chainId &&
+      Date.now() < snapshot.expiresAt;
+    if (!isAuthorized()) {
+      Alert.alert(
+        '다시 확인해주세요',
+        '전송 정보가 만료되었거나 계정이 변경되었습니다.',
+      );
+      setStep('input');
+      return;
+    }
+    sending.current = true;
+    setIsSending(true);
+    try {
+      const hash = await signingService.sendTransaction(
+        snapshot.transaction,
+        snapshot.chainId,
+        isAuthorized,
+      );
+      if (mounted.current) {
         setTxHash(hash);
         setStep('success');
-
-        // 최근 주소에 추가
-        addRecentAddress(toAddress as `0x${string}`);
-
-        refetchBalance();
-
-        try {
-          await transactionCacheService.createLocalTransaction({
-            hash,
-            chainId: activeNetworkChainId,
-            from: activeWallet.address,
-            to: toAddress,
-            value: amount,
-            valueWei: valueWei.toString(),
-            gasPrice: '0',
-            type: 'send',
-            tokenSymbol: activeNetwork?.symbol,
-            tokenAmount: amount,
-          });
-
-          const client = chainClient.getClient(activeNetworkChainId);
-          client
-            .waitForTransactionReceipt({ hash: hash as `0x${string}` })
-            .then(receipt =>
-              transactionCacheService.updateStatus(
-                hash,
-                activeNetworkChainId,
-                receipt.status === 'success'
-                  ? {
-                      status: 'confirmed',
-                      blockNumber: receipt.blockNumber.toString(),
-                      gasUsed: receipt.gasUsed.toString(),
-                      confirmedAt: new Date(),
-                    }
-                  : { status: 'failed' },
-              ),
-            )
-            .catch(error =>
-              transactionCacheService.updateStatus(hash, activeNetworkChainId, {
-                status: 'failed',
-                errorMessage:
-                  error instanceof Error ? error.message : 'Receipt failed',
-              }),
-            );
-        } catch (cacheError) {
-          console.warn('Failed to cache pending transaction:', cacheError);
-        }
-      } catch (error) {
-        console.error('Transaction failed:', error);
-
-        const errorMessage = error instanceof Error ? error.message : '';
-
-        // 잔액 부족 에러 감지
-        if (
-          errorMessage.includes('insufficient') ||
-          errorMessage.includes('exceeds the balance') ||
-          errorMessage.includes('gas')
-        ) {
-          Alert.alert(
-            '잔액 부족',
-            '전송할 금액과 가스비를 합한 금액이 잔액을 초과합니다.\n\n💡 "최대" 버튼을 사용하여 가스비를 제외한 최대 금액을 자동으로 설정하세요.',
-            [{ text: '확인', onPress: () => setStep('input') }],
-          );
-        } else {
-          Alert.alert(
-            '전송 실패',
-            errorMessage || '트랜잭션 전송에 실패했습니다. 다시 시도해주세요.',
-          );
-        }
-      } finally {
-        setIsSending(false);
       }
-    },
-    [
-      activeNetworkChainId,
-      activeNetwork,
-      activeWallet,
-      amount,
-      toAddress,
-      refetchBalance,
-      addRecentAddress,
-    ],
-  );
+      addRecentAddress(snapshot.to);
+      try {
+        await transactionCacheService.createLocalTransaction({
+          hash,
+          chainId: snapshot.chainId,
+          from: snapshot.from,
+          to: snapshot.to,
+          value: snapshot.tokenAddress ? '0' : snapshot.amount,
+          valueWei: snapshot.transaction.value || '0',
+          gasPrice: snapshot.transaction.gasPrice || '0',
+          gasLimit: snapshot.transaction.gas,
+          type: 'send',
+          tokenSymbol: snapshot.symbol || activeNetwork?.symbol,
+          tokenAmount: snapshot.amount,
+          tokenAddress: snapshot.tokenAddress,
+        });
+        transactionTracker.reconcile();
+      } catch (error) {
+        console.warn('Failed to cache pending transaction:', error);
+      }
+      refetchBalance();
+      if (snapshot.tokenAddress) refetchToken();
+    } catch (error) {
+      if (mounted.current)
+        Alert.alert(
+          '전송 실패',
+          error instanceof Error ? error.message : '전송에 실패했습니다.',
+        );
+    } finally {
+      sending.current = false;
+      if (mounted.current) setIsSending(false);
+    }
+  }, [
+    plan,
+    activeNetwork?.symbol,
+    addRecentAddress,
+    refetchBalance,
+    refetchToken,
+  ]);
 
   const handleConfirm = useCallback(() => {
-    if (requiresTransactionPin()) {
-      setShowPinConfirmModal(true);
-    } else {
-      handleSendTransaction();
-    }
+    if (requiresTransactionPin()) setShowPinConfirmModal(true);
+    else handleSendTransaction();
   }, [requiresTransactionPin, handleSendTransaction]);
 
   const handlePinConfirmed = useCallback(() => {
@@ -355,49 +306,37 @@ function SendTransactionScreen(): React.JSX.Element {
   }, [handleSendTransaction]);
 
   const handleMaxAmount = useCallback(async () => {
-    if (!balance?.formatted || !activeWallet || !toAddress) {
-      // 주소가 없으면 기본 가스비 추정
-      if (balance?.formatted) {
-        const maxAmount = Math.max(parseFloat(balance.formatted) - 0.001, 0);
-        setAmount(maxAmount > 0 ? maxAmount.toString() : '0');
-        if (maxAmount <= 0) {
-          setInsufficientFundsError('잔액이 가스비를 충당하기에도 부족합니다.');
-        }
-      }
+    if (tokenAddress) {
+      if (tokenBalance) setAmount(tokenBalance.formatted);
       return;
     }
-
+    if (!activeWallet || !txService.validateAddress(toAddress)) {
+      Alert.alert('주소 확인', '받는 주소를 먼저 입력해주세요.');
+      return;
+    }
     setIsCalculatingMax(true);
-    setInsufficientFundsError(null);
-
     try {
-      const { maxAmount, fee } = await txService.calculateMaxSendable(
+      const result = await txService.calculateMaxSendable(
         activeWallet.address as `0x${string}`,
         toAddress as `0x${string}`,
         activeNetworkChainId,
       );
-
-      const maxNum = parseFloat(maxAmount);
-      if (maxNum <= 0) {
-        setAmount('0');
-        setInsufficientFundsError(
-          `잔액이 가스비(약 ${parseFloat(fee).toFixed(6)} ${
-            activeNetwork?.symbol || 'ETH'
-          })를 충당하기에 부족합니다.`,
-        );
-      } else {
-        // 소수점 6자리로 제한
-        setAmount(maxNum.toFixed(6));
-      }
-    } catch (error) {
-      console.error('Max amount calculation failed:', error);
-      // 폴백: 고정 가스비 예상
-      const maxAmount = Math.max(parseFloat(balance.formatted) - 0.001, 0);
-      setAmount(maxAmount > 0 ? maxAmount.toString() : '0');
+      setAmount(result.maxAmount);
+    } catch {
+      Alert.alert(
+        '오류',
+        '최대 금액을 계산하지 못했습니다. 네트워크를 확인해주세요.',
+      );
     } finally {
-      setIsCalculatingMax(false);
+      if (mounted.current) setIsCalculatingMax(false);
     }
-  }, [balance, activeWallet, toAddress, activeNetworkChainId, activeNetwork]);
+  }, [
+    tokenAddress,
+    tokenBalance,
+    activeWallet,
+    toAddress,
+    activeNetworkChainId,
+  ]);
 
   // 금액 변경 시 에러 클리어
   const handleAmountChange = useCallback((text: string) => {
@@ -450,7 +389,7 @@ function SendTransactionScreen(): React.JSX.Element {
 
       <FormSection>
         <LabelRow>
-          <Label>금액 ({activeNetwork?.symbol || 'ETH'})</Label>
+          <Label>금액 ({assetSymbol})</Label>
           <MaxButton
             onPress={handleMaxAmount}
             disabled={isCalculatingMax}
@@ -470,7 +409,7 @@ function SendTransactionScreen(): React.JSX.Element {
           testID="send-amount-input"
         />
         <BalanceText testID="send-balance-text">
-          잔액: {balance?.formatted || '0'} {activeNetwork?.symbol || 'ETH'}
+          잔액: {assetBalance?.formatted || '0'} {assetSymbol}
         </BalanceText>
       </FormSection>
 
@@ -502,10 +441,10 @@ function SendTransactionScreen(): React.JSX.Element {
         <ErrorBox>
           <ErrorIcon>⚠️</ErrorIcon>
           <ErrorContent>
-            <ErrorTitle>잔액 부족</ErrorTitle>
+            <ErrorTitle>전송 확인 실패</ErrorTitle>
             <ErrorMessage>{insufficientFundsError}</ErrorMessage>
             <ErrorHint>
-              💡 "최대" 버튼을 눌러 가스비를 제외한 최대 금액을 자동 설정하세요.
+              주소, 수량, 잔액과 네트워크 상태를 확인해주세요.
             </ErrorHint>
           </ErrorContent>
         </ErrorBox>
@@ -514,6 +453,7 @@ function SendTransactionScreen(): React.JSX.Element {
       <Spacer />
 
       <PrimaryButton
+        testID="send-continue-button"
         onPress={handleContinue}
         disabled={
           !toAddress || !amount || !!insufficientFundsError || isEstimating
@@ -524,6 +464,10 @@ function SendTransactionScreen(): React.JSX.Element {
     </>
   );
 
+  const planNetwork = networks.find(
+    network => network.chainId === plan?.chainId,
+  );
+  const confirmedSymbol = plan?.symbol || planNetwork?.symbol || assetSymbol;
   const renderConfirmStep = () => (
     <>
       {/* 메인넷 경고 */}
@@ -531,8 +475,7 @@ function SendTransactionScreen(): React.JSX.Element {
         <MainnetWarningBox>
           <WarningIcon>🔴</WarningIcon>
           <WarningText>
-            메인넷 전송입니다. 실제 {activeNetwork?.symbol || 'ETH'}가
-            전송됩니다.
+            메인넷 전송입니다. 실제 {confirmedSymbol}가 전송됩니다.
           </WarningText>
         </MainnetWarningBox>
       )}
@@ -541,24 +484,33 @@ function SendTransactionScreen(): React.JSX.Element {
         <ConfirmRow>
           <ConfirmLabel>보내는 금액</ConfirmLabel>
           <ConfirmValue>
-            {amount} {activeNetwork?.symbol || 'ETH'}
+            {plan?.amount || amount} {confirmedSymbol}
           </ConfirmValue>
         </ConfirmRow>
         <ConfirmRow>
           <ConfirmLabel>받는 주소</ConfirmLabel>
-          <ConfirmAddress numberOfLines={1} ellipsizeMode="middle">
-            {toAddress}
-          </ConfirmAddress>
+          <ConfirmAddress>{plan?.to || toAddress}</ConfirmAddress>
         </ConfirmRow>
+        {plan?.tokenAddress && (
+          <ConfirmRow>
+            <ConfirmLabel>토큰 계약</ConfirmLabel>
+            <ConfirmAddress>{plan.tokenAddress}</ConfirmAddress>
+          </ConfirmRow>
+        )}
         <ConfirmRow>
           <ConfirmLabel>네트워크</ConfirmLabel>
-          <ConfirmValue>{activeNetwork?.name}</ConfirmValue>
+          <ConfirmValue>
+            {planNetwork?.name || activeNetwork?.name}
+          </ConfirmValue>
         </ConfirmRow>
         <ConfirmRow>
-          <ConfirmLabel>예상 수수료</ConfirmLabel>
+          <ConfirmLabel>
+            {[10, 8453, 42161].includes(plan?.chainId || 0)
+              ? '최대 실행 수수료 (L1 비용 별도)'
+              : '최대 수수료'}
+          </ConfirmLabel>
           <ConfirmValue>
-            ~{estimatedGas ? parseFloat(estimatedGas).toFixed(6) : '0'}{' '}
-            {activeNetwork?.symbol || 'ETH'}
+            {plan?.fee || estimatedGas || '0'} {planNetwork?.symbol || 'ETH'}
           </ConfirmValue>
         </ConfirmRow>
       </ConfirmCard>
@@ -573,10 +525,14 @@ function SendTransactionScreen(): React.JSX.Element {
       <Spacer />
 
       <ButtonRow>
-        <SecondaryButton onPress={() => setStep('input')}>
+        <SecondaryButton onPress={() => setStep('input')} disabled={isSending}>
           <SecondaryButtonText>취소</SecondaryButtonText>
         </SecondaryButton>
-        <FlexButton onPress={handleConfirm} disabled={isSending}>
+        <FlexButton
+          testID="send-confirm-button"
+          onPress={handleConfirm}
+          disabled={isSending}
+        >
           {isSending ? (
             <ActivityIndicator color="#fff" />
           ) : (
@@ -590,7 +546,7 @@ function SendTransactionScreen(): React.JSX.Element {
   const renderSuccessStep = () => (
     <SuccessContainer>
       <SuccessIcon>✅</SuccessIcon>
-      <SuccessTitle>전송 완료!</SuccessTitle>
+      <SuccessTitle>전송 제출 완료</SuccessTitle>
       <SuccessDescription>
         트랜잭션이 네트워크에 전송되었습니다.{'\n'}
         확인까지 몇 분 정도 소요될 수 있습니다.
@@ -614,7 +570,7 @@ function SendTransactionScreen(): React.JSX.Element {
   return (
     <Container testID="send-transaction-screen">
       <StatusBar barStyle={isDarkMode ? 'light-content' : 'dark-content'} />
-      <StyledScrollView>
+      <StyledScrollView testID="send-scroll">
         <Content>
           <Header>
             <BackButton
@@ -672,6 +628,9 @@ const Container = styled(SafeAreaView)`
 
 const StyledScrollView = styled(ScrollView).attrs({
   contentContainerStyle: { flexGrow: 1 },
+  automaticallyAdjustKeyboardInsets: Platform.OS === 'ios',
+  keyboardDismissMode: Platform.OS === 'ios' ? 'on-drag' : undefined,
+  keyboardShouldPersistTaps: Platform.OS === 'ios' ? 'handled' : undefined,
 })``;
 
 const Content = styled.View`

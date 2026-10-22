@@ -4,7 +4,7 @@
 
 import { useQuery } from '@tanstack/react-query';
 import { chainClient } from '../services/chainClient';
-import { formatEther } from 'viem';
+import { formatEther, formatUnits } from 'viem';
 import { logger } from '../utils/logger';
 
 interface BalanceData {
@@ -73,7 +73,7 @@ export function useTokenBalance(
   chainId: number = 1,
 ) {
   return useQuery<BalanceData>({
-    queryKey: ['tokenBalance', address, tokenAddress, chainId],
+    queryKey: ['tokenBalance', address, tokenAddress, chainId, decimals],
     queryFn: async () => {
       if (!address) {
         throw new Error('Address is required');
@@ -96,7 +96,7 @@ export function useTokenBalance(
         args: [address as `0x${string}`],
       });
 
-      const formatted = (Number(balance) / Math.pow(10, decimals)).toString();
+      const formatted = formatUnits(balance, decimals);
 
       return {
         wei: balance,
@@ -145,9 +145,7 @@ export function useMultipleBalances(
               args: [address as `0x${string}`],
             });
 
-            const formatted = (
-              Number(balance) / Math.pow(10, token.decimals)
-            ).toString();
+            const formatted = formatUnits(balance, token.decimals);
 
             return {
               tokenAddress: token.address,

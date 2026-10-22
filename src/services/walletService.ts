@@ -12,6 +12,7 @@ import {
 import { wordlist as englishWordlist } from '@scure/bip39/wordlists/english';
 import { createLogger } from '@/utils/logger';
 import { decrypt, encrypt, isNewEncryptionFormat } from '@/utils/crypto';
+import { pinAttemptService } from './pinAttemptService';
 import {
   SecureRandomGenerator,
   secureRandomGenerator,
@@ -133,6 +134,10 @@ export class WalletService {
   }
 
   async retrieveMnemonicWithPin(pin: string): Promise<string | null> {
+    return pinAttemptService.verify(() => this.decryptMnemonicWithPin(pin));
+  }
+
+  private async decryptMnemonicWithPin(pin: string): Promise<string | null> {
     try {
       await this.initializeSecureStorage();
       const encrypted = await EncryptedStorage.getItem(MNEMONIC_STORAGE_KEY);
@@ -222,19 +227,23 @@ export class WalletService {
 
   /** 모든 보안 저장소 삭제를 끝까지 시도하고 일부 실패도 호출자에게 알린다. */
   async clearAll(): Promise<void> {
-    const results = await Promise.allSettled([
-      Keychain.resetGenericPassword({ service: MNEMONIC_STORAGE_KEY }),
-      EncryptedStorage.removeItem(MNEMONIC_STORAGE_KEY),
-      EncryptedStorage.removeItem(ACCOUNTS_STORAGE_KEY),
-      EncryptedStorage.removeItem(BIOMETRIC_ENABLED_KEY),
-      EncryptedStorage.removeItem(VAULT_VERSION_KEY),
-    ]);
-    this.initializationPromise = null;
-
-    const failures = results.filter(result => result.status === 'rejected');
-    if (failures.length > 0) {
-      logger.error('Failed to clear all wallet data', failures);
+    try {
+      await pinAttemptService.reset(async () => {
+        const results = await Promise.allSettled([
+          Keychain.resetGenericPassword({ service: MNEMONIC_STORAGE_KEY }),
+          EncryptedStorage.removeItem(MNEMONIC_STORAGE_KEY),
+          EncryptedStorage.removeItem(ACCOUNTS_STORAGE_KEY),
+          EncryptedStorage.removeItem(BIOMETRIC_ENABLED_KEY),
+          EncryptedStorage.removeItem(VAULT_VERSION_KEY),
+        ]);
+        const failures = results.filter(result => result.status === 'rejected');
+        if (failures.length > 0) throw failures;
+      });
+    } catch (error) {
+      logger.error('Failed to clear all wallet data', error);
       throw new Error('일부 지갑 데이터를 삭제하지 못했습니다.');
+    } finally {
+      this.initializationPromise = null;
     }
   }
 }

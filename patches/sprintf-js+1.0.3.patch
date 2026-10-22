@@ -1,0 +1,20 @@
+diff --git a/node_modules/sprintf-js/src/sprintf.js b/node_modules/sprintf-js/src/sprintf.js
+--- a/node_modules/sprintf-js/src/sprintf.js
++++ b/node_modules/sprintf-js/src/sprintf.js
+@@ -73,13 +73,13 @@
+                         arg = JSON.stringify(arg, null, match[6] ? parseInt(match[6]) : 0)
+                     break
+                     case "e":
+-                        arg = match[7] ? arg.toExponential(match[7]) : arg.toExponential()
++                        arg = match[7] ? arg.toExponential(Math.min(100, Number(match[7]))) : arg.toExponential()
+                     break
+                     case "f":
+-                        arg = match[7] ? parseFloat(arg).toFixed(match[7]) : parseFloat(arg)
++                        arg = match[7] ? parseFloat(arg).toFixed(Math.min(100, Number(match[7]))) : parseFloat(arg)
+                     break
+                     case "g":
+-                        arg = match[7] ? parseFloat(arg).toPrecision(match[7]) : parseFloat(arg)
++                        arg = match[7] ? parseFloat(arg).toPrecision(Math.max(1, Math.min(100, Number(match[7])))) : parseFloat(arg)
+                     break
+                     case "o":
+                         arg = arg.toString(8)

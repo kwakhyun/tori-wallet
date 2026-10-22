@@ -2,11 +2,7 @@
  * WalletConnect 서명 요청 처리 서비스
  */
 
-import {
-  createWalletClient,
-  http,
-  type TransactionSerializable,
-} from 'viem';
+import { createWalletClient, http, type TransactionSerializable } from 'viem';
 import {
   mainnet,
   sepolia,
@@ -40,7 +36,7 @@ const RPC_URLS: Record<number, string> = {
   8453: 'https://base-rpc.publicnode.com',
 };
 
-interface TransactionParams {
+export interface TransactionParams {
   from: string;
   to?: string;
   value?: string;
@@ -59,9 +55,22 @@ class SigningService {
   async sendTransaction(
     params: TransactionParams,
     chainId: number,
+    isAuthorized: () => boolean = () => true,
   ): Promise<string> {
     if (!params.from) throw new Error('Transaction account is required');
     const account = await signerVault.getAccount(params.from);
+    const guardedAccount = {
+      ...account,
+      signTransaction: (
+        ...args: Parameters<typeof account.signTransaction>
+      ) => {
+        if (!isAuthorized())
+          throw new Error('서명 승인이 만료되거나 취소되었습니다.');
+        return account.signTransaction(...args);
+      },
+    };
+    if (!isAuthorized())
+      throw new Error('서명 승인이 만료되거나 취소되었습니다.');
 
     const chain = CHAINS[chainId as keyof typeof CHAINS];
     const rpcUrl = RPC_URLS[chainId];
@@ -71,14 +80,14 @@ class SigningService {
     }
 
     const walletClient = createWalletClient({
-      account,
+      account: guardedAccount,
       chain,
       transport: http(rpcUrl),
     });
 
     // 트랜잭션 파라미터 변환 (gasPrice와 maxFeePerGas는 상호 배타적)
     const txParams = {
-      account,
+      account: guardedAccount,
       to: params.to as `0x${string}`,
       value: params.value ? BigInt(params.value) : undefined,
       data: params.data as `0x${string}` | undefined,
@@ -93,7 +102,7 @@ class SigningService {
               ? BigInt(params.maxPriorityFeePerGas)
               : undefined,
           }),
-      nonce: params.nonce ? parseInt(params.nonce, 16) : undefined,
+      nonce: params.nonce ? Number(BigInt(params.nonce)) : undefined,
     };
 
     // 트랜잭션 전송 (viem 조건부 타입으로 인한 타입 단언 필요)
@@ -111,9 +120,12 @@ class SigningService {
   async signTransaction(
     params: TransactionParams,
     chainId: number,
+    isAuthorized: () => boolean = () => true,
   ): Promise<string> {
     if (!params.from) throw new Error('Transaction account is required');
     const account = await signerVault.getAccount(params.from);
+    if (!isAuthorized())
+      throw new Error('서명 승인이 만료되거나 취소되었습니다.');
 
     const chain = CHAINS[chainId as keyof typeof CHAINS];
 
@@ -133,9 +145,15 @@ class SigningService {
     }
     if (params.gasPrice) {
       txParams.gasPrice = BigInt(params.gasPrice);
+    } else if (params.maxFeePerGas) {
+      txParams.type = 'eip1559';
+      txParams.maxFeePerGas = BigInt(params.maxFeePerGas);
+      txParams.maxPriorityFeePerGas = BigInt(
+        params.maxPriorityFeePerGas || '0',
+      );
     }
     if (params.nonce) {
-      txParams.nonce = parseInt(params.nonce, 16);
+      txParams.nonce = Number(BigInt(params.nonce));
     }
 
     const signedTx = await account.signTransaction(txParams);
@@ -147,8 +165,14 @@ class SigningService {
   /**
    * 개인 메시지 서명
    */
-  async personalSign(message: string, address: string): Promise<string> {
+  async personalSign(
+    message: string,
+    address: string,
+    isAuthorized: () => boolean = () => true,
+  ): Promise<string> {
     const account = await signerVault.getAccount(address);
+    if (!isAuthorized())
+      throw new Error('서명 승인이 만료되거나 취소되었습니다.');
     const signature = await account.signMessage({
       message: message.startsWith('0x')
         ? { raw: message as `0x${string}` }
@@ -172,8 +196,11 @@ class SigningService {
   async signTypedData(
     typedData: string | object,
     address: string,
+    isAuthorized: () => boolean = () => true,
   ): Promise<string> {
     const account = await signerVault.getAccount(address);
+    if (!isAuthorized())
+      throw new Error('서명 승인이 만료되거나 취소되었습니다.');
 
     let data: any;
     if (typeof typedData === 'string') {
@@ -204,25 +231,26 @@ class SigningService {
     method: string,
     params: unknown[],
     chainId: number,
+    isAuthorized: () => boolean = () => true,
   ): Promise<string> {
     logger.debug('Handling signing request', { method, chainId });
 
     switch (method) {
       case 'eth_sendTransaction': {
         const txParams = params[0] as TransactionParams;
-        return this.sendTransaction(txParams, chainId);
+        return this.sendTransaction(txParams, chainId, isAuthorized);
       }
 
       case 'eth_signTransaction': {
         const txParams = params[0] as TransactionParams;
-        return this.signTransaction(txParams, chainId);
+        return this.signTransaction(txParams, chainId, isAuthorized);
       }
 
       case 'personal_sign': {
         // personal_sign: [message, address]
         const message = params[0] as string;
         const address = params[1] as string;
-        return this.personalSign(message, address);
+        return this.personalSign(message, address, isAuthorized);
       }
 
       case 'eth_signTypedData':
@@ -231,14 +259,13 @@ class SigningService {
         // signTypedData: [address, typedData]
         const address = params[0] as string;
         const typedData = params[1] as string | object;
-        return this.signTypedData(typedData, address);
+        return this.signTypedData(typedData, address, isAuthorized);
       }
 
       default:
         throw new Error(`Unsupported method: ${method}`);
     }
   }
-
 }
 
 export const signingService = new SigningService();

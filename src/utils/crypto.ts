@@ -71,7 +71,8 @@ async function deriveKeys(
       r: params.r,
       p: params.p,
       dkLen: DERIVED_KEY_BYTES,
-      asyncTick: 10,
+      // Keep input responsive without yielding once per native timer frame.
+      asyncTick: 25,
     },
   );
 

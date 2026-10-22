@@ -4,7 +4,15 @@
 
 import '@/utils/polyfills'; // 반드시 첫 번째로 import
 import React, { useEffect, useState } from 'react';
-import { Appearance, StatusBar, StyleSheet, View } from 'react-native';
+import {
+  AppState,
+  Appearance,
+  StatusBar,
+  StyleSheet,
+  View,
+} from 'react-native';
+import NetInfo from '@react-native-community/netinfo';
+import { transactionTracker } from '@/services/transactionTracker';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { NavigationContainer } from '@react-navigation/native';
 import { ThemeProvider } from 'styled-components/native';
@@ -97,9 +105,19 @@ function App(): React.JSX.Element {
   useEffect(() => {
     const unsubscribeNetwork = setupNetworkListener();
     const unsubscribeFocus = setupAppFocusListener();
+    transactionTracker.start();
+    const appState = AppState.addEventListener('change', state => {
+      if (state === 'active') transactionTracker.reconcile();
+    });
+    const unsubscribeRecovery = NetInfo.addEventListener(state => {
+      if (state.isConnected) transactionTracker.reconcile();
+    });
     return () => {
       unsubscribeNetwork();
       unsubscribeFocus();
+      appState.remove();
+      unsubscribeRecovery();
+      transactionTracker.stop();
     };
   }, []);
 

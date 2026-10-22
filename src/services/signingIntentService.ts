@@ -39,6 +39,7 @@ export interface SigningRequestInput {
   params: unknown[];
   chainId: number;
   account: string;
+  referenceGasPrice?: string;
 }
 
 interface TransactionParams {
@@ -86,6 +87,7 @@ export function fingerprintSigningRequest(input: SigningRequestInput): Hex {
         params: input.params,
         chainId: input.chainId,
         account: input.account.toLowerCase(),
+        referenceGasPrice: input.referenceGasPrice,
       }),
     ),
   );
@@ -263,7 +265,53 @@ function analyzeTransaction(input: SigningRequestInput): SigningIntent {
     });
   }
 
+  const nonce = parseQuantity(tx.nonce, 'nonce');
+  if (nonce > BigInt(Number.MAX_SAFE_INTEGER))
+    throw new Error('nonce 값이 지원 범위를 초과합니다.');
   const value = parseQuantity(tx.value, '전송 금액');
+  const gas = parseQuantity(tx.gas, '가스 한도');
+  const feeCap = parseQuantity(
+    tx.gasPrice ?? tx.maxFeePerGas,
+    '가스당 수수료 상한',
+  );
+  const priorityFee = parseQuantity(tx.maxPriorityFeePerGas, '우선순위 수수료');
+  if (
+    tx.gasPrice !== undefined &&
+    (tx.maxFeePerGas !== undefined || tx.maxPriorityFeePerGas !== undefined)
+  ) {
+    throw new Error('서로 다른 수수료 형식을 함께 지정할 수 없습니다.');
+  }
+  if (priorityFee > feeCap)
+    throw new Error('우선순위 수수료가 수수료 상한을 초과합니다.');
+  if (gas <= 0n || feeCap <= 0n) {
+    blocked = true;
+    warnings.push({
+      level: 'critical',
+      message: '네트워크 수수료 상한을 확인하기 전에는 서명할 수 없습니다.',
+    });
+  }
+  const maximumFee = gas * feeCap;
+  const referenceFee = parseQuantity(
+    input.referenceGasPrice,
+    '네트워크 기준 수수료',
+  );
+  const highFee =
+    (referenceFee > 0n && feeCap > referenceFee * 5n) ||
+    maximumFee > (input.chainId === 137 ? 10n ** 19n : 5n * 10n ** 16n);
+  if (highFee)
+    warnings.push({
+      level: 'critical',
+      message:
+        '네트워크 수수료가 높습니다. 최대 수수료와 총지출액을 다시 확인하세요.',
+    });
+  const nativeSymbol = input.chainId === 137 ? 'POL' : 'ETH';
+  const hasL1DataFee = [10, 8453, 42161].includes(input.chainId);
+  if (hasL1DataFee)
+    warnings.push({
+      level: 'warning',
+      message:
+        '이 네트워크는 실행 수수료 외에 L1 데이터 수수료를 추가로 부과합니다. 아래 금액에는 L1 데이터 수수료가 포함되지 않습니다.',
+    });
   const data = tx.data || '0x';
   if (!HEX_BYTES.test(data)) {
     throw new Error('트랜잭션 호출 데이터가 올바른 16진수가 아닙니다.');
@@ -272,11 +320,20 @@ function analyzeTransaction(input: SigningRequestInput): SigningIntent {
   const details: SigningIntentDetail[] = [
     { label: '보내는 계정', value: tx.from },
     { label: '대상 주소', value: tx.to || '없음' },
-    { label: '네이티브 자산', value: `${formatEther(value)} ETH` },
+    { label: '네이티브 자산', value: `${formatEther(value)} ${nativeSymbol}` },
     { label: '체인 ID', value: String(input.chainId) },
+    { label: '가스 한도', value: gas.toString() },
+    {
+      label: hasL1DataFee ? '최대 실행 수수료' : '최대 네트워크 수수료',
+      value: `${formatEther(maximumFee)} ${nativeSymbol}`,
+    },
+    {
+      label: hasL1DataFee ? '실행비 포함 금액 (L1 비용 별도)' : '최대 총지출액',
+      value: `${formatEther(value + maximumFee)} ${nativeSymbol}`,
+    },
   ];
   let summary = value > 0n ? '네이티브 자산 전송' : '트랜잭션';
-  let requiresRiskAcknowledgement = false;
+  let requiresRiskAcknowledgement = highFee;
 
   if (data !== '0x') {
     if (data.length < 10) throw new Error('컨트랙트 함수 선택자가 없습니다.');
@@ -284,7 +341,8 @@ function analyzeTransaction(input: SigningRequestInput): SigningIntent {
     summary = decoded.summary;
     details.push(...decoded.details);
     warnings.push(...decoded.warnings);
-    requiresRiskAcknowledgement = decoded.requiresRiskAcknowledgement;
+    requiresRiskAcknowledgement =
+      highFee || decoded.requiresRiskAcknowledgement;
   }
 
   return {

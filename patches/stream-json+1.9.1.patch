@@ -1,0 +1,32 @@
+diff --git a/node_modules/stream-json/Assembler.js b/node_modules/stream-json/Assembler.js
+--- a/node_modules/stream-json/Assembler.js
++++ b/node_modules/stream-json/Assembler.js
+@@ -120,7 +120,7 @@
+       if (this.current instanceof Array) {
+         this.current.push(value);
+       } else {
+-        this.current[this.key] = value;
++        Object.defineProperty(this.current, this.key, {value, writable: true, enumerable: true, configurable: true});
+         this.key = null;
+       }
+     }
+@@ -138,7 +138,7 @@
+       } else {
+         value = this.reviver(this.key, value);
+         if (value !== undefined) {
+-          this.current[this.key] = value;
++          Object.defineProperty(this.current, this.key, {value, writable: true, enumerable: true, configurable: true});
+         }
+         this.key = null;
+       }
+diff --git a/node_modules/stream-json/filters/FilterBase.js b/node_modules/stream-json/filters/FilterBase.js
+--- a/node_modules/stream-json/filters/FilterBase.js
++++ b/node_modules/stream-json/filters/FilterBase.js
+@@ -55,6 +55,7 @@
+   }
+ 
+   _check(chunk, _, callback) {
++    if (this._stack.length > 1024) return callback(new RangeError('JSON filter nesting limit exceeded'));
+     // update the last stack key
+     switch (chunk.name) {
+       case 'startObject':

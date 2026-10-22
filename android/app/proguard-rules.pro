@@ -8,3 +8,6 @@
 #   http://developer.android.com/guide/developing/tools/proguard.html
 
 # Add any project specific keep options here:
+
+# react-native-config accesses these fields by reflection in release builds.
+-keep class com.toriwallet.BuildConfig { *; }

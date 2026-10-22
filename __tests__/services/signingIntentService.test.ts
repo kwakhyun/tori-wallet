@@ -23,7 +23,16 @@ const approvalForAllAbi = parseAbi([
 function transactionInput(data: `0x${string}` = '0x') {
   return {
     method: 'eth_sendTransaction',
-    params: [{ from: ACCOUNT, to: TARGET, value: '0x0', data }],
+    params: [
+      {
+        from: ACCOUNT,
+        to: TARGET,
+        value: '0x0',
+        data,
+        gas: '21000',
+        gasPrice: '1000000000',
+      },
+    ],
     chainId: 1,
     account: ACCOUNT,
   };
@@ -103,7 +112,16 @@ describe('signingIntentService', () => {
     const first = transactionInput();
     const reordered = {
       ...first,
-      params: [{ data: '0x', value: '0x0', to: TARGET, from: ACCOUNT }],
+      params: [
+        {
+          gasPrice: '1000000000',
+          gas: '21000',
+          data: '0x',
+          value: '0x0',
+          to: TARGET,
+          from: ACCOUNT,
+        },
+      ],
     };
     const changed = {
       ...first,

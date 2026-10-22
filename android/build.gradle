@@ -40,13 +40,4 @@ subprojects { subproject ->
             }
         }
     }
-    
-    // 외부 라이브러리의 오래된 테스트 의존성 업그레이드
-    subproject.configurations.all {
-        resolutionStrategy {
-            force 'androidx.test:core:1.5.0'
-            force 'androidx.test.ext:junit:1.1.5'
-            force 'androidx.test.espresso:espresso-core:3.5.1'
-        }
-    }
 }

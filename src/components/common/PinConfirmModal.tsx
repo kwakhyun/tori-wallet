@@ -2,11 +2,11 @@
  * 트랜잭션 전 PIN 확인 모달
  */
 
-import React, { useState, useCallback, useEffect, useRef } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import styled from 'styled-components/native';
-import { Modal, Alert, Vibration, Animated } from 'react-native';
-import { walletService } from '@/services/walletService';
-import { signerVault } from '@/services/signerVault';
+import { Modal, Vibration, ActivityIndicator } from 'react-native';
+import { useAuthentication } from '@/hooks/useAuthentication';
+import { PinLockedError } from '@/services/pinAttemptService';
 
 interface Props {
   visible: boolean;
@@ -24,125 +24,67 @@ export function PinConfirmModal({
   message = '계속하려면 PIN을 입력하세요.',
 }: Props) {
   const [pin, setPin] = useState('');
-  const [isLoading, setIsLoading] = useState(false);
-  const [displayProgress, setDisplayProgress] = useState(0);
   const [error, setError] = useState<string | null>(null);
-  const [attempts, setAttempts] = useState(0);
-
-  const MAX_ATTEMPTS = 5;
-
-  // 애니메이션 값
-  const animatedProgress = useRef(new Animated.Value(0)).current;
-
-  // 애니메이션 값 변화 리스너 (텍스트 동기화)
-  useEffect(() => {
-    const listenerId = animatedProgress.addListener(({ value }) => {
-      setDisplayProgress(Math.round(value));
-    });
-    return () => {
-      animatedProgress.removeListener(listenerId);
-    };
-  }, [animatedProgress]);
-
-  // 구간별 진행률 표시 (부드러운 애니메이션)
-  const setProgress = useCallback(
-    (value: number) => {
-      Animated.timing(animatedProgress, {
-        toValue: value,
-        duration: 300,
-        useNativeDriver: false,
-      }).start();
-    },
-    [animatedProgress],
-  );
+  const {
+    authenticate,
+    cancel,
+    isAuthenticating: isLoading,
+  } = useAuthentication();
 
   useEffect(() => {
-    if (visible) {
-      setPin('');
-      animatedProgress.setValue(0);
-      setDisplayProgress(0);
-      setError(null);
-    }
-  }, [visible, animatedProgress]);
+    cancel();
+    setPin('');
+    setError(null);
+  }, [visible, cancel]);
+
+  useEffect(() => {
+    if (!isLoading) setPin('');
+  }, [isLoading]);
+
+  const handleCancel = useCallback(() => {
+    cancel();
+    setPin('');
+    onCancel();
+  }, [cancel, onCancel]);
 
   const handleVerify = useCallback(
-    async (pinToVerify: string) => {
-      if (pinToVerify.length !== 6) {
-        setError('PIN은 6자리입니다.');
-        return;
-      }
-
-      if (attempts >= MAX_ATTEMPTS) {
-        Alert.alert(
-          '접근 제한',
-          '너무 많은 시도가 있었습니다. 잠시 후 다시 시도해주세요.',
-          [{ text: '확인', onPress: onCancel }],
-        );
-        return;
-      }
-
-      setIsLoading(true);
-      setError(null);
-      setProgress(10);
-
-      // 진행률 업데이트 간 딜레이
-      await new Promise(resolve => setTimeout(resolve, 200));
-      setProgress(30);
-      await new Promise(resolve => setTimeout(resolve, 200));
-      setProgress(50);
-
+    async (value: string) => {
       try {
-        const mnemonic = await walletService.retrieveMnemonicWithPin(
-          pinToVerify,
-        );
-
-        await new Promise(resolve => setTimeout(resolve, 150));
-        setProgress(70);
-        await new Promise(resolve => setTimeout(resolve, 150));
-        setProgress(85);
-
-        if (mnemonic && walletService.validateMnemonic(mnemonic)) {
-          signerVault.startSession(mnemonic);
-          await new Promise(resolve => setTimeout(resolve, 100));
-          setProgress(100);
-          setAttempts(0);
+        const authenticated = await authenticate(value);
+        if (authenticated === null) return;
+        if (authenticated) {
+          setPin('');
           onConfirm();
         } else {
-          setProgress(0);
-          const remainingAttempts = MAX_ATTEMPTS - attempts - 1;
-          setAttempts(prev => prev + 1);
-          setError(`PIN이 올바르지 않습니다. (${remainingAttempts}회 남음)`);
+          setError('PIN이 올바르지 않습니다.');
           Vibration.vibrate(200);
           setPin('');
         }
-      } catch {
-        setProgress(0);
-        setError('PIN 확인에 실패했습니다.');
+      } catch (reason) {
         setPin('');
-      } finally {
-        setIsLoading(false);
+        setError(
+          reason instanceof PinLockedError
+            ? reason.message
+            : 'PIN 확인에 실패했습니다.',
+        );
       }
     },
-    [attempts, onConfirm, onCancel, setProgress],
+    [authenticate, onConfirm],
   );
 
   const handleKeyPress = useCallback(
     (key: string) => {
+      if (isLoading || !visible) return;
       if (key === 'delete') {
         setPin(prev => prev.slice(0, -1));
       } else if (pin.length < 6) {
-        const newPin = pin + key;
-        setPin(newPin);
-
-        // 6자리가 되면 자동 확인
-        if (newPin.length === 6) {
-          setTimeout(() => {
-            handleVerify(newPin);
-          }, 100);
-        }
+        const next = pin + key;
+        setPin(next);
+        setError(null);
+        if (next.length === 6) handleVerify(next);
       }
     },
-    [pin, handleVerify],
+    [handleVerify, isLoading, pin, visible],
   );
 
   return (
@@ -150,7 +92,7 @@ export function PinConfirmModal({
       visible={visible}
       animationType="fade"
       transparent
-      onRequestClose={onCancel}
+      onRequestClose={handleCancel}
     >
       <Overlay testID="pin-confirm-overlay">
         <Container testID="pin-confirm-container">
@@ -172,17 +114,7 @@ export function PinConfirmModal({
 
           {isLoading ? (
             <LoadingContainer>
-              <LoadingPercentText>{displayProgress}%</LoadingPercentText>
-              <LoadingBarContainer>
-                <AnimatedLoadingBarFill
-                  style={{
-                    width: animatedProgress.interpolate({
-                      inputRange: [0, 100],
-                      outputRange: ['0%', '100%'],
-                    }),
-                  }}
-                />
-              </LoadingBarContainer>
+              <ActivityIndicator />
               <LoadingText>확인 중...</LoadingText>
             </LoadingContainer>
           ) : (
@@ -214,14 +146,13 @@ export function PinConfirmModal({
                   </KeypadRow>
                 ))}
               </Keypad>
-
-              <ButtonContainer>
-                <CancelButton onPress={onCancel} testID="pin-confirm-cancel">
-                  <CancelButtonText>취소</CancelButtonText>
-                </CancelButton>
-              </ButtonContainer>
             </>
           )}
+          <ButtonContainer>
+            <CancelButton onPress={handleCancel} testID="pin-confirm-cancel">
+              <CancelButtonText>취소</CancelButtonText>
+            </CancelButton>
+          </ButtonContainer>
         </Container>
       </Overlay>
     </Modal>
@@ -285,29 +216,6 @@ const LoadingContainer = styled.View`
   padding: ${({ theme }) => theme.spacing.xl}px;
   align-items: center;
 `;
-
-const LoadingPercentText = styled.Text`
-  color: ${({ theme }) => theme.colors.primary};
-  font-size: 32px;
-  font-weight: 700;
-  margin-bottom: ${({ theme }) => theme.spacing.sm}px;
-`;
-
-const LoadingBarContainer = styled.View`
-  width: 180px;
-  height: 6px;
-  background-color: ${({ theme }) => theme.colors.border};
-  border-radius: 3px;
-  overflow: hidden;
-`;
-
-const LoadingBarFill = styled.View`
-  height: 100%;
-  background-color: ${({ theme }) => theme.colors.primary};
-  border-radius: 3px;
-`;
-
-const AnimatedLoadingBarFill = Animated.createAnimatedComponent(LoadingBarFill);
 
 const LoadingText = styled.Text`
   color: ${({ theme }) => theme.colors.textSecondary};

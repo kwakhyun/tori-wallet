@@ -92,7 +92,7 @@ describe('HomeScreen', () => {
       const { toJSON } = render(<HomeScreen />);
       // 비동기 상태 업데이트 완료 대기
       await act(async () => {
-        await new Promise(resolve => setTimeout(resolve, 100));
+        await Promise.resolve();
       });
       expect(toJSON()).not.toBeNull();
     });
@@ -101,7 +101,7 @@ describe('HomeScreen', () => {
       render(<HomeScreen />);
       // 비동기 상태 업데이트 완료 대기
       await act(async () => {
-        await new Promise(resolve => setTimeout(resolve, 100));
+        await Promise.resolve();
       });
       // 주소가 truncate되어 표시되어야 함 - testID 사용
       await waitFor(() => {
@@ -113,7 +113,7 @@ describe('HomeScreen', () => {
     it('should display balance amount', async () => {
       render(<HomeScreen />);
       await act(async () => {
-        await new Promise(resolve => setTimeout(resolve, 100));
+        await Promise.resolve();
       });
       await waitFor(() => {
         // testID를 통해 잔액 컨테이너 확인
@@ -125,7 +125,7 @@ describe('HomeScreen', () => {
     it('should display network name', async () => {
       render(<HomeScreen />);
       await act(async () => {
-        await new Promise(resolve => setTimeout(resolve, 100));
+        await Promise.resolve();
       });
       await waitFor(() => {
         // testID를 통해 네트워크 이름 확인
@@ -140,7 +140,7 @@ describe('HomeScreen', () => {
       });
       render(<HomeScreen />);
       await act(async () => {
-        await new Promise(resolve => setTimeout(resolve, 100));
+        await Promise.resolve();
       });
       await waitFor(() => {
         // testID를 통해 네트워크 배지 확인
@@ -162,7 +162,7 @@ describe('HomeScreen', () => {
       mockBalance = createMockBalance({ isRefetching: true });
       render(<HomeScreen />);
       await act(async () => {
-        await new Promise(resolve => setTimeout(resolve, 100));
+        await Promise.resolve();
       });
       // RefreshControl이 활성화되어 있어야 함 - 컨테이너가 렌더링됨
       await waitFor(() => {
@@ -175,7 +175,7 @@ describe('HomeScreen', () => {
     it('should navigate to SendTransaction on send button press', async () => {
       render(<HomeScreen />);
       await act(async () => {
-        await new Promise(resolve => setTimeout(resolve, 100));
+        await Promise.resolve();
       });
 
       await waitFor(() => {
@@ -196,7 +196,7 @@ describe('HomeScreen', () => {
     it('should navigate to ReceiveToken on receive button press', async () => {
       render(<HomeScreen />);
       await act(async () => {
-        await new Promise(resolve => setTimeout(resolve, 100));
+        await Promise.resolve();
       });
 
       await waitFor(() => {
@@ -214,7 +214,7 @@ describe('HomeScreen', () => {
     it('should navigate to Swap on swap button press', async () => {
       render(<HomeScreen />);
       await act(async () => {
-        await new Promise(resolve => setTimeout(resolve, 100));
+        await Promise.resolve();
       });
 
       await waitFor(() => {
@@ -239,7 +239,7 @@ describe('HomeScreen', () => {
 
       render(<HomeScreen />);
       await act(async () => {
-        await new Promise(resolve => setTimeout(resolve, 100));
+        await Promise.resolve();
       });
 
       await waitFor(() => {
@@ -259,7 +259,7 @@ describe('HomeScreen', () => {
     it('should call showBuyProviderAlert on buy button press', async () => {
       render(<HomeScreen />);
       await act(async () => {
-        await new Promise(resolve => setTimeout(resolve, 100));
+        await Promise.resolve();
       });
 
       await waitFor(() => {
@@ -280,7 +280,7 @@ describe('HomeScreen', () => {
 
       render(<HomeScreen />);
       await act(async () => {
-        await new Promise(resolve => setTimeout(resolve, 100));
+        await Promise.resolve();
       });
 
       // 로딩 완료 후 ScrollView가 렌더링되어야 함
@@ -304,7 +304,7 @@ describe('HomeScreen', () => {
 
       render(<HomeScreen />);
       await act(async () => {
-        await new Promise(resolve => setTimeout(resolve, 100));
+        await Promise.resolve();
       });
       // 에러 상태에서도 기본 UI는 렌더링되어야 함
       await waitFor(() => {
@@ -321,7 +321,7 @@ describe('HomeScreen', () => {
 
       render(<HomeScreen />);
       await act(async () => {
-        await new Promise(resolve => setTimeout(resolve, 100));
+        await Promise.resolve();
       });
       // 잔액 컨테이너가 렌더링되어야 함
       await waitFor(() => {
@@ -343,7 +343,7 @@ describe('HomeScreen', () => {
 
       // 비동기 상태 업데이트 완료 대기 (가격 로딩 완료 후 버튼 표시)
       await act(async () => {
-        await new Promise(resolve => setTimeout(resolve, 100));
+        await Promise.resolve();
       });
 
       // home-send-button testID 사용

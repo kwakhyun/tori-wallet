@@ -14,6 +14,7 @@ import UnlockScreen from '../../src/screens/Auth/UnlockScreen';
 import { ThemeProvider } from 'styled-components/native';
 import { lightTheme } from '../../src/styles/theme';
 import { Alert } from 'react-native';
+import { PinLockedError } from '../../src/services/pinAttemptService';
 
 // 네비게이션 모킹
 const mockNavigate = jest.fn();
@@ -232,35 +233,19 @@ describe('UnlockScreen', () => {
   });
 
   describe('보안 - 시도 횟수 제한', () => {
-    it('should warn after multiple failed attempts', async () => {
-      mockUnlockWithPin.mockResolvedValue(false);
-
+    it('shows the persistent shared PIN lock and keeps the wallet locked', async () => {
+      mockUnlockWithPin.mockRejectedValue(
+        new PinLockedError(Date.now() + 30_000),
+      );
       const { getByText } = renderWithTheme(<UnlockScreen />);
-
-      // 5회 실패 시뮬레이션
-      for (let i = 0; i < 5; i++) {
-        fireEvent.press(getByText('1'));
-        fireEvent.press(getByText('1'));
-        fireEvent.press(getByText('1'));
-        fireEvent.press(getByText('1'));
-        fireEvent.press(getByText('1'));
-        fireEvent.press(getByText('1'));
-
-        await waitFor(
-          () => {
-            expect(Alert.alert).toHaveBeenCalledTimes(i + 1);
-          },
-          { timeout: 3000 },
-        );
-      }
-
-      // 5회 실패 후 경고 메시지 확인
-      await waitFor(() => {
+      for (const digit of '111111') fireEvent.press(getByText(digit));
+      await waitFor(() =>
         expect(Alert.alert).toHaveBeenCalledWith(
-          '경고',
-          expect.stringContaining('회 틀렸습니다'),
-        );
-      });
+          '접근 제한',
+          expect.stringContaining('PIN 입력이 제한'),
+        ),
+      );
+      expect(mockUnlock).not.toHaveBeenCalled();
     });
   });
 
