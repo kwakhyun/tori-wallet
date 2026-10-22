@@ -34,11 +34,15 @@ export async function importTestWallet() {
     .withTimeout(30000);
   for (const digit of TEST_PIN)
     await element(by.id(`set-pin-key-${digit}`)).tap();
+  // The real KDF continuously yields through JS timers. Wait for its result
+  // explicitly instead of asking Detox to find an idle interval during it.
+  await device.disableSynchronization();
   for (const digit of TEST_PIN)
     await element(by.id(`set-pin-key-${digit}`)).tap();
   await waitFor(element(by.id('home-screen')))
     .toBeVisible()
     .withTimeout(PIN_DERIVATION_TIMEOUT);
+  await device.enableSynchronization();
 }
 export async function enterUnlockPin(pin: string) {
   for (const digit of pin) await element(by.id(`unlock-key-${digit}`)).tap();
