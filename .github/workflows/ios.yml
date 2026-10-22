@@ -1,0 +1,71 @@
+name: iOS Build and E2E
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ios-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ios:
+    name: Release build and Detox E2E
+    runs-on: macos-26
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+      DETOX_IOS_DEVICE: iPhone 17 Pro
+      DETOX_IOS_RUNTIME: '26.5'
+      HOMEBREW_NO_AUTO_UPDATE: '1'
+      CI: 'true'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: yarn
+      - uses: ruby/setup-ruby@b1da4809b005e0178fe08a1d57317bffc00b7b4c
+        with:
+          ruby-version: '3.3'
+          bundler-cache: true
+      - name: Record toolchain and available simulators
+        run: |
+          mkdir -p artifacts/ios
+          xcodebuild -version | tee artifacts/ios/toolchain.log
+          xcrun simctl list --json > artifacts/ios/simulators.json
+          node -e 'const { selectSimulator } = require("./scripts/ios-e2e.cjs"); const fs = require("node:fs"); console.log(selectSimulator(JSON.parse(fs.readFileSync("artifacts/ios/simulators.json", "utf8")), process.env.DETOX_IOS_DEVICE, process.env.DETOX_IOS_RUNTIME));'
+      - name: Install JavaScript dependencies
+        run: |
+          corepack enable
+          yarn install --immutable 2>&1 | tee artifacts/ios/yarn-install.log
+      - name: Install simulator tools
+        run: |
+          brew tap wix/brew
+          brew install applesimutils
+      - name: Install locked CocoaPods dependencies
+        working-directory: ios
+        run: bundle exec pod install --deployment 2>&1 | tee ../artifacts/ios/pod-install.log
+      - name: Build signed Release simulator app
+        timeout-minutes: 35
+        run: yarn e2e:build:ios 2>&1 | tee artifacts/ios/build.log
+      - name: Run all iOS E2E tests
+        timeout-minutes: 20
+        run: |
+          yarn e2e:ios --headless --record-logs all --take-screenshots failing --artifacts-location artifacts/ios/detox 2>&1 | tee artifacts/ios/e2e.log
+      - name: Upload build and E2E diagnostics
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ios-build-e2e-${{ github.run_attempt }}
+          path: artifacts/ios/
+          if-no-files-found: warn
+          retention-days: 7

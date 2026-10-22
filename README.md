@@ -301,6 +301,14 @@ iOS 27 SDK의 [UIScene 생명주기 요구사항](https://developer.apple.com/do
 조정합니다. E2E에서도 키보드를 닫고 가려진 입력란으로 스크롤해
 실제 입력과 버튼 동작을 확인합니다.
 
+GitHub Actions의 `iOS Build and E2E`는 `main` 푸시와 모든 PR에서 자동으로
+실행되며 수동 실행도 지원합니다. macOS 26의 Xcode 26.6으로 Release
+시뮬레이터 앱을 빌드하고, iOS 26.5의 임시 iPhone 17 Pro에서 E2E 6개를
+실행합니다. Ruby 3.3 이상을 사용하고, CocoaPods와 Ruby 의존성은 `Gemfile.lock`으로 고정하며
+`bundle exec pod install --deployment`로 설치합니다. 배포용 인증서나
+API 비밀 키는 필요하지 않습니다. 빌드 로그, Detox 로그와 실패 화면은
+실행 결과의 `ios-build-e2e-*` 아티팩트에서 7일간 확인할 수 있습니다.
+
 회귀 테스트에는 PIN 인증 취소와 앱 종료, 영구 시도 제한, WalletConnect
 요청 교체와 수수료 변경, 토큰 소수점 정밀도, RPC 오류 후 거래 상태 복구,
 계정별 포트폴리오 분리와 지갑 초기화 중 저장 경합을 포함합니다.
