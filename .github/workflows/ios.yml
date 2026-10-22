@@ -17,7 +17,7 @@ jobs:
   ios:
     name: Release build and Detox E2E
     runs-on: macos-26
-    timeout-minutes: 60
+    timeout-minutes: 90
     defaults:
       run:
         shell: bash
@@ -67,7 +67,8 @@ jobs:
       - name: Verify portable podspec checksums
         run: bundle exec ruby ios/tests/podspec_checksums_test.rb
       - name: Build signed Release simulator app
-        timeout-minutes: 35
+        # A cold source build of React Native exceeds 35 minutes on this runner.
+        timeout-minutes: 60
         run: yarn e2e:build:ios:ci 2>&1 | tee artifacts/ios/build.log
       - name: Run all iOS E2E tests
         timeout-minutes: 20
