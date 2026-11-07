@@ -523,8 +523,8 @@ describe('WCService - Error Handling', () => {
 
 // WCService 이벤트 콜백 테스트
 describe('WCService - Event Callbacks', () => {
-  let sessionProposalHandler: (() => void) | null = null;
-  let sessionRequestHandler: (() => void) | null = null;
+  let sessionProposalHandler: ((arg?: unknown) => void) | null = null;
+  let sessionRequestHandler: ((arg?: unknown) => void) | null = null;
   let sessionDeleteHandler: ((data: { topic: string }) => void) | null = null;
 
   const mockWeb3WalletWithCallbacks = {
@@ -578,7 +578,7 @@ describe('WCService - Event Callbacks', () => {
 
       // 이벤트 트리거 시뮬레이션
       if (sessionProposalHandler) {
-        sessionProposalHandler();
+        sessionProposalHandler({ id: 7, params: {}, verifyContext: {} });
         expect(callback).toHaveBeenCalled();
       }
     });
@@ -596,7 +596,14 @@ describe('WCService - Event Callbacks', () => {
       wcService.onSessionRequest(callback);
 
       if (sessionRequestHandler) {
-        sessionRequestHandler();
+        sessionRequestHandler({
+          id: 8,
+          topic: 't',
+          params: {
+            chainId: 'eip155:1',
+            request: { method: 'personal_sign', params: [] },
+          },
+        });
         expect(callback).toHaveBeenCalled();
       }
     });
