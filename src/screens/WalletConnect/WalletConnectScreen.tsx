@@ -1,690 +1,438 @@
 /**
- * dApp 연결 관리 화면
+ * dApp 연결(WalletConnect) 화면 — 페어링과 연결된 dApp 관리
+ *
+ * 연결 승인과 서명 요청은 WalletConnectHost가 앱 전역에서 처리한다. 이 화면을
+ * 떠나도 대기 중인 요청은 거절되지 않는다.
  */
 
-import React, { useState, useCallback, useEffect, useRef } from 'react';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import styled from 'styled-components/native';
 import { useShallow } from 'zustand/react/shallow';
-import { useTheme } from '@/hooks/useTheme';
 import {
   StatusBar,
   ScrollView,
   Alert,
   ActivityIndicator,
   TextInput,
+  Clipboard,
 } from 'react-native';
-import { useNavigation, useRoute } from '@react-navigation/native';
-import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import { useRoute } from '@react-navigation/native';
 import type { RouteProp } from '@react-navigation/native';
 import type { RootStackParamList } from '@/navigation/RootNavigator';
+import { useTheme } from '@/hooks/useTheme';
 import { useWalletStore } from '@/store/walletStore';
-import { useSecurityStore } from '@/store/securityStore';
-import { wcService, DAppSession, DAppVerification } from '@/services/wcService';
-import { signingService } from '@/services/signingService';
-import { prepareSigningRequest } from '@/services/signingReviewService';
+import { showToast } from '@/store/toastStore';
 import {
-  analyzeSigningRequest,
-  assertSigningIntentUnchanged,
-} from '@/services/signingIntentService';
-import { useWCActiveSessions, useWCRequestLog } from '@/realm/hooks';
-import { SignRequestModal, SignRequest } from '@/components/SignRequestModal';
-import PinConfirmModal from '@/components/common/PinConfirmModal';
+  wcService,
+  parseCaipChainId,
+  parseWalletConnectUri,
+  WC_NOT_CONFIGURED_MESSAGE,
+  type DAppSession,
+  type WCStatus,
+} from '@/services/wcService';
+import { wcLogService } from '@/realm/services';
+import { Screen } from '@/components/common/Screen';
+import { ScreenHeader } from '@/components/common/ScreenHeader';
+import { ErrorState } from '@/components/common/StateViews';
+import { QRScanner } from '@/components/common/QRScanner';
+import type { ScanResult } from '@/utils/paymentUri';
 import { createLogger } from '@/utils/logger';
 
 const logger = createLogger('WalletConnect');
 
-type NavigationProp = NativeStackNavigationProp<
-  RootStackParamList,
-  'WalletConnect'
->;
 type WalletConnectRouteProp = RouteProp<RootStackParamList, 'WalletConnect'>;
 
-function parseCaipChainId(chainId: string): number | null {
-  const match = /^eip155:(\d+)$/.exec(chainId);
-  if (!match) return null;
-  const value = Number(match[1]);
-  return Number.isSafeInteger(value) ? value : null;
+function shortAddress(address: string): string {
+  return address.length > 14
+    ? `${address.slice(0, 6)}…${address.slice(-4)}`
+    : address;
 }
 
-function getRequestAccount(method: string, params: unknown[]): string | null {
-  if (method === 'eth_sendTransaction' || method === 'eth_signTransaction') {
-    return (params[0] as { from?: string } | undefined)?.from || null;
-  }
-  if (method === 'personal_sign') return (params[1] as string) || null;
-  if (method.startsWith('eth_signTypedData')) {
-    return (params[0] as string) || null;
-  }
-  return null;
-}
-
-interface QueuedRequest extends SignRequest {
-  dApp: { name: string; url: string; verification: DAppVerification };
+function uniqueAccountAddresses(accounts: string[]): string[] {
+  const seen = new Map<string, string>();
+  accounts.forEach(account => {
+    const address = account.split(':')[2] || account;
+    if (!seen.has(address.toLowerCase()))
+      seen.set(address.toLowerCase(), address);
+  });
+  return Array.from(seen.values());
 }
 
 function WalletConnectScreen(): React.JSX.Element {
   const { isDarkMode } = useTheme();
-  const navigation = useNavigation<NavigationProp>();
   const route = useRoute<WalletConnectRouteProp>();
+  const routeUri = route.params?.uri;
 
-  const { wallets, activeWalletIndex, activeNetworkChainId, networks } =
-    useWalletStore(
-      useShallow(state => ({
-        wallets: state.wallets,
-        activeWalletIndex: state.activeWalletIndex,
-        activeNetworkChainId: state.activeNetworkChainId,
-        networks: state.networks,
-      })),
-    );
-  const activeWallet = wallets[activeWalletIndex];
-  const { requiresTransactionPin } = useSecurityStore(
+  const { wallets, networks } = useWalletStore(
     useShallow(state => ({
-      requiresTransactionPin: state.requiresTransactionPin,
+      wallets: state.wallets,
+      networks: state.networks,
     })),
   );
 
-  const [wcUri, setWcUri] = useState(route.params?.uri || '');
-  const [isConnecting, setIsConnecting] = useState(false);
-  const [sessions, setSessions] = useState<DAppSession[]>([]);
-  const [pendingProposal, setPendingProposal] = useState<any>(null);
-  const [proposalRiskAcknowledged, setProposalRiskAcknowledged] =
-    useState(false);
-  const [requests, setRequests] = useState<QueuedRequest[]>([]);
-  const requestsRef = useRef<QueuedRequest[]>([]);
-  const approvedRequest = useRef<QueuedRequest | null>(null);
-  const activeWalletRef = useRef(activeWallet);
-  activeWalletRef.current = activeWallet;
+  const [status, setStatus] = useState<WCStatus>(() => wcService.getStatus());
+  const [wcUri, setWcUri] = useState(routeUri || '');
+  const [inputError, setInputError] = useState<string | null>(null);
+  const [isPairing, setIsPairing] = useState(false);
+  const [awaitingProposal, setAwaitingProposal] = useState(false);
+  const [sessions, setSessions] = useState<DAppSession[]>(() =>
+    wcService.getActiveSessions(),
+  );
+  const [scannerVisible, setScannerVisible] = useState(false);
   const alive = useRef(true);
-  const signing = useRef(false);
-  const [isSigning, setIsSigning] = useState(false);
-  const signRequest = requests[0] || null;
-  const currentRequestDApp = signRequest?.dApp || null;
-  const [showSignPinConfirm, setShowSignPinConfirm] = useState(false);
+  const autoPairedUri = useRef<string | null>(null);
 
-  const removeRequest = useCallback((request: SignRequest) => {
-    requestsRef.current = requestsRef.current.filter(
-      item => item.id !== request.id || item.topic !== request.topic,
-    );
-    if (alive.current) setRequests(requestsRef.current);
+  const notConfigured = status === 'not_configured';
+  const pairingDisabled = notConfigured || isPairing;
+
+  const refreshSessions = useCallback(() => {
+    if (alive.current) setSessions(wcService.getActiveSessions());
   }, []);
 
-  // Realm WalletConnect 세션 로그 훅
-  const { logSessionConnected, logSessionDisconnected } = useWCActiveSessions();
-
-  const { logRequest } = useWCRequestLog();
-
-  // WalletConnect 초기화
   useEffect(() => {
     alive.current = true;
-    const initWC = async () => {
-      try {
-        await wcService.initialize();
-        const activeSessions = wcService.getActiveSessions();
-        if (alive.current) setSessions(activeSessions);
-      } catch (error) {
-        logger.error('Failed to initialize WalletConnect:', error);
-      }
-    };
-
-    initWC();
-
-    // 세션 제안 핸들러
-    const unsubscribeProposals = wcService.onSessionProposal(async proposal => {
-      logger.debug('Session proposal received');
-      const verification = wcService.getDAppVerification(
-        proposal.verifyContext,
-      );
-      if (wcService.isVerificationBlocked(verification)) {
-        await wcService.rejectSession(proposal);
-        Alert.alert(
-          '위험한 연결 차단',
-          verification.isScam
-            ? 'WalletConnect가 피싱 또는 사기 사이트로 식별했습니다.'
-            : 'dApp이 주장한 주소와 검증된 출처가 일치하지 않습니다.',
-        );
-        return;
-      }
-      setProposalRiskAcknowledged(false);
-      setPendingProposal(proposal);
+    const unsubscribeStatus = wcService.onStatusChange(next => {
+      if (alive.current) setStatus(next);
     });
-
-    // 세션 요청 핸들러
-    const unsubscribeRequests = wcService.onSessionRequest(async request => {
-      logger.debug('Session request received:', request.params.request.method);
-      const { topic, params } = request;
-      const { request: requestParams } = params;
-      const verification = wcService.getDAppVerification(request.verifyContext);
-      if (wcService.isVerificationBlocked(verification)) {
-        await wcService.rejectRequest(topic, request.id);
-        logger.warn('Rejected request from invalid or known scam origin');
-        return;
-      }
-      if (
-        requestParams.expiryTimestamp !== undefined &&
-        requestParams.expiryTimestamp <= Math.floor(Date.now() / 1000)
-      ) {
-        await wcService.rejectRequest(topic, request.id);
-        logger.warn('Rejected expired session request');
-        return;
-      }
-      const requestChainId = parseCaipChainId(params.chainId);
-      if (!Array.isArray(requestParams.params)) {
-        await wcService.rejectRequest(topic, request.id);
-        logger.warn('Rejected session request with invalid params');
-        return;
-      }
-      const requestArguments = JSON.parse(
-        JSON.stringify(requestParams.params),
-      ) as unknown[];
-      const requestAccount = getRequestAccount(
-        requestParams.method,
-        requestArguments,
-      );
-
-      if (!requestChainId || !requestAccount) {
-        await wcService.rejectRequest(topic, request.id);
-        logger.warn('Rejected malformed session request');
-        return;
-      }
-
-      // wcService에서 직접 세션 정보 가져오기
-      const activeSessions = wcService.getActiveSessions();
-      const session = activeSessions.find(s => s.topic === topic);
-
-      logger.debug('Processing request method:', requestParams.method);
-
-      try {
-        if (
-          !wcService.validateSessionRequest(
-            topic,
-            requestChainId,
-            requestAccount,
-            requestParams.method,
-          )
-        ) {
-          throw new Error('승인되지 않은 세션 요청입니다.');
-        }
-        const prepared = await prepareSigningRequest({
-          method: requestParams.method,
-          params: requestArguments,
-          chainId: requestChainId,
-          account: requestAccount,
-        });
-        if (!alive.current) {
-          await wcService.rejectRequest(topic, request.id);
-          return;
-        }
-        const intent = analyzeSigningRequest(prepared);
-        if (
-          requestsRef.current.some(
-            item => item.id === request.id && item.topic === topic,
-          )
-        )
-          return;
-        if (requestsRef.current.length >= 20)
-          throw new Error('대기 중인 서명 요청이 너무 많습니다.');
-        const queued: QueuedRequest = {
-          ...prepared,
-          id: request.id,
-          topic,
-          intent,
-          expiresAt: Math.min(
-            (requestParams.expiryTimestamp ?? Infinity) * 1000,
-            Date.now() + (intent.kind === 'transaction' ? 90_000 : 300_000),
-          ),
-          dApp: {
-            name: session?.name || 'Unknown dApp',
-            url: session?.url || '',
-            verification,
-          },
-        };
-        requestsRef.current = [...requestsRef.current, queued];
-        setRequests(requestsRef.current);
-      } catch (error) {
-        await wcService.rejectRequest(topic, request.id);
-        logger.warn(
-          'Rejected request that could not be safely reviewed',
-          error,
-        );
-      }
+    const unsubscribeSessions = wcService.onSessionsChanged(event => {
+      if (event.reason === 'approved' && alive.current)
+        setAwaitingProposal(false);
+      refreshSessions();
     });
+    wcService
+      .initialize()
+      .catch(error => logger.warn('WalletConnect initialization failed', error))
+      .finally(() => {
+        if (!alive.current) return;
+        setStatus(wcService.getStatus());
+        refreshSessions();
+      });
     return () => {
       alive.current = false;
-      approvedRequest.current = null;
-      unsubscribeProposals();
-      unsubscribeRequests();
-      requestsRef.current.forEach(request => {
-        wcService
-          .rejectRequest(request.topic, request.id)
-          .catch(error => logger.warn('Request cleanup failed', error));
-      });
-      requestsRef.current = [];
+      unsubscribeStatus();
+      unsubscribeSessions();
     };
+  }, [refreshSessions]);
+
+  // 연결 요청을 보낸 뒤 제안이 오지 않으면 안내를 거둔다.
+  useEffect(() => {
+    if (!awaitingProposal) return;
+    const timer = setTimeout(() => {
+      if (alive.current) setAwaitingProposal(false);
+    }, 30_000);
+    return () => clearTimeout(timer);
+  }, [awaitingProposal]);
+
+  const pair = useCallback(async (input: string) => {
+    const parsed = parseWalletConnectUri(input);
+    if (!parsed.ok) {
+      setInputError(parsed.reason);
+      return;
+    }
+    if (!wcService.isConfigured()) {
+      setInputError(WC_NOT_CONFIGURED_MESSAGE);
+      return;
+    }
+    setInputError(null);
+    setIsPairing(true);
+    try {
+      await wcService.pairWithUri(parsed.uri);
+      if (!alive.current) return;
+      setWcUri('');
+      setAwaitingProposal(true);
+    } catch (error) {
+      if (!alive.current) return;
+      setInputError(
+        error instanceof Error && error.message
+          ? error.message
+          : '연결에 실패했습니다.',
+      );
+    } finally {
+      if (alive.current) setIsPairing(false);
+    }
   }, []);
 
-  const handleConnect = useCallback(async () => {
-    if (!wcUri.trim()) {
-      Alert.alert('오류', 'WalletConnect URI를 입력해주세요.');
+  // 딥링크/다른 화면에서 URI와 함께 열리면 자동으로 페어링한다.
+  useEffect(() => {
+    if (!routeUri || notConfigured || autoPairedUri.current === routeUri)
       return;
-    }
+    autoPairedUri.current = routeUri;
+    setWcUri(routeUri);
+    pair(routeUri);
+  }, [routeUri, notConfigured, pair]);
 
-    if (!wcUri.startsWith('wc:')) {
-      Alert.alert('오류', '유효한 WalletConnect URI가 아닙니다.');
-      return;
-    }
+  const handleConnect = useCallback(() => {
+    pair(wcUri);
+  }, [pair, wcUri]);
 
-    setIsConnecting(true);
+  const handlePaste = useCallback(async () => {
     try {
-      await wcService.pair(wcUri);
-      setWcUri('');
-    } catch (error) {
-      console.error('Failed to connect:', error);
-      Alert.alert('연결 실패', '연결에 실패했습니다. URI를 확인해주세요.');
-    } finally {
-      setIsConnecting(false);
-    }
-  }, [wcUri]);
-
-  const handleApproveSession = useCallback(async () => {
-    if (!pendingProposal || !activeWallet) return;
-
-    try {
-      const verification = wcService.getDAppVerification(
-        pendingProposal.verifyContext,
-      );
-      if (
-        wcService.isVerificationBlocked(verification) ||
-        (verification.validation !== 'VALID' && !proposalRiskAcknowledged)
-      ) {
-        throw new Error('검증되지 않은 dApp 연결 확인이 필요합니다.');
+      const text = (await Clipboard.getString())?.trim() || '';
+      if (!text) {
+        showToast('클립보드가 비어 있습니다.', 'info');
+        return;
       }
-      await wcService.approveSession(pendingProposal, activeWallet.address, [
-        activeNetworkChainId,
-      ]);
-
-      // Realm에 세션 연결 로그 저장
-      const proposer = pendingProposal.params.proposer.metadata;
-      const activeSessions = wcService.getActiveSessions();
-      const newSession = activeSessions.find(s => s.name === proposer.name);
-
-      if (newSession) {
-        await logSessionConnected({
-          topic: newSession.topic,
-          dappName: proposer.name,
-          dappUrl: proposer.url,
-          dappIcon: proposer.icons?.[0],
-          chains: [`eip155:${activeNetworkChainId}`],
-          accounts: [activeWallet.address],
-          expiresAt: newSession.expiry
-            ? new Date(newSession.expiry * 1000)
-            : undefined,
-        });
-      }
-
-      setPendingProposal(null);
-      setSessions(activeSessions);
-      Alert.alert('연결 완료', 'dApp과 연결되었습니다.');
+      setWcUri(text);
+      await pair(text);
     } catch (error) {
-      console.error('Failed to approve session:', error);
-      Alert.alert('오류', '세션 승인에 실패했습니다.');
+      logger.warn('Clipboard read failed', error);
+      showToast('클립보드를 읽지 못했습니다.', 'error');
     }
-  }, [
-    pendingProposal,
-    activeWallet,
-    activeNetworkChainId,
-    logSessionConnected,
-    proposalRiskAcknowledged,
-  ]);
+  }, [pair]);
 
-  const handleRejectSession = useCallback(async () => {
-    if (!pendingProposal) return;
+  const handleScan = useCallback(
+    (result: ScanResult) => {
+      if (result.kind !== 'walletconnect') return;
+      setWcUri(result.uri);
+      pair(result.uri);
+    },
+    [pair],
+  );
 
-    try {
-      await wcService.rejectSession(pendingProposal);
-      setPendingProposal(null);
-    } catch (error) {
-      console.error('Failed to reject session:', error);
-    }
-  }, [pendingProposal]);
+  const handleRetryInit = useCallback(() => {
+    wcService
+      .initialize()
+      .catch(error => logger.warn('WalletConnect initialization failed', error))
+      .finally(() => {
+        if (!alive.current) return;
+        setStatus(wcService.getStatus());
+        refreshSessions();
+      });
+  }, [refreshSessions]);
 
   const handleDisconnect = useCallback(
-    async (topic: string) => {
-      Alert.alert('연결 해제', '이 dApp과의 연결을 해제하시겠습니까?', [
-        { text: '취소', style: 'cancel' },
-        {
-          text: '해제',
-          style: 'destructive',
-          onPress: async () => {
-            try {
-              await wcService.disconnectSession(topic);
-              // Realm에 세션 해제 로그
-              await logSessionDisconnected(topic);
-              setSessions(wcService.getActiveSessions());
-            } catch (error) {
-              console.error('Failed to disconnect:', error);
-            }
+    (session: DAppSession) => {
+      Alert.alert(
+        '연결 해제',
+        `${session.name}과(와)의 연결을 해제하시겠습니까?\n해제 후에는 이 dApp이 서명을 요청할 수 없습니다.`,
+        [
+          { text: '취소', style: 'cancel' },
+          {
+            text: '해제',
+            style: 'destructive',
+            onPress: async () => {
+              try {
+                await wcService.disconnectSession(session.topic);
+                await wcLogService
+                  .logSessionDisconnected(session.topic)
+                  .catch(error => logger.warn('Session log failed', error));
+                showToast(`${session.name} 연결을 해제했습니다.`, 'success');
+              } catch (error) {
+                logger.warn('Failed to disconnect', error);
+                showToast(
+                  '연결 해제에 실패했습니다. 다시 시도해주세요.',
+                  'error',
+                );
+              } finally {
+                refreshSessions();
+              }
+            },
           },
-        },
-      ]);
+        ],
+      );
     },
-    [logSessionDisconnected],
+    [refreshSessions],
   );
 
-  // PIN 인증에는 승인 버튼을 눌렀을 때의 요청 사본만 연결한다.
-  const executeSignRequest = useCallback(
-    async (snapshot: QueuedRequest) => {
-      if (signing.current || approvedRequest.current !== snapshot) return;
-      signing.current = true;
-      setIsSigning(true);
-      const isAuthorized = () =>
-        alive.current &&
-        approvedRequest.current === snapshot &&
-        activeWalletRef.current?.address.toLowerCase() ===
-          snapshot.account.toLowerCase() &&
-        Date.now() < (snapshot.expiresAt ?? 0) &&
-        wcService.validateSessionRequest(
-          snapshot.topic,
-          snapshot.chainId,
-          snapshot.account,
-          snapshot.method,
-        );
-      try {
-        if (!isAuthorized())
-          throw new Error(
-            '서명 승인이 만료되었거나 계정이 변경되었습니다. 요청을 다시 확인해주세요.',
-          );
-        assertSigningIntentUnchanged(snapshot.intent.fingerprint, snapshot);
-        await logRequest({
-          sessionTopic: snapshot.topic,
-          requestId: snapshot.id,
-          method: snapshot.method,
-          params: snapshot.params,
-          chainId: snapshot.chainId,
-          dappName: snapshot.dApp.name,
-        });
-        if (!isAuthorized()) throw new Error('서명 승인이 취소되었습니다.');
-        const result = await signingService.handleRequest(
-          snapshot.method,
-          snapshot.params,
-          snapshot.chainId,
-          isAuthorized,
-        );
-        await wcService.respondRequest(snapshot.topic, snapshot.id, result);
-        if (alive.current)
-          Alert.alert(
-            snapshot.method === 'eth_sendTransaction'
-              ? '트랜잭션 제출 완료'
-              : '서명 완료',
-            snapshot.method === 'eth_sendTransaction'
-              ? `트랜잭션이 네트워크에 제출되었습니다.\n${result}`
-              : '서명이 완료되었습니다.',
-          );
-      } catch (error) {
-        await wcService
-          .rejectRequest(snapshot.topic, snapshot.id)
-          .catch(reason => logger.warn('Request rejection failed', reason));
-        if (alive.current)
-          Alert.alert(
-            '서명 실패',
-            error instanceof Error
-              ? error.message
-              : '서명 처리에 실패했습니다.',
-          );
-      } finally {
-        if (approvedRequest.current === snapshot)
-          approvedRequest.current = null;
-        signing.current = false;
-        if (alive.current) setIsSigning(false);
-        removeRequest(snapshot);
-      }
-    },
-    [logRequest, removeRequest],
-  );
-
-  const handleApproveSignRequest = useCallback(() => {
-    if (!signRequest || signRequest.intent.blocked || approvedRequest.current)
-      return;
-    const snapshot: QueuedRequest = JSON.parse(JSON.stringify(signRequest));
-    approvedRequest.current = snapshot;
-    if (requiresTransactionPin()) setShowSignPinConfirm(true);
-    else executeSignRequest(snapshot);
-  }, [executeSignRequest, requiresTransactionPin, signRequest]);
-
-  const handleSignPinConfirmed = useCallback(() => {
-    const snapshot = approvedRequest.current;
-    setShowSignPinConfirm(false);
-    if (snapshot) executeSignRequest(snapshot);
-  }, [executeSignRequest]);
-
-  const handleRejectSignRequest = useCallback(async () => {
-    if (!signRequest || signing.current) return;
-    approvedRequest.current = null;
-    try {
-      await wcService.rejectRequest(signRequest.topic, signRequest.id);
-      removeRequest(signRequest);
-    } catch (error) {
-      logger.warn('Failed to reject request', error);
-    }
-  }, [removeRequest, signRequest]);
-
-  // 현재 네트워크 이름 가져오기
-  const requestNetwork = networks.find(
-    network => network.chainId === signRequest?.chainId,
-  );
-
-  const renderPendingProposal = () => {
-    if (!pendingProposal) return null;
-
-    const { params } = pendingProposal;
-    const proposer = params.proposer.metadata;
-    const verification = wcService.getDAppVerification(
-      pendingProposal.verifyContext,
-    );
-    const needsVerificationAcknowledgement =
-      verification.validation !== 'VALID';
-
+  const chainName = (caip: string): string => {
+    const chainId = parseCaipChainId(caip);
+    if (chainId === null) return caip;
     return (
-      <ProposalCard>
-        <ProposalHeader>
-          <ProposalIcon>🔗</ProposalIcon>
-          <ProposalTitle>연결 요청</ProposalTitle>
-        </ProposalHeader>
-
-        <DAppInfo>
-          <DAppName>{proposer.name}</DAppName>
-          <DAppUrl>{proposer.url}</DAppUrl>
-          <ProposalVerification $valid={verification.validation === 'VALID'}>
-            {verification.validation === 'VALID'
-              ? '✓ WalletConnect 출처 검증됨'
-              : '⚠ 출처를 검증할 수 없음'}
-          </ProposalVerification>
-          {!!verification.origin && (
-            <DAppUrl selectable>{verification.origin}</DAppUrl>
-          )}
-        </DAppInfo>
-
-        {needsVerificationAcknowledgement && (
-          <ProposalAcknowledge
-            onPress={() => setProposalRiskAcknowledged(value => !value)}
-            accessibilityRole="checkbox"
-            accessibilityState={{ checked: proposalRiskAcknowledged }}
-          >
-            <ProposalAcknowledgeMark>
-              {proposalRiskAcknowledged ? '☑' : '☐'}
-            </ProposalAcknowledgeMark>
-            <ProposalAcknowledgeText>
-              도메인을 직접 확인했으며 검증되지 않은 연결 위험을 이해합니다.
-            </ProposalAcknowledgeText>
-          </ProposalAcknowledge>
-        )}
-
-        <PermissionSection>
-          <PermissionTitle>요청 권한:</PermissionTitle>
-          <PermissionItem>• 지갑 주소 조회</PermissionItem>
-          <PermissionItem>• 트랜잭션 서명 요청</PermissionItem>
-          <PermissionItem>• 메시지 서명 요청</PermissionItem>
-        </PermissionSection>
-
-        <ButtonRow>
-          <SecondaryButton onPress={handleRejectSession}>
-            <SecondaryButtonText>거부</SecondaryButtonText>
-          </SecondaryButton>
-          <PrimaryButton
-            onPress={handleApproveSession}
-            disabled={
-              needsVerificationAcknowledgement && !proposalRiskAcknowledged
-            }
-            $disabled={
-              needsVerificationAcknowledgement && !proposalRiskAcknowledged
-            }
-          >
-            <PrimaryButtonText>연결</PrimaryButtonText>
-          </PrimaryButton>
-        </ButtonRow>
-      </ProposalCard>
+      (networks || []).find(network => network.chainId === chainId)?.name ||
+      `체인 ${chainId}`
     );
   };
 
+  const accountLabel = (address: string): string => {
+    const wallet = (wallets || []).find(
+      item => item.address.toLowerCase() === address.toLowerCase(),
+    );
+    return wallet
+      ? `${wallet.name} · ${shortAddress(address)}`
+      : shortAddress(address);
+  };
+
   return (
-    <Container>
+    <Screen>
       <StatusBar barStyle={isDarkMode ? 'light-content' : 'dark-content'} />
-      <ScrollView>
+      <ScreenHeader title="WalletConnect" testID="wc-header" />
+      <ScrollView keyboardShouldPersistTaps="handled">
         <Content>
-          <Header>
-            <BackButton onPress={() => navigation.goBack()}>
-              <BackButtonText>←</BackButtonText>
-            </BackButton>
-            <HeaderTitle>WalletConnect</HeaderTitle>
-            <Placeholder />
-          </Header>
+          {notConfigured && (
+            <NoticeBox accessibilityRole="alert" testID="wc-not-configured">
+              <NoticeText>{WC_NOT_CONFIGURED_MESSAGE}</NoticeText>
+            </NoticeBox>
+          )}
+          {status === 'error' && (
+            <ErrorState
+              compact
+              title="WalletConnect에 연결하지 못했습니다"
+              message="네트워크 연결을 확인한 뒤 다시 시도해주세요."
+              onRetry={handleRetryInit}
+              testID="wc-init-error"
+            />
+          )}
 
           {/* 연결 입력 */}
           <ConnectSection>
-            <Label>WalletConnect URI</Label>
-            <InputRow>
-              <URIInput
-                value={wcUri}
-                onChangeText={setWcUri}
-                placeholder="wc:..."
-                placeholderTextColor="#71717A"
-                autoCapitalize="none"
-                autoCorrect={false}
-              />
-              <ConnectButton onPress={handleConnect} disabled={isConnecting}>
-                {isConnecting ? (
+            <Label nativeID="wc-uri-label">WalletConnect URI</Label>
+            <URIInput
+              value={wcUri}
+              onChangeText={(text: string) => {
+                setWcUri(text);
+                if (inputError) setInputError(null);
+              }}
+              placeholder="wc:..."
+              placeholderTextColor="#71717A"
+              autoCapitalize="none"
+              autoCorrect={false}
+              editable={!notConfigured}
+              accessibilityLabel="WalletConnect URI"
+              accessibilityLabelledBy="wc-uri-label"
+              testID="wc-uri-input"
+            />
+            {inputError ? (
+              <ErrorText accessibilityRole="alert" testID="wc-uri-error">
+                {inputError}
+              </ErrorText>
+            ) : null}
+            <ActionRow>
+              <OutlineButton
+                onPress={() => setScannerVisible(true)}
+                disabled={pairingDisabled}
+                $disabled={pairingDisabled}
+                accessibilityRole="button"
+                accessibilityLabel="QR 코드로 연결"
+                accessibilityState={{ disabled: pairingDisabled }}
+                testID="wc-scan-button"
+              >
+                <OutlineButtonText>QR 스캔</OutlineButtonText>
+              </OutlineButton>
+              <OutlineButton
+                onPress={handlePaste}
+                disabled={pairingDisabled}
+                $disabled={pairingDisabled}
+                accessibilityRole="button"
+                accessibilityLabel="클립보드에서 붙여넣고 연결"
+                accessibilityState={{ disabled: pairingDisabled }}
+                testID="wc-paste-button"
+              >
+                <OutlineButtonText>붙여넣기</OutlineButtonText>
+              </OutlineButton>
+              <ConnectButton
+                onPress={handleConnect}
+                disabled={pairingDisabled}
+                $disabled={pairingDisabled}
+                accessibilityRole="button"
+                accessibilityLabel="연결"
+                accessibilityState={{
+                  disabled: pairingDisabled,
+                  busy: isPairing,
+                }}
+                testID="wc-connect-button"
+              >
+                {isPairing ? (
                   <ActivityIndicator color="#fff" size="small" />
                 ) : (
-                  <ConnectButtonText>연결</ConnectButtonText>
+                  <ConnectButtonText $disabled={pairingDisabled}>
+                    연결
+                  </ConnectButtonText>
                 )}
               </ConnectButton>
-            </InputRow>
+            </ActionRow>
             <HintText>
-              dApp에서 WalletConnect로 연결 시 표시되는 URI를 붙여넣으세요.
+              {awaitingProposal
+                ? 'dApp의 연결 요청을 기다리는 중입니다. 잠시 후 연결 승인 창이 열립니다.'
+                : 'dApp의 WalletConnect QR을 스캔하거나 연결 URI를 붙여넣으세요.'}
             </HintText>
           </ConnectSection>
 
-          {/* 대기 중인 제안 */}
-          {renderPendingProposal()}
-
-          {/* 활성 세션 */}
-          <SectionTitle>연결된 dApps</SectionTitle>
+          {/* 연결된 dApp */}
+          <SectionTitle accessibilityRole="header">연결된 dApp</SectionTitle>
           {sessions.length === 0 ? (
-            <EmptyState>
-              <EmptyIcon>🔌</EmptyIcon>
+            <EmptyBox testID="wc-sessions-empty">
+              <EmptyIcon importantForAccessibility="no">🔌</EmptyIcon>
               <EmptyText>연결된 dApp이 없습니다</EmptyText>
-            </EmptyState>
+            </EmptyBox>
           ) : (
-            sessions.map(session => (
-              <SessionCard key={session.topic}>
-                <SessionInfo>
-                  <SessionName>{session.name}</SessionName>
-                  <SessionUrl>{session.url}</SessionUrl>
-                  <SessionChains>
-                    체인: {session.chains.join(', ')}
-                  </SessionChains>
-                </SessionInfo>
-                <DisconnectButton
-                  onPress={() => handleDisconnect(session.topic)}
-                >
-                  <DisconnectText>해제</DisconnectText>
-                </DisconnectButton>
-              </SessionCard>
-            ))
+            sessions.map(session => {
+              const addresses = uniqueAccountAddresses(session.accounts);
+              const chainNames = Array.from(
+                new Set(session.chains.map(chainName)),
+              );
+              return (
+                <SessionCard key={session.topic} testID="wc-session">
+                  <SessionInfo>
+                    <SessionName>{session.name}</SessionName>
+                    <SessionUrl>{session.url}</SessionUrl>
+                    {addresses.map(address => (
+                      <SessionMeta
+                        key={address}
+                        accessibilityLabel={`연결된 계정 ${address}`}
+                      >
+                        계정: {accountLabel(address)}
+                      </SessionMeta>
+                    ))}
+                    <SessionMeta>네트워크: {chainNames.join(', ')}</SessionMeta>
+                  </SessionInfo>
+                  <DisconnectButton
+                    onPress={() => handleDisconnect(session)}
+                    accessibilityRole="button"
+                    accessibilityLabel={`${session.name} 연결 해제`}
+                    testID="wc-disconnect"
+                  >
+                    <DisconnectText>해제</DisconnectText>
+                  </DisconnectButton>
+                </SessionCard>
+              );
+            })
           )}
 
           {/* 도움말 */}
           <HelpSection>
-            <HelpTitle>💡 WalletConnect 사용법</HelpTitle>
+            <HelpTitle>WalletConnect 사용법</HelpTitle>
             <HelpText>
-              1. dApp 웹사이트에서 "WalletConnect"를 선택{'\n'}
-              2. 표시되는 QR 코드 대신 "Copy to clipboard" 선택{'\n'}
-              3. 복사한 URI를 위 입력창에 붙여넣기{'\n'}
-              4. "연결" 버튼을 눌러 연결 완료
+              1. dApp 웹사이트에서 "WalletConnect"를 선택합니다{'\n'}
+              2. "QR 스캔"으로 화면의 QR을 스캔하거나, 연결 URI를 복사해
+              "붙여넣기"를 누릅니다{'\n'}
+              3. 연결 승인 창에서 연결할 계정과 네트워크를 확인하고 승인합니다
+              {'\n'}
+              4. 이후 서명 요청은 앱 어디에 있든 확인 창으로 표시됩니다
             </HelpText>
           </HelpSection>
         </Content>
       </ScrollView>
 
-      {/* 서명 요청 모달 */}
-      <SignRequestModal
-        visible={!!signRequest && !showSignPinConfirm}
-        request={signRequest}
-        dAppName={currentRequestDApp?.name}
-        dAppUrl={currentRequestDApp?.url}
-        networkName={requestNetwork?.name}
-        dAppVerification={currentRequestDApp?.verification}
-        isProcessing={isSigning}
-        onApprove={handleApproveSignRequest}
-        onReject={handleRejectSignRequest}
+      <QRScanner
+        visible={scannerVisible}
+        mode="walletconnect"
+        title="WalletConnect QR 스캔"
+        onClose={() => setScannerVisible(false)}
+        onScan={handleScan}
       />
-      <PinConfirmModal
-        visible={showSignPinConfirm}
-        onConfirm={handleSignPinConfirmed}
-        onCancel={() => {
-          approvedRequest.current = null;
-          setShowSignPinConfirm(false);
-        }}
-        title="dApp 요청 PIN 확인"
-        message="외부 dApp의 서명 또는 트랜잭션 요청을 승인하려면 PIN을 입력하세요."
-      />
-    </Container>
+    </Screen>
   );
 }
-
-const Container = styled(SafeAreaView)`
-  flex: 1;
-  background-color: ${({ theme }) => theme.colors.background};
-`;
 
 const Content = styled.View`
   flex: 1;
   padding: ${({ theme }) => theme.spacing.lg}px;
+  padding-top: ${({ theme }) => theme.spacing.sm}px;
 `;
 
-const Header = styled.View`
-  flex-direction: row;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: ${({ theme }) => theme.spacing.xl}px;
+const NoticeBox = styled.View`
+  background-color: ${({ theme }) => theme.colors.warningSubtle};
+  border-left-width: 4px;
+  border-left-color: ${({ theme }) => theme.colors.warning};
+  border-radius: ${({ theme }) => theme.borderRadius.md}px;
+  padding: ${({ theme }) => theme.spacing.md}px;
+  margin-bottom: ${({ theme }) => theme.spacing.lg}px;
 `;
 
-const BackButton = styled.TouchableOpacity`
-  padding: ${({ theme }) => theme.spacing.sm}px;
-`;
-
-const BackButtonText = styled.Text`
+const NoticeText = styled.Text`
   color: ${({ theme }) => theme.colors.textPrimary};
-  font-size: 24px;
-`;
-
-const HeaderTitle = styled.Text`
-  color: ${({ theme }) => theme.colors.textPrimary};
-  font-size: ${({ theme }) => theme.typography.h2.fontSize}px;
-  font-weight: ${({ theme }) => theme.typography.h2.fontWeight};
-`;
-
-const Placeholder = styled.View`
-  width: 40px;
+  font-size: ${({ theme }) => theme.typography.bodySmall.fontSize}px;
+  line-height: 20px;
 `;
 
 const ConnectSection = styled.View`
@@ -697,164 +445,69 @@ const Label = styled.Text`
   margin-bottom: ${({ theme }) => theme.spacing.sm}px;
 `;
 
-const InputRow = styled.View`
-  flex-direction: row;
-  gap: ${({ theme }) => theme.spacing.sm}px;
-`;
-
 const URIInput = styled(TextInput)`
-  flex: 1;
   background-color: ${({ theme }) => theme.colors.surface};
   border-radius: ${({ theme }) => theme.borderRadius.md}px;
   padding: ${({ theme }) => theme.spacing.md}px;
+  min-height: 48px;
   color: ${({ theme }) => theme.colors.textPrimary};
   font-size: ${({ theme }) => theme.typography.body.fontSize}px;
   border-width: 1px;
   border-color: ${({ theme }) => theme.colors.border};
 `;
 
-const ConnectButton = styled.TouchableOpacity<{ disabled?: boolean }>`
-  background-color: ${({ theme, disabled }) =>
-    disabled ? theme.colors.border : theme.colors.primary};
-  border-radius: ${({ theme }) => theme.borderRadius.md}px;
-  padding: ${({ theme }) => theme.spacing.md}px
-    ${({ theme }) => theme.spacing.lg}px;
-  justify-content: center;
+const ErrorText = styled.Text`
+  color: ${({ theme }) => theme.colors.error};
+  font-size: ${({ theme }) => theme.typography.bodySmall.fontSize}px;
+  margin-top: ${({ theme }) => theme.spacing.xs}px;
 `;
 
-const ConnectButtonText = styled.Text`
+const ActionRow = styled.View`
+  flex-direction: row;
+  gap: ${({ theme }) => theme.spacing.sm}px;
+  margin-top: ${({ theme }) => theme.spacing.sm}px;
+`;
+
+const OutlineButton = styled.TouchableOpacity<{ $disabled?: boolean }>`
+  flex: 1;
+  min-height: 48px;
+  align-items: center;
+  justify-content: center;
+  border-radius: ${({ theme }) => theme.borderRadius.md}px;
+  border-width: 1px;
+  border-color: ${({ theme }) => theme.colors.border};
+  background-color: ${({ theme }) => theme.colors.surface};
+  opacity: ${({ $disabled }) => ($disabled ? 0.5 : 1)};
+`;
+
+const OutlineButtonText = styled.Text`
   color: ${({ theme }) => theme.colors.textPrimary};
+  font-size: ${({ theme }) => theme.typography.button.fontSize}px;
+  font-weight: ${({ theme }) => theme.typography.button.fontWeight};
+`;
+
+const ConnectButton = styled.TouchableOpacity<{ $disabled?: boolean }>`
+  flex: 1;
+  min-height: 48px;
+  align-items: center;
+  justify-content: center;
+  background-color: ${({ theme, $disabled }) =>
+    $disabled ? theme.colors.disabledBackground : theme.colors.primary};
+  border-radius: ${({ theme }) => theme.borderRadius.md}px;
+`;
+
+const ConnectButtonText = styled.Text<{ $disabled?: boolean }>`
+  color: ${({ theme, $disabled }) =>
+    $disabled ? theme.colors.disabledText : theme.colors.onPrimary};
   font-size: ${({ theme }) => theme.typography.button.fontSize}px;
   font-weight: ${({ theme }) => theme.typography.button.fontWeight};
 `;
 
 const HintText = styled.Text`
-  color: ${({ theme }) => theme.colors.textMuted};
-  font-size: ${({ theme }) => theme.typography.caption.fontSize}px;
-  margin-top: ${({ theme }) => theme.spacing.xs}px;
-`;
-
-const ProposalCard = styled.View`
-  background-color: ${({ theme }) => theme.colors.surface};
-  border-radius: ${({ theme }) => theme.borderRadius.lg}px;
-  padding: ${({ theme }) => theme.spacing.lg}px;
-  margin-bottom: ${({ theme }) => theme.spacing.xl}px;
-  border-width: 2px;
-  border-color: ${({ theme }) => theme.colors.primary};
-`;
-
-const ProposalHeader = styled.View`
-  flex-direction: row;
-  align-items: center;
-  margin-bottom: ${({ theme }) => theme.spacing.md}px;
-`;
-
-const ProposalIcon = styled.Text`
-  font-size: 24px;
-  margin-right: ${({ theme }) => theme.spacing.sm}px;
-`;
-
-const ProposalTitle = styled.Text`
-  color: ${({ theme }) => theme.colors.textPrimary};
-  font-size: ${({ theme }) => theme.typography.h3.fontSize}px;
-  font-weight: ${({ theme }) => theme.typography.h3.fontWeight};
-`;
-
-const DAppInfo = styled.View`
-  align-items: center;
-  margin-bottom: ${({ theme }) => theme.spacing.lg}px;
-`;
-
-const DAppName = styled.Text`
-  color: ${({ theme }) => theme.colors.textPrimary};
-  font-size: ${({ theme }) => theme.typography.body.fontSize}px;
-  font-weight: 600;
-`;
-
-const DAppUrl = styled.Text`
   color: ${({ theme }) => theme.colors.textSecondary};
   font-size: ${({ theme }) => theme.typography.caption.fontSize}px;
-`;
-
-const ProposalVerification = styled.Text<{ $valid: boolean }>`
-  color: ${({ $valid }) => ($valid ? '#22c55e' : '#f59e0b')};
-  font-size: 12px;
-  font-weight: 700;
-  margin-top: ${({ theme }) => theme.spacing.sm}px;
-`;
-
-const ProposalAcknowledge = styled.TouchableOpacity`
-  flex-direction: row;
-  align-items: center;
-  margin-bottom: ${({ theme }) => theme.spacing.md}px;
-`;
-
-const ProposalAcknowledgeMark = styled.Text`
-  color: ${({ theme }) => theme.colors.warning};
-  font-size: 22px;
-  margin-right: ${({ theme }) => theme.spacing.sm}px;
-`;
-
-const ProposalAcknowledgeText = styled.Text`
-  flex: 1;
-  color: ${({ theme }) => theme.colors.warning};
-  font-size: 13px;
   line-height: 18px;
-`;
-
-const PermissionSection = styled.View`
-  background-color: ${({ theme }) => theme.colors.background};
-  border-radius: ${({ theme }) => theme.borderRadius.md}px;
-  padding: ${({ theme }) => theme.spacing.md}px;
-  margin-bottom: ${({ theme }) => theme.spacing.lg}px;
-`;
-
-const PermissionTitle = styled.Text`
-  color: ${({ theme }) => theme.colors.textSecondary};
-  font-size: ${({ theme }) => theme.typography.bodySmall.fontSize}px;
-  margin-bottom: ${({ theme }) => theme.spacing.sm}px;
-`;
-
-const PermissionItem = styled.Text`
-  color: ${({ theme }) => theme.colors.textPrimary};
-  font-size: ${({ theme }) => theme.typography.bodySmall.fontSize}px;
-  line-height: 20px;
-`;
-
-const ButtonRow = styled.View`
-  flex-direction: row;
-  gap: ${({ theme }) => theme.spacing.md}px;
-`;
-
-const PrimaryButton = styled.TouchableOpacity<{ $disabled?: boolean }>`
-  flex: 1;
-  background-color: ${({ theme, $disabled }) =>
-    $disabled ? theme.colors.border : theme.colors.primary};
-  border-radius: ${({ theme }) => theme.borderRadius.md}px;
-  padding: ${({ theme }) => theme.spacing.md}px;
-  align-items: center;
-`;
-
-const PrimaryButtonText = styled.Text`
-  color: ${({ theme }) => theme.colors.textPrimary};
-  font-size: ${({ theme }) => theme.typography.button.fontSize}px;
-  font-weight: ${({ theme }) => theme.typography.button.fontWeight};
-`;
-
-const SecondaryButton = styled.TouchableOpacity`
-  flex: 1;
-  background-color: ${({ theme }) => theme.colors.background};
-  border-radius: ${({ theme }) => theme.borderRadius.md}px;
-  padding: ${({ theme }) => theme.spacing.md}px;
-  align-items: center;
-  border-width: 1px;
-  border-color: ${({ theme }) => theme.colors.border};
-`;
-
-const SecondaryButtonText = styled.Text`
-  color: ${({ theme }) => theme.colors.textSecondary};
-  font-size: ${({ theme }) => theme.typography.button.fontSize}px;
-  font-weight: ${({ theme }) => theme.typography.button.fontWeight};
+  margin-top: ${({ theme }) => theme.spacing.sm}px;
 `;
 
 const SectionTitle = styled.Text`
@@ -864,7 +517,7 @@ const SectionTitle = styled.Text`
   margin-bottom: ${({ theme }) => theme.spacing.md}px;
 `;
 
-const EmptyState = styled.View`
+const EmptyBox = styled.View`
   align-items: center;
   padding: ${({ theme }) => theme.spacing.xl}px;
 `;
@@ -890,6 +543,7 @@ const SessionCard = styled.View`
 
 const SessionInfo = styled.View`
   flex: 1;
+  margin-right: ${({ theme }) => theme.spacing.sm}px;
 `;
 
 const SessionName = styled.Text`
@@ -901,23 +555,31 @@ const SessionName = styled.Text`
 const SessionUrl = styled.Text`
   color: ${({ theme }) => theme.colors.textSecondary};
   font-size: ${({ theme }) => theme.typography.caption.fontSize}px;
+  margin-bottom: 2px;
 `;
 
-const SessionChains = styled.Text`
-  color: ${({ theme }) => theme.colors.textMuted};
+const SessionMeta = styled.Text`
+  color: ${({ theme }) => theme.colors.textSecondary};
   font-size: ${({ theme }) => theme.typography.caption.fontSize}px;
+  line-height: 18px;
 `;
 
 const DisconnectButton = styled.TouchableOpacity`
-  background-color: ${({ theme }) => theme.colors.error};
+  min-height: 44px;
+  min-width: 56px;
+  align-items: center;
+  justify-content: center;
+  background-color: ${({ theme }) => theme.colors.errorSubtle};
+  border-width: 1px;
+  border-color: ${({ theme }) => theme.colors.error};
   border-radius: ${({ theme }) => theme.borderRadius.sm}px;
-  padding: ${({ theme }) => theme.spacing.xs}px
-    ${({ theme }) => theme.spacing.sm}px;
+  padding: 0 ${({ theme }) => theme.spacing.md}px;
 `;
 
 const DisconnectText = styled.Text`
   color: ${({ theme }) => theme.colors.textPrimary};
-  font-size: ${({ theme }) => theme.typography.caption.fontSize}px;
+  font-size: ${({ theme }) => theme.typography.bodySmall.fontSize}px;
+  font-weight: 600;
 `;
 
 const HelpSection = styled.View`

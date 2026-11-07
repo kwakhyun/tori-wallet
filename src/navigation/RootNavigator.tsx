@@ -31,6 +31,7 @@ import AccountsScreen from '@/screens/Settings/AccountsScreen';
 import TokenApprovalsScreen from '@/screens/Settings/TokenApprovalsScreen';
 import TokenManagementScreen from '@/screens/Assets/TokenManagementScreen';
 import TransactionDetailScreen from '@/screens/TransactionDetail/TransactionDetailScreen';
+import WalletConnectHost from '@/components/walletconnect/WalletConnectHost';
 
 export type RootStackParamList = {
   Auth: undefined;
@@ -173,6 +174,7 @@ function RootNavigator(): React.JSX.Element {
           </>
         )}
       </Stack.Navigator>
+      {showMain ? <WalletConnectHost /> : null}
       {showMain && isLocked ? <LockOverlay /> : null}
     </>
   );

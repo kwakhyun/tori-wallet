@@ -5,8 +5,15 @@
 import React, { useEffect, useState } from 'react';
 import styled from 'styled-components/native';
 import { Modal } from 'react-native';
-import type { SigningIntent } from '@/services/signingIntentService';
+import type {
+  SigningIntent,
+  TokenMetadata,
+} from '@/services/signingIntentService';
 import type { DAppVerification } from '@/services/wcService';
+import {
+  RequestQueueBar,
+  type QueuePosition,
+} from '@/components/walletconnect/RequestQueueBar';
 
 interface SignRequestModalProps {
   visible: boolean;
@@ -18,6 +25,8 @@ interface SignRequestModalProps {
   onApprove: () => void;
   onReject: () => void;
   isProcessing?: boolean;
+  /** 대기 중인 요청이 여러 개일 때 "1/N" 표시 */
+  queuePosition?: QueuePosition;
 }
 
 export interface SignRequest {
@@ -29,6 +38,8 @@ export interface SignRequest {
   account: string;
   intent: SigningIntent;
   referenceGasPrice?: string;
+  /** 검토 시 확정한 토큰 표시 정보 (서명 직전 지문 재검증에 포함) */
+  tokenMetadata?: Record<string, TokenMetadata>;
   expiresAt?: number;
 }
 
@@ -42,6 +53,7 @@ export function SignRequestModal({
   onApprove,
   onReject,
   isProcessing = false,
+  queuePosition,
 }: SignRequestModalProps): React.JSX.Element | null {
   const [riskAcknowledged, setRiskAcknowledged] = useState(false);
 
@@ -84,13 +96,18 @@ export function SignRequestModal({
     >
       <Overlay>
         <ModalContainer>
-          <ModalContent>
+          <ModalContent accessibilityViewIsModal>
+            <RequestQueueBar
+              queuePosition={queuePosition}
+              expiresAt={request.expiresAt}
+              active={visible}
+            />
             {/* 헤더 */}
             <ModalHeader>
               <IconContainer>
-                <IconText>{icon}</IconText>
+                <IconText importantForAccessibility="no">{icon}</IconText>
               </IconContainer>
-              <ModalTitle>{intent.title}</ModalTitle>
+              <ModalTitle accessibilityRole="header">{intent.title}</ModalTitle>
               <ModalDescription>{intent.summary}</ModalDescription>
             </ModalHeader>
 
@@ -103,11 +120,20 @@ export function SignRequestModal({
                   $valid={dAppVerification.validation === 'VALID'}
                   $blocked={verificationBlocked}
                 >
-                  {verificationBlocked
-                    ? '검증 실패 · 차단'
-                    : dAppVerification.validation === 'VALID'
-                    ? 'WalletConnect 출처 검증됨'
-                    : '출처 검증 불가'}
+                  <VerificationIcon importantForAccessibility="no">
+                    {verificationBlocked
+                      ? '⛔'
+                      : dAppVerification.validation === 'VALID'
+                      ? '✓'
+                      : '⚠'}
+                  </VerificationIcon>
+                  <VerificationText>
+                    {verificationBlocked
+                      ? '검증 실패 · 차단'
+                      : dAppVerification.validation === 'VALID'
+                      ? 'WalletConnect 출처 검증됨'
+                      : '출처 검증 불가'}
+                  </VerificationText>
                 </VerificationBadge>
               )}
               {!!dAppVerification?.origin && (
@@ -147,7 +173,7 @@ export function SignRequestModal({
                     key={warning.message}
                     $critical={warning.level === 'critical'}
                   >
-                    <WarningIcon>
+                    <WarningIcon importantForAccessibility="no">
                       {warning.level === 'critical' ? '🚨' : '⚠️'}
                     </WarningIcon>
                     <WarningText $critical={warning.level === 'critical'}>
@@ -158,7 +184,7 @@ export function SignRequestModal({
 
                 {verificationNeedsAcknowledgement && !verificationBlocked && (
                   <WarningBox>
-                    <WarningIcon>⚠️</WarningIcon>
+                    <WarningIcon importantForAccessibility="no">⚠️</WarningIcon>
                     <WarningText>
                       WalletConnect가 dApp 출처를 검증하지 못했습니다. 표시된
                       도메인을 직접 확인하세요.
@@ -167,8 +193,10 @@ export function SignRequestModal({
                 )}
 
                 {(intent.blocked || verificationBlocked) && (
-                  <BlockedBox>
-                    이 요청은 보안 정책에 의해 차단되어 승인할 수 없습니다.
+                  <BlockedBox accessibilityRole="alert">
+                    <BlockedText>
+                      이 요청은 보안 정책에 의해 차단되어 승인할 수 없습니다.
+                    </BlockedText>
                   </BlockedBox>
                 )}
 
@@ -179,7 +207,9 @@ export function SignRequestModal({
                     <RiskAcknowledgeButton
                       onPress={() => setRiskAcknowledged(value => !value)}
                       accessibilityRole="checkbox"
+                      accessibilityLabel="위험과 전체 원문을 확인했습니다."
                       accessibilityState={{ checked: riskAcknowledged }}
+                      testID="sign-request-acknowledge"
                     >
                       <RiskAcknowledgeMark>
                         {riskAcknowledged ? '☑' : '☐'}
@@ -194,15 +224,30 @@ export function SignRequestModal({
 
             {/* 버튼 */}
             <ButtonSection>
-              <RejectButton onPress={onReject} disabled={isProcessing}>
+              <RejectButton
+                onPress={onReject}
+                disabled={isProcessing}
+                accessibilityRole="button"
+                accessibilityLabel="요청 거부"
+                accessibilityState={{ disabled: isProcessing }}
+                testID="sign-request-reject"
+              >
                 <RejectButtonText>거부</RejectButtonText>
               </RejectButton>
               <ApproveButton
                 onPress={onApprove}
                 disabled={approveDisabled}
                 $disabled={approveDisabled}
+                accessibilityRole="button"
+                accessibilityLabel={
+                  intent.blocked || verificationBlocked
+                    ? '차단된 요청'
+                    : '요청 승인'
+                }
+                accessibilityState={{ disabled: approveDisabled }}
+                testID="sign-request-approve"
               >
-                <ApproveButtonText>
+                <ApproveButtonText $disabled={approveDisabled}>
                   {intent.blocked || verificationBlocked ? '차단됨' : '승인'}
                 </ApproveButtonText>
               </ApproveButton>
@@ -244,7 +289,7 @@ const IconContainer = styled.View`
   width: 64px;
   height: 64px;
   border-radius: 32px;
-  background-color: ${({ theme }) => theme.colors.primaryLight};
+  background-color: ${({ theme }) => theme.colors.primarySubtle};
   align-items: center;
   justify-content: center;
   margin-bottom: ${({ theme }) => theme.spacing.md}px;
@@ -289,25 +334,50 @@ const DAppUrl = styled.Text`
 `;
 
 const NetworkBadge = styled.Text`
-  color: ${({ theme }) => theme.colors.primary};
+  color: ${({ theme }) => theme.colors.textPrimary};
   font-size: 12px;
   font-weight: 600;
-  background-color: ${({ theme }) => theme.colors.primaryLight};
+  background-color: ${({ theme }) => theme.colors.primarySubtle};
   padding: 4px 12px;
   border-radius: 12px;
   margin-top: ${({ theme }) => theme.spacing.sm}px;
   overflow: hidden;
 `;
 
-const VerificationBadge = styled.Text<{
+const VerificationBadge = styled.View<{
   $valid: boolean;
   $blocked: boolean;
 }>`
-  color: ${({ $valid, $blocked }) =>
-    $blocked ? '#ef4444' : $valid ? '#22c55e' : '#f59e0b'};
+  flex-direction: row;
+  align-items: center;
+  margin-top: ${({ theme }) => theme.spacing.sm}px;
+  padding: 2px 10px;
+  border-radius: ${({ theme }) => theme.borderRadius.full}px;
+  border-width: 1px;
+  border-color: ${({ theme, $valid, $blocked }) =>
+    $blocked
+      ? theme.colors.error
+      : $valid
+      ? theme.colors.success
+      : theme.colors.warning};
+  background-color: ${({ theme, $valid, $blocked }) =>
+    $blocked
+      ? theme.colors.errorSubtle
+      : $valid
+      ? theme.colors.successSubtle
+      : theme.colors.warningSubtle};
+`;
+
+const VerificationIcon = styled.Text`
+  color: ${({ theme }) => theme.colors.textPrimary};
+  font-size: 12px;
+  margin-right: 4px;
+`;
+
+const VerificationText = styled.Text`
+  color: ${({ theme }) => theme.colors.textPrimary};
   font-size: 12px;
   font-weight: 700;
-  margin-top: ${({ theme }) => theme.spacing.sm}px;
 `;
 
 const DetailsSection = styled.View`
@@ -336,9 +406,11 @@ const DetailValue = styled.Text`
 const WarningBox = styled.View<{ $critical?: boolean }>`
   flex-direction: row;
   align-items: flex-start;
-  background-color: ${({ $critical }) =>
-    $critical ? 'rgba(239, 68, 68, 0.12)' : 'rgba(245, 158, 11, 0.1)'};
-  border: 1px solid ${({ $critical }) => ($critical ? '#ef4444' : '#f59e0b')};
+  background-color: ${({ theme, $critical }) =>
+    $critical ? theme.colors.errorSubtle : theme.colors.warningSubtle};
+  border: 1px solid
+    ${({ theme, $critical }) =>
+      $critical ? theme.colors.error : theme.colors.warning};
   border-radius: ${({ theme }) => theme.borderRadius.md}px;
   padding: ${({ theme }) => theme.spacing.md}px;
   margin-top: ${({ theme }) => theme.spacing.md}px;
@@ -351,8 +423,9 @@ const WarningIcon = styled.Text`
 
 const WarningText = styled.Text<{ $critical?: boolean }>`
   flex: 1;
-  color: ${({ $critical }) => ($critical ? '#ef4444' : '#f59e0b')};
+  color: ${({ theme }) => theme.colors.textPrimary};
   font-size: 13px;
+  font-weight: ${({ $critical }) => ($critical ? 600 : 400)};
   line-height: 18px;
 `;
 
@@ -379,17 +452,27 @@ const DetailsScrollView = styled.ScrollView`
   max-height: 360px;
 `;
 
-const BlockedBox = styled.Text`
-  color: #ef4444;
+const BlockedBox = styled.View`
+  background-color: ${({ theme }) => theme.colors.errorSubtle};
+  border-left-width: 4px;
+  border-left-color: ${({ theme }) => theme.colors.error};
+  border-radius: ${({ theme }) => theme.borderRadius.sm}px;
+  padding: ${({ theme }) => theme.spacing.sm}px
+    ${({ theme }) => theme.spacing.md}px;
+  margin-top: ${({ theme }) => theme.spacing.md}px;
+`;
+
+const BlockedText = styled.Text`
+  color: ${({ theme }) => theme.colors.textPrimary};
   font-size: 13px;
   font-weight: 700;
   line-height: 19px;
-  margin-top: ${({ theme }) => theme.spacing.md}px;
 `;
 
 const RiskAcknowledgeButton = styled.TouchableOpacity`
   flex-direction: row;
   align-items: center;
+  min-height: 44px;
   padding: ${({ theme }) => theme.spacing.md}px 0;
 `;
 
@@ -413,6 +496,8 @@ const ButtonSection = styled.View`
 
 const RejectButton = styled.TouchableOpacity`
   flex: 1;
+  min-height: 48px;
+  justify-content: center;
   padding: ${({ theme }) => theme.spacing.md}px;
   border-radius: ${({ theme }) => theme.borderRadius.md}px;
   border: 1px solid ${({ theme }) => theme.colors.border};
@@ -427,15 +512,18 @@ const RejectButtonText = styled.Text`
 
 const ApproveButton = styled.TouchableOpacity<{ $disabled?: boolean }>`
   flex: 1;
+  min-height: 48px;
+  justify-content: center;
   padding: ${({ theme }) => theme.spacing.md}px;
   border-radius: ${({ theme }) => theme.borderRadius.md}px;
   background-color: ${({ theme, $disabled }) =>
-    $disabled ? theme.colors.border : theme.colors.primary};
+    $disabled ? theme.colors.disabledBackground : theme.colors.primary};
   align-items: center;
 `;
 
-const ApproveButtonText = styled.Text`
-  color: white;
+const ApproveButtonText = styled.Text<{ $disabled?: boolean }>`
+  color: ${({ theme, $disabled }) =>
+    $disabled ? theme.colors.disabledText : theme.colors.onPrimary};
   font-size: 16px;
   font-weight: 600;
 `;

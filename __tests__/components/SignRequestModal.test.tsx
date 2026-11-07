@@ -199,4 +199,31 @@ describe('SignRequestModal', () => {
     fireEvent.press(getByRole('checkbox'));
     expect(getByText('☑')).toBeTruthy();
   });
+
+  it('shows the queue position and an expiry countdown', () => {
+    const { getByTestId, getByText } = renderWithTheme(
+      <SignRequestModal
+        {...defaultProps}
+        request={{ ...defaultProps.request, expiresAt: Date.now() + 65_000 }}
+        queuePosition={{ index: 1, total: 3 }}
+      />,
+    );
+    expect(getByText('1/3')).toBeTruthy();
+    expect(getByTestId('wc-queue-position').props.accessibilityLabel).toBe(
+      '대기 중인 요청 3개 중 1번째',
+    );
+    expect(getByTestId('wc-request-countdown').props.children).toMatch(
+      /^남은 시간 1:0[45]$/,
+    );
+  });
+
+  it('labels the approve and reject buttons for screen readers', () => {
+    const onReject = jest.fn();
+    const { getByLabelText } = renderWithTheme(
+      <SignRequestModal {...defaultProps} onReject={onReject} />,
+    );
+    fireEvent.press(getByLabelText('요청 거부'));
+    expect(onReject).toHaveBeenCalled();
+    expect(getByLabelText('요청 승인')).toBeTruthy();
+  });
 });
