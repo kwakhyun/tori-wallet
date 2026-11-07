@@ -4,11 +4,14 @@
  * onConfirm은 서명 세션이 시작된 뒤(signerVault 잠금 해제)에만 호출된다.
  * 생체인증이 설정되어 있으면 PIN 대신 생체인증으로도 승인할 수 있으며,
  * 이 경우에도 같은 signerVault 세션이 시작되므로 호출부 입장에서는 결과가 같다.
+ *
+ * 지갑이 잠긴 동안에는 표시되지 않고 서명 세션도 시작하지 않는다. 열려 있는 중에
+ * 잠기면 onCancel이 호출된다.
  */
 
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import styled from 'styled-components/native';
-import { Modal, ActivityIndicator } from 'react-native';
+import { ActivityIndicator } from 'react-native';
 import {
   isBiometricUnlockAvailable,
   useAuthentication,
@@ -20,6 +23,7 @@ import {
 } from '@/services/pinAttemptService';
 import { errorFeedback } from '@/utils/haptics';
 import { useTheme } from '@/hooks/useTheme';
+import { AppModal } from './AppModal';
 import { PinPad } from './PinPad';
 
 const PIN_LENGTH = 6;
@@ -56,7 +60,7 @@ export function PinConfirmModal({
     authenticate,
     cancel,
     isAuthenticating: isLoading,
-  } = useAuthentication();
+  } = useAuthentication({ requireUnlockedWallet: true });
   const lockout = usePinLockout(visible);
   const { refresh: refreshLockout, lockUntil } = lockout;
 
@@ -170,11 +174,13 @@ export function PinConfirmModal({
       : null;
 
   return (
-    <Modal
+    // 지갑이 잠기면 진행 중인 인증을 폐기하고 취소한다 (잠금 화면 위에 남지 않는다).
+    <AppModal
       visible={visible}
       animationType="fade"
       transparent
       onRequestClose={handleCancel}
+      onLock={handleCancel}
     >
       <Overlay testID="pin-confirm-overlay">
         <Container testID="pin-confirm-container">
@@ -246,7 +252,7 @@ export function PinConfirmModal({
           </CancelButton>
         </Container>
       </Overlay>
-    </Modal>
+    </AppModal>
   );
 }
 

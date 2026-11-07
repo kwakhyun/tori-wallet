@@ -1003,6 +1003,9 @@ export function WalletConnectHost(): React.JSX.Element | null {
   }, [currentProposal, networkList, activeNetworkChainId]);
 
   // 동시에 하나의 모달만 띄운다: PIN > 요청 대기열 > 연결 제안. 잠긴 동안은 모두 숨긴다.
+  // 서명 → PIN 전환은 같은 커밋에서 하나를 닫고 하나를 연다. iOS에서는 AppModal이 앞 모달의
+  // 닫힘이 끝난 뒤 다음 모달을 띄운다. 각 요청 모달은 요청마다 key를 바꿔 새 네이티브
+  // 호스트로 표시한다 (이전 요청의 표시 상태가 남지 않는다).
   const pinVisible = !locked && showSignPinConfirm;
   const signVisible = !locked && !!signHead && !pinVisible;
   const chainVisible = !locked && !!chainHead && !pinVisible;
@@ -1016,6 +1019,7 @@ export function WalletConnectHost(): React.JSX.Element | null {
     <>
       {currentProposal && proposalView ? (
         <ProposalModal
+          key={`proposal:${currentProposal.proposal.id}`}
           visible={proposalVisible}
           proposalId={currentProposal.proposal.id}
           dAppName={
@@ -1035,6 +1039,7 @@ export function WalletConnectHost(): React.JSX.Element | null {
         />
       ) : null}
       <SignRequestModal
+        key={signHead ? `sign:${signHead.topic}:${signHead.id}` : 'sign:none'}
         visible={signVisible}
         request={signHead}
         dAppName={signHead?.dApp.name}
@@ -1048,6 +1053,7 @@ export function WalletConnectHost(): React.JSX.Element | null {
       />
       {chainHead ? (
         <ChainSwitchModal
+          key={`chain:${chainHead.topic}:${chainHead.id}`}
           visible={chainVisible}
           dAppName={chainHead.dApp.name}
           dAppUrl={chainHead.dApp.url}

@@ -21,7 +21,6 @@ import {
   ActivityIndicator,
   Keyboard,
   Clipboard,
-  Modal,
   Platform,
 } from 'react-native';
 import { useQuery } from '@tanstack/react-query';
@@ -54,6 +53,7 @@ import { NATIVE_TOKEN_ADDRESS } from '@/services/swapService';
 import { transactionTracker } from '@/services/transactionTracker';
 import { transactionCacheService } from '@/realm/services';
 import { QRScanner } from '@/components/common';
+import { AppModal } from '@/components/common/AppModal';
 import { Screen } from '@/components/common/Screen';
 import { ScreenHeader } from '@/components/common/ScreenHeader';
 import {
@@ -1282,11 +1282,12 @@ function SendTransactionScreen(): React.JSX.Element {
       />
 
       {/* 주소록 모달 */}
-      <Modal
+      <AppModal
         visible={showAddressBook}
         animationType="slide"
         presentationStyle="pageSheet"
         onRequestClose={() => setShowAddressBook(false)}
+        onLock={() => setShowAddressBook(false)}
       >
         <Screen testID="send-address-book-modal">
           <ScreenHeader
@@ -1300,7 +1301,7 @@ function SendTransactionScreen(): React.JSX.Element {
             onSelectAddress={handleSelectAddressFromBook}
           />
         </Screen>
-      </Modal>
+      </AppModal>
 
       <TokenPickerModal
         visible={showTokenPicker}

@@ -6,7 +6,8 @@
  */
 
 import React from 'react';
-import { Modal, Switch, type ViewStyle } from 'react-native';
+import { Switch, type ViewStyle } from 'react-native';
+import { AppModal } from '@/components/common/AppModal';
 import styled, { useTheme } from 'styled-components/native';
 import { Screen } from '@/components/common/Screen';
 import { ScreenHeader } from '@/components/common/ScreenHeader';
@@ -239,6 +240,11 @@ interface SheetModalProps {
   /** false면 내용을 스크롤 뷰로 감싸지 않는다 (PIN 패드처럼 고정 레이아웃) */
   scrollable?: boolean;
   closeDisabled?: boolean;
+  /**
+   * 열려 있는 동안 지갑이 잠기면 호출된다. 기본값은 onClose이며, closeDisabled(진행 중인
+   * 작업)일 때는 닫지 않고 숨기기만 했다가 잠금 해제 후 다시 표시한다.
+   */
+  onLock?: () => void;
 }
 
 /** 페이지 시트 모달 + 접근성 닫기 버튼 헤더 */
@@ -250,13 +256,15 @@ export function SheetModal({
   testID,
   scrollable = true,
   closeDisabled,
+  onLock,
 }: SheetModalProps): React.JSX.Element {
   return (
-    <Modal
+    <AppModal
       visible={visible}
       animationType="slide"
       presentationStyle="pageSheet"
       onRequestClose={closeDisabled ? () => undefined : onClose}
+      onLock={onLock ?? (closeDisabled ? undefined : onClose)}
     >
       <Screen testID={testID}>
         <ScreenHeader
@@ -277,7 +285,7 @@ export function SheetModal({
           <SheetBody>{children}</SheetBody>
         )}
       </Screen>
-    </Modal>
+    </AppModal>
   );
 }
 

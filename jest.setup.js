@@ -309,6 +309,40 @@ jest.mock(
   () => require('react-native-safe-area-context/jest/mock').default,
 );
 
+// iOS의 RN Modal은 표시/닫힘 애니메이션이 끝나면 onShow/onDismiss를 보낸다.
+// 기본 Jest 목은 이 이벤트를 보내지 않으므로, AppModal의 iOS 표시 조정(형제 모달이
+// 닫힌 뒤에 다음 모달을 띄움)이 실제처럼 이어지도록 visible 변화에 맞춰 즉시 보낸다.
+jest.mock('react-native/Libraries/Modal/Modal', () => {
+  const BaseModal = jest.requireActual('react-native/jest/mocks/Modal').default;
+  class Modal extends BaseModal {
+    componentDidMount() {
+      if (super.componentDidMount) super.componentDidMount();
+      if (this.props.visible !== false && this.props.onShow) {
+        this.props.onShow({ nativeEvent: null });
+      }
+    }
+    componentDidUpdate(prevProps, prevState, snapshot) {
+      if (super.componentDidUpdate) {
+        super.componentDidUpdate(prevProps, prevState, snapshot);
+      }
+      const wasVisible = prevProps.visible !== false;
+      const isVisible = this.props.visible !== false;
+      if (!wasVisible && isVisible && this.props.onShow) {
+        this.props.onShow({ nativeEvent: null });
+      }
+      if (wasVisible && !isVisible && this.props.onDismiss) {
+        this.props.onDismiss();
+      }
+    }
+  }
+  return { __esModule: true, default: Modal };
+});
+
+// 루트 모달 표시 상태(모듈 전역)가 테스트 사이에 남지 않게 한다.
+beforeEach(() => {
+  require('./src/components/common/modalPresence').resetModalPresence();
+});
+
 // 표시 통화 기본값(KRW)으로 화면을 렌더링하면 환율 조회가 실행된다.
 // 테스트에서 실제 네트워크 요청이 나가지 않도록 기본적으로 막고,
 // fiatService 자체 테스트에서는 mockRestore로 원래 동작을 사용한다.

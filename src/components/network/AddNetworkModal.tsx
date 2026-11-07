@@ -8,7 +8,8 @@
  */
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Modal, Switch } from 'react-native';
+import { Switch } from 'react-native';
+import { AppModal } from '@/components/common/AppModal';
 import styled, { useTheme } from 'styled-components/native';
 import { Screen } from '@/components/common/Screen';
 import { ScreenHeader } from '@/components/common/ScreenHeader';
@@ -135,11 +136,12 @@ export function AddNetworkModal({
   }, [form, isVerifying, onAdded]);
 
   return (
-    <Modal
+    <AppModal
       visible={visible}
       animationType="slide"
       presentationStyle="pageSheet"
       onRequestClose={onClose}
+      onLock={onClose}
     >
       <Screen testID="add-network-modal">
         <ScreenHeader
@@ -253,7 +255,7 @@ export function AddNetworkModal({
           />
         </Body>
       </Screen>
-    </Modal>
+    </AppModal>
   );
 }
 

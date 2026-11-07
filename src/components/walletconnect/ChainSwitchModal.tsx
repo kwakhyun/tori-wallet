@@ -5,7 +5,7 @@
 
 import React from 'react';
 import styled from 'styled-components/native';
-import { Modal } from 'react-native';
+import { AppModal } from '@/components/common/AppModal';
 import { RequestQueueBar, type QueuePosition } from './RequestQueueBar';
 
 interface ChainSwitchModalProps {
@@ -36,7 +36,8 @@ export function ChainSwitchModal({
   onReject,
 }: ChainSwitchModalProps): React.JSX.Element {
   return (
-    <Modal
+    // 잠긴 동안에는 숨기기만 한다. 요청은 대기열에 남고 만료 처리는 계속된다.
+    <AppModal
       visible={visible}
       transparent
       animationType="fade"
@@ -96,7 +97,7 @@ export function ChainSwitchModal({
           </ButtonRow>
         </Card>
       </Overlay>
-    </Modal>
+    </AppModal>
   );
 }
 

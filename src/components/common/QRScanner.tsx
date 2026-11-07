@@ -8,7 +8,7 @@
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import styled from 'styled-components/native';
-import { Modal, Linking, ActivityIndicator } from 'react-native';
+import { Linking, ActivityIndicator } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
   Camera,
@@ -17,6 +17,8 @@ import {
   useCodeScanner,
 } from 'react-native-vision-camera';
 import { palette } from '@/styles/theme';
+import { useWalletLocked } from '@/hooks/useWalletLocked';
+import { AppModal } from './AppModal';
 import { errorFeedback, successFeedback } from '@/utils/haptics';
 import {
   parseScannedCode,
@@ -61,6 +63,8 @@ export function QRScanner({
   const device = useCameraDevice('back');
   const { hasPermission, requestPermission } = useCameraPermission();
   const insets = useSafeAreaInsets();
+  // 잠긴 동안에는 모달이 숨겨지므로 카메라도 끈다.
+  const locked = useWalletLocked();
   const [isActive, setIsActive] = useState(false);
   const [torch, setTorch] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -123,8 +127,6 @@ export function QRScanner({
     onClose();
   }, [onClose]);
 
-  if (!visible) return null;
-
   const renderPermission = () => (
     <PermissionContainer testID="qr-scanner-permission-container">
       <PermissionIcon importantForAccessibility="no">📷</PermissionIcon>
@@ -150,11 +152,12 @@ export function QRScanner({
   );
 
   return (
-    <Modal
+    <AppModal
       visible={visible}
       animationType="slide"
       presentationStyle="fullScreen"
       onRequestClose={handleClose}
+      onLock={handleClose}
     >
       <Container testID="qr-scanner-container">
         <Header style={{ paddingTop: insets.top + 8 }}>
@@ -199,7 +202,7 @@ export function QRScanner({
             <>
               <StyledCamera
                 device={device}
-                isActive={isActive}
+                isActive={isActive && !locked}
                 codeScanner={codeScanner}
                 torch={torch ? 'on' : 'off'}
               />
@@ -249,7 +252,7 @@ export function QRScanner({
           <FooterText>{hint ?? MODE_HINT[mode]}</FooterText>
         </Footer>
       </Container>
-    </Modal>
+    </AppModal>
   );
 }
 

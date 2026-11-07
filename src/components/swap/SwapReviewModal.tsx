@@ -9,7 +9,8 @@
  */
 
 import React, { useEffect, useState } from 'react';
-import { Modal, ActivityIndicator } from 'react-native';
+import { ActivityIndicator } from 'react-native';
+import { AppModal } from '@/components/common/AppModal';
 import styled, { useTheme } from 'styled-components/native';
 import { formatEther } from 'viem';
 import { SwapToken, SwapQuote } from '@/services/enhancedSwapService';
@@ -49,6 +50,11 @@ interface Props {
   isRefreshing?: boolean;
   /** 다시 검토가 필요한 이유 등 상단 안내 */
   notice?: string | null;
+  /**
+   * 열려 있는 동안(또는 잠긴 동안 열려고 할 때) 지갑이 잠기면 호출된다.
+   * 기본값은 onClose: 잠금 화면 위에 검토 시트가 남지 않는다.
+   */
+  onLock?: () => void;
 }
 
 export function SwapReviewModal({
@@ -69,6 +75,7 @@ export function SwapReviewModal({
   onRefreshQuote,
   isRefreshing = false,
   notice,
+  onLock,
 }: Props): React.JSX.Element {
   const theme = useTheme();
   const { formatFiat } = useFiat();
@@ -123,11 +130,12 @@ export function SwapReviewModal({
     : '스왑 확인';
 
   return (
-    <Modal
+    <AppModal
       visible={visible}
       animationType="slide"
       presentationStyle="pageSheet"
       onRequestClose={onClose}
+      onLock={onLock ?? onClose}
     >
       <Screen testID="swap-review-modal">
         <ScreenHeader
@@ -381,7 +389,7 @@ export function SwapReviewModal({
           </CancelButton>
         </BottomContainer>
       </Screen>
-    </Modal>
+    </AppModal>
   );
 }
 

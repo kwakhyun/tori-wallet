@@ -2,14 +2,26 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { AppState } from 'react-native';
 import { signerVault } from '@/services/signerVault';
 import { walletService } from '@/services/walletService';
+import { useWalletStore } from '@/store/walletStore';
 import {
   formatLockoutRemaining,
   pinAttemptService,
   remainingAttemptsBeforeLockout,
 } from '@/services/pinAttemptService';
 
+interface AuthenticationOptions {
+  /**
+   * true면 지갑이 잠긴 동안(walletStore.isLocked) 서명 세션을 시작하지 않는다.
+   * 거래·서명 승인용 PIN 확인에서 사용한다. 잠금 화면은 잠금을 풀기 위해 인증하므로
+   * 이 옵션을 쓰지 않는다.
+   */
+  requireUnlockedWallet?: boolean;
+}
+
 /** 화면 종료, 취소, 백그라운드 전환 이후 도착한 인증 결과는 폐기한다. */
-export function useAuthentication() {
+export function useAuthentication({
+  requireUnlockedWallet = false,
+}: AuthenticationOptions = {}) {
   const [isAuthenticating, setIsAuthenticating] = useState(false);
   const generation = useRef(0);
   const mounted = useRef(true);
@@ -36,10 +48,14 @@ export function useAuthentication() {
 
   const authenticate = useCallback(
     async (pin?: string): Promise<boolean | null> => {
+      // 자동 잠금 오버레이 아래에서 거래 승인용 서명 세션이 열리지 않게 한다.
+      const walletLocked = () =>
+        requireUnlockedWallet && useWalletStore.getState().isLocked !== false;
       if (
         busy.current ||
         !mounted.current ||
-        AppState.currentState === 'background'
+        AppState.currentState === 'background' ||
+        walletLocked()
       )
         return null;
       busy.current = true;
@@ -47,25 +63,32 @@ export function useAuthentication() {
       const isActive = () =>
         mounted.current &&
         attempt === generation.current &&
-        AppState.currentState !== 'background';
+        AppState.currentState !== 'background' &&
+        !walletLocked();
       setIsAuthenticating(true);
       try {
         const result =
           pin === undefined
             ? await signerVault.unlockWithBiometric(isActive)
             : await signerVault.unlockWithPin(pin, isActive);
+        if (result && walletLocked()) {
+          // 잠금과 경합해 세션이 열렸다면 즉시 폐기한다.
+          signerVault.lock();
+          return null;
+        }
         return isActive() ? result : null;
       } catch (error) {
         if (!isActive()) return null;
         throw error;
       } finally {
-        if (isActive()) {
+        // 취소·언마운트로 대체되지 않았다면 (잠금으로 폐기된 경우 포함) 다시 시도할 수 있게 한다.
+        if (mounted.current && attempt === generation.current) {
           busy.current = false;
           setIsAuthenticating(false);
         }
       }
     },
-    [],
+    [requireUnlockedWallet],
   );
 
   return { authenticate, cancel, isAuthenticating };

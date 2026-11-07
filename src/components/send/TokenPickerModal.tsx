@@ -5,7 +5,8 @@
  */
 
 import React, { useMemo, useState } from 'react';
-import { ActivityIndicator, FlatList, Modal } from 'react-native';
+import { ActivityIndicator, FlatList } from 'react-native';
+import { AppModal } from '@/components/common/AppModal';
 import styled, { useTheme } from 'styled-components/native';
 import { Screen } from '@/components/common/Screen';
 import { ScreenHeader } from '@/components/common/ScreenHeader';
@@ -173,11 +174,12 @@ export function TokenPickerModal({
   };
 
   return (
-    <Modal
+    <AppModal
       visible={visible}
       animationType="slide"
       presentationStyle="pageSheet"
       onRequestClose={handleClose}
+      onLock={handleClose}
     >
       <Screen testID={testID}>
         <ScreenHeader
@@ -217,7 +219,7 @@ export function TokenPickerModal({
         ) : null}
         {renderBody()}
       </Screen>
-    </Modal>
+    </AppModal>
   );
 }
 

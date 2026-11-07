@@ -6,10 +6,11 @@
  */
 
 import React, { useCallback } from 'react';
-import { Alert, Modal, ScrollView } from 'react-native';
+import { Alert, ScrollView } from 'react-native';
 import styled from 'styled-components/native';
 import { useShallow } from 'zustand/react/shallow';
 import { useWalletStore, type Network } from '@/store/walletStore';
+import { AppModal } from '@/components/common/AppModal';
 import { Screen } from '@/components/common/Screen';
 import { IconButton } from '@/components/common/IconButton';
 import { showToast } from '@/store/toastStore';
@@ -104,11 +105,12 @@ export function NetworkSelectorModal({
   const testnets = networks.filter(n => n.isTestnet);
 
   return (
-    <Modal
+    <AppModal
       visible={visible}
       animationType="slide"
       presentationStyle="pageSheet"
       onRequestClose={onClose}
+      onLock={onClose}
     >
       <Screen testID={testID}>
         <Header>
@@ -137,7 +139,7 @@ export function NetworkSelectorModal({
           </Content>
         </ScrollView>
       </Screen>
-    </Modal>
+    </AppModal>
   );
 }
 

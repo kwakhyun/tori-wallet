@@ -6,6 +6,8 @@ export { Button } from './Button';
 export { Input } from './Input';
 export { Card } from './Card';
 export { default as ErrorBoundary } from './ErrorBoundary';
+export { AppModal } from './AppModal';
+export type { AppModalProps } from './AppModal';
 export { QRScanner } from './QRScanner';
 export { PinConfirmModal } from './PinConfirmModal';
 export { PinPad } from './PinPad';

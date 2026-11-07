@@ -1,10 +1,17 @@
 import React from 'react';
 import { AppState, AppStateStatus } from 'react-native';
-import { render, act, fireEvent } from '@testing-library/react-native';
+import {
+  render,
+  renderHook,
+  act,
+  fireEvent,
+} from '@testing-library/react-native';
 import { ThemeProvider } from 'styled-components/native';
 import { darkTheme } from '../../src/styles/theme';
 import PinConfirmModal from '../../src/components/common/PinConfirmModal';
 import { signerVault } from '../../src/services/signerVault';
+import { useWalletStore } from '../../src/store/walletStore';
+import { useAuthentication } from '../../src/hooks/useAuthentication';
 import { walletService } from '../../src/services/walletService';
 import {
   PinLockedError,
@@ -35,6 +42,8 @@ beforeEach(() => {
   jest.clearAllMocks();
   biometricEnabled.mockResolvedValue(false);
   signerVault.lock();
+  // 거래 승인 PIN은 잠금 해제된 지갑에서만 동작한다.
+  useWalletStore.setState({ hasWallet: true, isLocked: false });
   jest
     .spyOn(AppState, 'addEventListener')
     .mockReturnValue({ remove: jest.fn() });
@@ -186,5 +195,86 @@ describe('biometric approval', () => {
     await act(async () => {});
     expect(retrieveBiometric).not.toHaveBeenCalled();
     expect(view.queryByTestId('pin-confirm-biometric')).toBeNull();
+  });
+});
+
+describe('auto-lock', () => {
+  it('cancels and disappears when the wallet locks while it is open', () => {
+    const view = render(element());
+    expect(view.getByTestId('pin-confirm-container')).toBeTruthy();
+
+    act(() => {
+      useWalletStore.getState().lock();
+    });
+    expect(view.queryByTestId('pin-confirm-container')).toBeNull();
+    expect(props.onCancel).toHaveBeenCalledTimes(1);
+  });
+
+  it('discards a PIN result that races the lock without opening a session', async () => {
+    let resolve!: (value: string) => void;
+    retrieve.mockReturnValue(
+      new Promise(r => {
+        resolve = r;
+      }),
+    );
+    const view = render(element());
+    for (const digit of '123456')
+      fireEvent.press(view.getByTestId(`pin-key-${digit}`));
+    expect(retrieve).toHaveBeenCalledTimes(1);
+
+    // 서명 볼트 세대가 바뀌지 않는 경로로 잠겨도 세션이 열리지 않아야 한다.
+    act(() => {
+      useWalletStore.setState({ isLocked: true });
+    });
+    await act(async () => {
+      resolve(mnemonic);
+    });
+    expect(signerVault.isUnlocked()).toBe(false);
+    expect(props.onConfirm).not.toHaveBeenCalled();
+  });
+
+  it('refuses to start a signer session while the wallet is locked', async () => {
+    act(() => {
+      useWalletStore.setState({ isLocked: true });
+    });
+    retrieve.mockResolvedValue(mnemonic);
+    const { result } = renderHook(() =>
+      useAuthentication({ requireUnlockedWallet: true }),
+    );
+    let outcome: boolean | null = true;
+    await act(async () => {
+      outcome = await result.current.authenticate('123456');
+    });
+    expect(outcome).toBeNull();
+    expect(retrieve).not.toHaveBeenCalled();
+    expect(signerVault.isUnlocked()).toBe(false);
+  });
+
+  it('does not prompt for biometrics when it is requested while locked', async () => {
+    biometricEnabled.mockResolvedValue(true);
+    retrieveBiometric.mockResolvedValue(mnemonic);
+    act(() => {
+      useWalletStore.setState({ isLocked: true });
+    });
+    const view = render(element());
+    await act(async () => {});
+    expect(view.queryByTestId('pin-confirm-container')).toBeNull();
+    expect(props.onCancel).toHaveBeenCalledTimes(1);
+    expect(retrieveBiometric).not.toHaveBeenCalled();
+    expect(signerVault.isUnlocked()).toBe(false);
+  });
+
+  it('still lets the lock screen authenticate (no wallet-lock requirement)', async () => {
+    act(() => {
+      useWalletStore.setState({ isLocked: true });
+    });
+    retrieve.mockResolvedValue(mnemonic);
+    const { result } = renderHook(() => useAuthentication());
+    let outcome: boolean | null = null;
+    await act(async () => {
+      outcome = await result.current.authenticate('123456');
+    });
+    expect(outcome).toBe(true);
+    expect(signerVault.isUnlocked()).toBe(true);
   });
 });

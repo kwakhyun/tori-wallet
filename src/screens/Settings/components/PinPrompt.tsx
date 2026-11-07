@@ -5,8 +5,9 @@
  */
 
 import React, { useCallback, useRef, useState } from 'react';
-import { ActivityIndicator, Modal } from 'react-native';
+import { ActivityIndicator } from 'react-native';
 import styled, { useTheme } from 'styled-components/native';
+import { AppModal } from '@/components/common/AppModal';
 import { PinPad } from '@/components/common/PinPad';
 import { Screen } from '@/components/common/Screen';
 import { ScreenHeader } from '@/components/common/ScreenHeader';
@@ -105,11 +106,13 @@ export function PinVerifyModal({
   testID = 'pin-verify-modal',
 }: PinVerifyModalProps): React.JSX.Element {
   return (
-    <Modal
+    // 잠기면 PIN 확인을 취소한다 (진행 중인 검증 결과는 usePinVerification이 폐기한다).
+    <AppModal
       visible={visible}
       animationType="slide"
       presentationStyle="pageSheet"
       onRequestClose={onCancel}
+      onLock={onCancel}
     >
       <Screen testID={testID}>
         <ScreenHeader
@@ -128,7 +131,7 @@ export function PinVerifyModal({
           </Body>
         ) : null}
       </Screen>
-    </Modal>
+    </AppModal>
   );
 }
 

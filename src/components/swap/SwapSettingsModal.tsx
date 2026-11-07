@@ -6,7 +6,8 @@
  */
 
 import React, { useEffect, useState } from 'react';
-import { Modal, Switch } from 'react-native';
+import { Switch } from 'react-native';
+import { AppModal } from '@/components/common/AppModal';
 import styled, { useTheme } from 'styled-components/native';
 import { useShallow } from 'zustand/react/shallow';
 import {
@@ -71,11 +72,12 @@ export function SwapSettingsModal({
     localSettings.defaultSlippage >= HIGH_SLIPPAGE_PERCENT;
 
   return (
-    <Modal
+    <AppModal
       visible={visible}
       animationType="slide"
       presentationStyle="pageSheet"
       onRequestClose={onClose}
+      onLock={onClose}
     >
       <Screen testID="swap-settings-modal">
         <ScreenHeader
@@ -171,7 +173,7 @@ export function SwapSettingsModal({
           </ResetButton>
         </Content>
       </Screen>
-    </Modal>
+    </AppModal>
   );
 }
 

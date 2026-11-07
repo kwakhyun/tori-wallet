@@ -7,6 +7,7 @@ import { render, fireEvent, cleanup, act } from '@testing-library/react-native';
 import { ThemeProvider } from 'styled-components/native';
 import { SwapReviewModal } from '../../src/components/swap/SwapReviewModal';
 import { theme } from '../../src/styles/theme';
+import { useWalletStore } from '../../src/store/walletStore';
 import type {
   SwapQuote,
   SwapToken,
@@ -111,6 +112,41 @@ describe('SwapReviewModal', () => {
         <SwapReviewModal {...baseProps()} quote={null} />,
       ).toJSON(),
     ).toBeNull();
+  });
+
+  describe('auto-lock', () => {
+    beforeEach(() => {
+      useWalletStore.setState({ hasWallet: true, isLocked: false });
+    });
+    afterEach(() => {
+      cleanup();
+      useWalletStore.setState({ hasWallet: false, isLocked: true });
+    });
+
+    it('closes when the wallet auto-locks so it never stays over the lock screen', () => {
+      const props = baseProps();
+      const view = renderWithTheme(<SwapReviewModal {...props} />);
+      expect(view.getByTestId('swap-review-modal')).toBeTruthy();
+      act(() => {
+        useWalletStore.getState().lock();
+      });
+      expect(view.queryByTestId('swap-review-modal')).toBeNull();
+      expect(props.onClose).toHaveBeenCalledTimes(1);
+    });
+
+    it('lets the caller handle the lock instead of closing', () => {
+      const props = baseProps();
+      const onLock = jest.fn();
+      const view = renderWithTheme(
+        <SwapReviewModal {...props} onLock={onLock} />,
+      );
+      act(() => {
+        useWalletStore.getState().lock();
+      });
+      expect(view.queryByTestId('swap-review-modal')).toBeNull();
+      expect(onLock).toHaveBeenCalledTimes(1);
+      expect(props.onClose).not.toHaveBeenCalled();
+    });
   });
 
   it('closes from the labelled header button', () => {

@@ -7,7 +7,7 @@
 
 import React, { useEffect, useState } from 'react';
 import styled from 'styled-components/native';
-import { Modal } from 'react-native';
+import { AppModal } from '@/components/common/AppModal';
 import type { DAppVerification } from '@/services/wcService';
 import { RequestQueueBar } from './RequestQueueBar';
 
@@ -60,7 +60,8 @@ export function ProposalModal({
     isProcessing || (needsAcknowledgement && !acknowledged);
 
   return (
-    <Modal
+    // 잠긴 동안에는 숨기기만 한다. 제안은 대기열에 남고 만료 처리는 계속된다.
+    <AppModal
       visible={visible}
       transparent
       animationType="fade"
@@ -163,7 +164,7 @@ export function ProposalModal({
           </ButtonRow>
         </Card>
       </Overlay>
-    </Modal>
+    </AppModal>
   );
 }
 
