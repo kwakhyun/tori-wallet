@@ -1,12 +1,24 @@
 /**
- * 스왑 고급 설정 모달
+ * 스왑 설정 모달
+ *
+ * 0x v2 견적이 실제로 반영하는 슬리피지만 설정한다. 저장한 값은 swapStore에
+ * 영구 저장되고, 스왑 화면은 이 값을 견적 요청(slippageBps)에 사용한다.
  */
 
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Modal, Switch } from 'react-native';
-import styled from 'styled-components/native';
+import styled, { useTheme } from 'styled-components/native';
 import { useShallow } from 'zustand/react/shallow';
-import { useSwapStore, SwapSettings } from '@/store/swapStore';
+import {
+  useSwapStore,
+  SwapSettings,
+  SLIPPAGE_OPTIONS,
+  AUTO_SLIPPAGE_DEFAULT,
+  AUTO_SLIPPAGE_STABLE,
+  HIGH_SLIPPAGE_PERCENT,
+} from '@/store/swapStore';
+import { Screen } from '@/components/common/Screen';
+import { ScreenHeader } from '@/components/common/ScreenHeader';
 
 interface Props {
   visible: boolean;
@@ -17,6 +29,7 @@ export function SwapSettingsModal({
   visible,
   onClose,
 }: Props): React.JSX.Element {
+  const theme = useTheme();
   const { settings, updateSettings, resetSettings } = useSwapStore(
     useShallow(state => ({
       settings: state.settings,
@@ -25,6 +38,11 @@ export function SwapSettingsModal({
     })),
   );
   const [localSettings, setLocalSettings] = useState<SwapSettings>(settings);
+
+  // 다시 열 때마다 저장된 값에서 시작한다 (저장하지 않은 변경은 버림).
+  useEffect(() => {
+    if (visible) setLocalSettings(settings);
+  }, [visible, settings]);
 
   const handleSave = () => {
     updateSettings(localSettings);
@@ -45,11 +63,12 @@ export function SwapSettingsModal({
   };
 
   const handleAutoSlippageToggle = (enabled: boolean) => {
-    setLocalSettings(prev => ({
-      ...prev,
-      autoSlippage: enabled,
-    }));
+    setLocalSettings(prev => ({ ...prev, autoSlippage: enabled }));
   };
+
+  const isHighSlippage =
+    !localSettings.autoSlippage &&
+    localSettings.defaultSlippage >= HIGH_SLIPPAGE_PERCENT;
 
   return (
     <Modal
@@ -58,208 +77,109 @@ export function SwapSettingsModal({
       presentationStyle="pageSheet"
       onRequestClose={onClose}
     >
-      <Container>
-        <Header>
-          <CloseButton onPress={onClose}>
-            <CloseIcon>✕</CloseIcon>
-          </CloseButton>
-          <HeaderTitle>스왑 설정</HeaderTitle>
-          <SaveButton onPress={handleSave}>
-            <SaveButtonText>저장</SaveButtonText>
-          </SaveButton>
-        </Header>
+      <Screen testID="swap-settings-modal">
+        <ScreenHeader
+          title="스왑 설정"
+          leftIcon="close"
+          onBack={onClose}
+          backTestID="swap-settings-close"
+          right={
+            <SaveButton
+              onPress={handleSave}
+              accessibilityRole="button"
+              accessibilityLabel="설정 저장"
+              testID="swap-settings-save"
+            >
+              <SaveButtonText>저장</SaveButtonText>
+            </SaveButton>
+          }
+        />
 
         <Content>
-          {/* 슬리피지 설정 */}
           <Section>
             <SectionTitle>슬리피지 허용치</SectionTitle>
             <SectionDescription>
-              실제 거래 가격이 예상 가격과 얼마나 다를 수 있는지 설정합니다.
+              견적보다 불리하게 체결될 수 있는 최대 비율입니다. 이 범위를 넘으면
+              스왑은 실패하고, 수수료만 소모됩니다.
             </SectionDescription>
 
             <SettingRow>
-              <SettingLabel>자동 슬리피지</SettingLabel>
+              <SettingTextGroup>
+                <SettingLabel>자동</SettingLabel>
+                <SettingHint>
+                  스테이블코인끼리 {AUTO_SLIPPAGE_STABLE}%, 그 외{' '}
+                  {AUTO_SLIPPAGE_DEFAULT}%
+                </SettingHint>
+              </SettingTextGroup>
               <Switch
                 value={localSettings.autoSlippage}
                 onValueChange={handleAutoSlippageToggle}
-                trackColor={{ false: '#3A3A4C', true: '#6366F1' }}
-                thumbColor="#FFF"
+                trackColor={{
+                  false: theme.colors.disabledBackground,
+                  true: theme.colors.primary,
+                }}
+                thumbColor={theme.colors.onPrimary}
+                accessibilityLabel="자동 슬리피지"
+                testID="swap-settings-auto-slippage"
               />
             </SettingRow>
 
-            {!localSettings.autoSlippage && (
-              <SlippageOptions>
-                {[0.1, 0.5, 1.0, 2.0, 3.0].map(value => (
+            <SlippageOptions accessibilityRole="radiogroup">
+              {SLIPPAGE_OPTIONS.map(value => {
+                const selected =
+                  !localSettings.autoSlippage &&
+                  localSettings.defaultSlippage === value;
+                return (
                   <SlippageOption
                     key={value}
-                    $isSelected={localSettings.defaultSlippage === value}
+                    $isSelected={selected}
                     onPress={() => handleSlippageChange(value)}
+                    accessibilityRole="radio"
+                    accessibilityState={{ selected }}
+                    accessibilityLabel={`슬리피지 ${value}%`}
+                    testID={`swap-settings-slippage-${value}`}
                   >
-                    <SlippageOptionText
-                      $isSelected={localSettings.defaultSlippage === value}
-                    >
+                    <SlippageOptionText $isSelected={selected}>
                       {value}%
                     </SlippageOptionText>
                   </SlippageOption>
-                ))}
-              </SlippageOptions>
-            )}
+                );
+              })}
+            </SlippageOptions>
 
-            {localSettings.defaultSlippage >= 3 && (
-              <WarningBox>
+            {isHighSlippage && (
+              <WarningBox accessibilityRole="alert">
                 <WarningText>
-                  ⚠️ 높은 슬리피지는 불리한 가격에 거래될 수 있습니다.
+                  ⚠️ 높은 슬리피지는 불리한 가격에 체결되거나 샌드위치 공격을
+                  받을 수 있습니다.
                 </WarningText>
               </WarningBox>
             )}
           </Section>
 
-          {/* 거래 기한 */}
-          <Section>
-            <SectionTitle>거래 기한</SectionTitle>
-            <SectionDescription>
-              이 시간 내에 거래가 완료되지 않으면 취소됩니다.
-            </SectionDescription>
+          <Note>
+            거래 기한과 가스 우선순위는 0x 견적에 포함된 값으로 처리되어 따로
+            설정할 수 없습니다. 검토한 견적은 90초 동안 유효합니다.
+          </Note>
 
-            <DeadlineOptions>
-              {[10, 20, 30, 60].map(value => (
-                <DeadlineOption
-                  key={value}
-                  $isSelected={localSettings.txDeadlineMinutes === value}
-                  onPress={() =>
-                    setLocalSettings(prev => ({
-                      ...prev,
-                      txDeadlineMinutes: value,
-                    }))
-                  }
-                >
-                  <DeadlineOptionText
-                    $isSelected={localSettings.txDeadlineMinutes === value}
-                  >
-                    {value}분
-                  </DeadlineOptionText>
-                </DeadlineOption>
-              ))}
-            </DeadlineOptions>
-          </Section>
-
-          {/* 가스 설정 */}
-          <Section>
-            <SectionTitle>가스 우선순위</SectionTitle>
-            <SectionDescription>
-              거래 처리 속도를 선택합니다. 높을수록 더 빨리 처리됩니다.
-            </SectionDescription>
-
-            <GasOptions>
-              {[
-                { key: 'low', label: '느림', icon: '🐢' },
-                { key: 'medium', label: '보통', icon: '🚗' },
-                { key: 'high', label: '빠름', icon: '🚀' },
-              ].map(option => (
-                <GasOption
-                  key={option.key}
-                  $isSelected={localSettings.gasPreference === option.key}
-                  onPress={() =>
-                    setLocalSettings(prev => ({
-                      ...prev,
-                      gasPreference: option.key as 'low' | 'medium' | 'high',
-                    }))
-                  }
-                >
-                  <GasIcon>{option.icon}</GasIcon>
-                  <GasLabel
-                    $isSelected={localSettings.gasPreference === option.key}
-                  >
-                    {option.label}
-                  </GasLabel>
-                </GasOption>
-              ))}
-            </GasOptions>
-          </Section>
-
-          {/* 고급 설정 */}
-          <Section>
-            <SectionTitle>고급 설정</SectionTitle>
-
-            <SettingRow>
-              <SettingLabel>전문가 모드</SettingLabel>
-              <Switch
-                value={localSettings.expertMode}
-                onValueChange={value =>
-                  setLocalSettings(prev => ({ ...prev, expertMode: value }))
-                }
-                trackColor={{ false: '#3A3A4C', true: '#6366F1' }}
-                thumbColor="#FFF"
-              />
-            </SettingRow>
-            <SettingDescription>
-              높은 가격 영향 경고 없이 거래할 수 있습니다.
-            </SettingDescription>
-
-            {!localSettings.expertMode && (
-              <SettingRow>
-                <SettingLabel>가격 영향 경고</SettingLabel>
-                <Switch
-                  value={localSettings.showPriceImpactWarning}
-                  onValueChange={value =>
-                    setLocalSettings(prev => ({
-                      ...prev,
-                      showPriceImpactWarning: value,
-                    }))
-                  }
-                  trackColor={{ false: '#3A3A4C', true: '#6366F1' }}
-                  thumbColor="#FFF"
-                />
-              </SettingRow>
-            )}
-          </Section>
-
-          {/* 초기화 버튼 */}
-          <ResetButton onPress={handleReset}>
+          <ResetButton
+            onPress={handleReset}
+            accessibilityRole="button"
+            testID="swap-settings-reset"
+          >
             <ResetButtonText>설정 초기화</ResetButtonText>
           </ResetButton>
         </Content>
-      </Container>
+      </Screen>
     </Modal>
   );
 }
 
 // Styled Components
-const Container = styled.View`
-  flex: 1;
-  background-color: ${({ theme }) => theme.colors.background};
-`;
-
-const Header = styled.View`
-  flex-direction: row;
-  align-items: center;
-  justify-content: space-between;
-  padding: ${({ theme }) => theme.spacing.md}px;
-  border-bottom-width: 1px;
-  border-bottom-color: ${({ theme }) => theme.colors.border};
-`;
-
-const CloseButton = styled.TouchableOpacity`
-  width: 40px;
-  height: 40px;
-  align-items: center;
-  justify-content: center;
-`;
-
-const CloseIcon = styled.Text`
-  font-size: 20px;
-  color: ${({ theme }) => theme.colors.textSecondary};
-`;
-
-const HeaderTitle = styled.Text`
-  font-size: 18px;
-  font-weight: 600;
-  color: ${({ theme }) => theme.colors.textPrimary};
-`;
-
 const SaveButton = styled.TouchableOpacity`
-  padding: ${({ theme }) => theme.spacing.sm}px
-    ${({ theme }) => theme.spacing.md}px;
+  min-height: 44px;
+  justify-content: center;
+  padding: 0 ${({ theme }) => theme.spacing.md}px;
 `;
 
 const SaveButtonText = styled.Text`
@@ -301,16 +221,20 @@ const SettingRow = styled.View`
   padding: ${({ theme }) => theme.spacing.sm}px 0;
 `;
 
+const SettingTextGroup = styled.View`
+  flex: 1;
+  margin-right: ${({ theme }) => theme.spacing.md}px;
+`;
+
 const SettingLabel = styled.Text`
   font-size: 15px;
   color: ${({ theme }) => theme.colors.textPrimary};
 `;
 
-const SettingDescription = styled.Text`
+const SettingHint = styled.Text`
   font-size: 12px;
-  color: ${({ theme }) => theme.colors.textMuted};
-  margin-top: -${({ theme }) => theme.spacing.xs}px;
-  margin-bottom: ${({ theme }) => theme.spacing.sm}px;
+  color: ${({ theme }) => theme.colors.textSecondary};
+  margin-top: 2px;
 `;
 
 const SlippageOptions = styled.View`
@@ -321,66 +245,28 @@ const SlippageOptions = styled.View`
 
 const SlippageOption = styled.TouchableOpacity<{ $isSelected: boolean }>`
   flex: 1;
-  padding: ${({ theme }) => theme.spacing.sm}px;
+  min-height: 44px;
+  justify-content: center;
   border-radius: ${({ theme }) => theme.borderRadius.md}px;
+  border-width: 1px;
+  border-color: ${({ theme, $isSelected }) =>
+    $isSelected ? theme.colors.primary : theme.colors.border};
   background-color: ${({ theme, $isSelected }) =>
-    $isSelected ? theme.colors.primary : theme.colors.backgroundSecondary};
+    $isSelected
+      ? theme.colors.primarySubtle
+      : theme.colors.backgroundSecondary};
   align-items: center;
 `;
 
 const SlippageOptionText = styled.Text<{ $isSelected: boolean }>`
   font-size: 14px;
-  font-weight: 600;
-  color: ${({ $isSelected }) => ($isSelected ? '#FFF' : '#888')};
-`;
-
-const DeadlineOptions = styled.View`
-  flex-direction: row;
-  gap: 8px;
-`;
-
-const DeadlineOption = styled.TouchableOpacity<{ $isSelected: boolean }>`
-  flex: 1;
-  padding: ${({ theme }) => theme.spacing.sm}px;
-  border-radius: ${({ theme }) => theme.borderRadius.md}px;
-  background-color: ${({ theme, $isSelected }) =>
-    $isSelected ? theme.colors.primary : theme.colors.backgroundSecondary};
-  align-items: center;
-`;
-
-const DeadlineOptionText = styled.Text<{ $isSelected: boolean }>`
-  font-size: 14px;
-  font-weight: 600;
-  color: ${({ $isSelected }) => ($isSelected ? '#FFF' : '#888')};
-`;
-
-const GasOptions = styled.View`
-  flex-direction: row;
-  gap: 12px;
-`;
-
-const GasOption = styled.TouchableOpacity<{ $isSelected: boolean }>`
-  flex: 1;
-  padding: ${({ theme }) => theme.spacing.md}px;
-  border-radius: ${({ theme }) => theme.borderRadius.md}px;
-  background-color: ${({ theme, $isSelected }) =>
-    $isSelected ? theme.colors.primary : theme.colors.backgroundSecondary};
-  align-items: center;
-`;
-
-const GasIcon = styled.Text`
-  font-size: 24px;
-  margin-bottom: ${({ theme }) => theme.spacing.xs}px;
-`;
-
-const GasLabel = styled.Text<{ $isSelected: boolean }>`
-  font-size: 13px;
-  font-weight: 600;
-  color: ${({ $isSelected }) => ($isSelected ? '#FFF' : '#888')};
+  font-weight: ${({ $isSelected }) => ($isSelected ? 700 : 500)};
+  color: ${({ theme, $isSelected }) =>
+    $isSelected ? theme.colors.textPrimary : theme.colors.textSecondary};
 `;
 
 const WarningBox = styled.View`
-  background-color: rgba(255, 193, 7, 0.15);
+  background-color: ${({ theme }) => theme.colors.warningSubtle};
   border-radius: ${({ theme }) => theme.borderRadius.sm}px;
   padding: ${({ theme }) => theme.spacing.sm}px;
   margin-top: ${({ theme }) => theme.spacing.sm}px;
@@ -388,11 +274,20 @@ const WarningBox = styled.View`
 
 const WarningText = styled.Text`
   font-size: 13px;
-  color: ${({ theme }) => theme.colors.warning};
+  line-height: 18px;
+  color: ${({ theme }) => theme.colors.textPrimary};
+`;
+
+const Note = styled.Text`
+  font-size: 12px;
+  line-height: 18px;
+  color: ${({ theme }) => theme.colors.textSecondary};
+  padding: 0 ${({ theme }) => theme.spacing.xs}px;
 `;
 
 const ResetButton = styled.TouchableOpacity`
-  padding: ${({ theme }) => theme.spacing.md}px;
+  min-height: 44px;
+  justify-content: center;
   align-items: center;
   margin-top: ${({ theme }) => theme.spacing.md}px;
 `;

@@ -37,15 +37,72 @@ export interface FavoriteTokenPair {
   lastUsed: number;
 }
 
+/**
+ * 스왑 설정
+ *
+ * 0x v2(AllowanceHolder) 견적이 실제로 반영하는 값만 둔다.
+ *  - 슬리피지: slippageBps로 전달되어 최소 수령량(minBuyAmount)에 반영된다.
+ * 거래 기한/가스 우선순위/전문가 모드는 0x 견적과 서명된 트랜잭션에 반영할 수
+ * 없어(가스 값은 검토한 견적 지문에 포함) 제공하지 않는다.
+ */
 export interface SwapSettings {
+  /** 수동 슬리피지 (%) */
   defaultSlippage: number;
+  /** 자동: 스테이블 쌍 0.1%, 그 외 0.5% */
   autoSlippage: boolean;
-  txDeadlineMinutes: number;
-  gasPreference: 'low' | 'medium' | 'high' | 'custom';
-  customGasPrice?: string;
-  expertMode: boolean;
-  showPriceImpactWarning: boolean;
-  priceImpactWarningThreshold: number;
+}
+
+export const SLIPPAGE_OPTIONS = [0.1, 0.5, 1.0, 3.0] as const;
+export const AUTO_SLIPPAGE_STABLE = 0.1;
+export const AUTO_SLIPPAGE_DEFAULT = 0.5;
+export const HIGH_SLIPPAGE_PERCENT = 3;
+const MIN_SLIPPAGE = 0.01;
+const MAX_SLIPPAGE = 50;
+
+const STABLECOIN_SYMBOLS = new Set([
+  'USDC',
+  'USDT',
+  'DAI',
+  'USDC.E',
+  'USDBC',
+  'FRAX',
+  'LUSD',
+]);
+
+/**
+ * 실제 견적 요청에 사용할 슬리피지(%)를 정한다.
+ */
+export function resolveSlippage(
+  settings: Pick<SwapSettings, 'autoSlippage' | 'defaultSlippage'>,
+  sellSymbol?: string,
+  buySymbol?: string,
+): number {
+  if (!settings.autoSlippage) return settings.defaultSlippage;
+  const isStablePair =
+    !!sellSymbol &&
+    !!buySymbol &&
+    STABLECOIN_SYMBOLS.has(sellSymbol.toUpperCase()) &&
+    STABLECOIN_SYMBOLS.has(buySymbol.toUpperCase());
+  return isStablePair ? AUTO_SLIPPAGE_STABLE : AUTO_SLIPPAGE_DEFAULT;
+}
+
+function sanitizeSettings(value: unknown): SwapSettings {
+  const raw = (value && typeof value === 'object' ? value : {}) as Partial<
+    Record<keyof SwapSettings, unknown>
+  >;
+  const slippage = Number(raw.defaultSlippage);
+  return {
+    defaultSlippage:
+      Number.isFinite(slippage) &&
+      slippage >= MIN_SLIPPAGE &&
+      slippage <= MAX_SLIPPAGE
+        ? slippage
+        : DEFAULT_SETTINGS.defaultSlippage,
+    autoSlippage:
+      typeof raw.autoSlippage === 'boolean'
+        ? raw.autoSlippage
+        : DEFAULT_SETTINGS.autoSlippage,
+  };
 }
 
 interface SwapState {
@@ -54,6 +111,8 @@ interface SwapState {
   addHistoryItem: (item: Omit<SwapHistoryItem, 'id'>) => string;
   updateHistoryStatus: (id: string, status: SwapHistoryItem['status']) => void;
   clearHistory: () => void;
+  /** 한 네트워크의 내역만 삭제 */
+  clearHistoryForChain: (chainId: number) => void;
   getHistoryByChain: (chainId: number) => SwapHistoryItem[];
 
   // 즐겨찾기 토큰 페어
@@ -84,11 +143,6 @@ interface SwapState {
 const DEFAULT_SETTINGS: SwapSettings = {
   defaultSlippage: 0.5,
   autoSlippage: true,
-  txDeadlineMinutes: 20,
-  gasPreference: 'medium',
-  expertMode: false,
-  showPriceImpactWarning: true,
-  priceImpactWarningThreshold: 5, // 5% 이상 가격 영향시 경고
 };
 
 export const useSwapStore = create<SwapState>()(
@@ -116,6 +170,11 @@ export const useSwapStore = create<SwapState>()(
       },
 
       clearHistory: () => set({ history: [] }),
+
+      clearHistoryForChain: chainId =>
+        set(state => ({
+          history: state.history.filter(item => item.chainId !== chainId),
+        })),
 
       getHistoryByChain: chainId => {
         return get().history.filter(item => item.chainId === chainId);
@@ -187,7 +246,7 @@ export const useSwapStore = create<SwapState>()(
 
       updateSettings: newSettings => {
         set(state => ({
-          settings: { ...state.settings, ...newSettings },
+          settings: sanitizeSettings({ ...state.settings, ...newSettings }),
         }));
       },
 
@@ -225,6 +284,12 @@ export const useSwapStore = create<SwapState>()(
     }),
     {
       name: 'tori-swap-store',
+      version: 1,
+      // v0의 거래 기한/가스/전문가 모드 설정은 0x 흐름에서 반영되지 않아 제거한다.
+      migrate: persistedState => {
+        const state = (persistedState ?? {}) as Partial<SwapState>;
+        return { ...state, settings: sanitizeSettings(state.settings) };
+      },
       storage: createJSONStorage(() => AsyncStorage),
       partialize: state => ({
         history: state.history,

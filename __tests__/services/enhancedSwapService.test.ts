@@ -150,17 +150,26 @@ describe('EnhancedSwapService', () => {
       expect(result.level).toBe('high');
     });
 
+    it('warns from 3% price impact', () => {
+      const quote = { estimatedPriceImpact: '0.03' } as SwapQuote;
+      expect(enhancedSwapService.calculatePriceImpact(quote).level).toBe(
+        'high',
+      );
+    });
+
     it('should return critical level for very high impact', () => {
       const quote = { estimatedPriceImpact: '0.15' } as SwapQuote;
       const result = enhancedSwapService.calculatePriceImpact(quote);
       expect(result.level).toBe('critical');
     });
 
-    it('should handle undefined price impact', () => {
-      const quote = {} as SwapQuote;
-      const result = enhancedSwapService.calculatePriceImpact(quote);
-      expect(result.percent).toBe('0.00');
-      expect(result.level).toBe('low');
+    it('treats a missing price impact as unknown, never 0%', () => {
+      for (const estimatedPriceImpact of [undefined, '', 'NaN']) {
+        const quote = { estimatedPriceImpact } as unknown as SwapQuote;
+        const result = enhancedSwapService.calculatePriceImpact(quote);
+        expect(result.percent).toBeNull();
+        expect(result.level).toBe('unknown');
+      }
     });
   });
 
@@ -251,22 +260,24 @@ describe('EnhancedSwapService', () => {
       expect(result?.price).toBe('1.5');
     });
 
-    it('should return null on fetch error', async () => {
+    it('surfaces API failures instead of returning null', async () => {
       (global.fetch as jest.Mock).mockResolvedValueOnce({
         ok: false,
+        status: 503,
+        json: () => Promise.resolve({}),
       });
 
-      const result = await enhancedSwapService.getPrice(
-        {
-          sellToken: SWAP_TOKENS[1][0],
-          buyToken: SWAP_TOKENS[1][1],
-          sellAmount: '1',
-          takerAddress: '0x1234567890123456789012345678901234567890',
-        },
-        1,
-      );
-
-      expect(result).toBeNull();
+      await expect(
+        enhancedSwapService.getPrice(
+          {
+            sellToken: SWAP_TOKENS[1][0],
+            buyToken: SWAP_TOKENS[1][1],
+            sellAmount: '1',
+            takerAddress: '0x1234567890123456789012345678901234567890',
+          },
+          1,
+        ),
+      ).rejects.toMatchObject({ code: 'SERVICE_UNAVAILABLE' });
     });
   });
 
@@ -359,20 +370,157 @@ describe('EnhancedSwapService', () => {
   describe('getPrice additional tests', () => {
     it('should handle network error', async () => {
       (global.fetch as jest.Mock).mockRejectedValueOnce(
-        new Error('Network error'),
+        new TypeError('Network request failed'),
       );
 
-      const result = await enhancedSwapService.getPrice(
+      await expect(
+        enhancedSwapService.getPrice(
+          {
+            sellToken: SWAP_TOKENS[1][0],
+            buyToken: SWAP_TOKENS[1][1],
+            sellAmount: '1',
+            takerAddress: '0x1234567890123456789012345678901234567890',
+          },
+          1,
+        ),
+      ).rejects.toMatchObject({ code: 'NETWORK' });
+    });
+  });
+
+  describe('USD prices and quote enrichment', () => {
+    const taker = '0x1234567890123456789012345678901234567890';
+    const allowanceHolder = '0x0000000000001fF3684f28c67538d4D072C22734';
+    const usdc = SWAP_TOKENS[137][1];
+    const matic = SWAP_TOKENS[137][0];
+
+    function routeFetch(handlers: {
+      quote?: object;
+      nativeUsd?: number | null;
+      tokenUsd?: Record<string, number>;
+    }) {
+      (global.fetch as jest.Mock).mockImplementation(async (url: string) => {
+        if (url.includes('/swap/allowance-holder/quote')) {
+          return { ok: true, status: 200, json: async () => handlers.quote };
+        }
+        if (url.includes('/simple/token_price/')) {
+          return {
+            ok: true,
+            json: async () =>
+              Object.fromEntries(
+                Object.entries(handlers.tokenUsd ?? {}).map(([k, usd]) => [
+                  k.toLowerCase(),
+                  { usd },
+                ]),
+              ),
+          };
+        }
+        if (url.includes('/simple/price')) {
+          if (handlers.nativeUsd === null) return { ok: false };
+          return {
+            ok: true,
+            json: async () => ({
+              'matic-network': { usd: handlers.nativeUsd },
+            }),
+          };
+        }
+        throw new Error(`unexpected ${url}`);
+      });
+    }
+
+    // 1 MATIC → USDC (가스 200,000 × 100 gwei = 0.02 MATIC)
+    const quoteFor = (buyAmount: string) => ({
+      allowanceTarget: allowanceHolder,
+      buyAmount,
+      buyToken: usdc.address,
+      sellAmount: '1000000000000000000',
+      sellToken: matic.address,
+      minBuyAmount: buyAmount,
+      liquidityAvailable: true,
+      issues: {
+        allowance: null,
+        balance: null,
+        simulationIncomplete: false,
+        invalidSourcesPassed: [],
+      },
+      route: { fills: [] },
+      transaction: {
+        to: '0xdef1c0ded9bec7f1a1670819833240f027b25eff',
+        data: '0x12345678',
+        gas: '200000',
+        gasPrice: '100000000000',
+        value: '1000000000000000000',
+      },
+    });
+
+    beforeEach(() => {
+      (enhancedSwapService as any).priceCache.clear();
+    });
+
+    it('computes price impact and gas cost from USD prices of the active chain', async () => {
+      // 1 MATIC = $0.50 → 0.45 USDC 수령 = 10% 손실
+      routeFetch({
+        quote: quoteFor('450000'),
+        nativeUsd: 0.5,
+        tokenUsd: { [usdc.address]: 1 },
+      });
+
+      const quote = await enhancedSwapService.getQuote(
         {
-          sellToken: SWAP_TOKENS[1][0],
-          buyToken: SWAP_TOKENS[1][1],
+          sellToken: matic,
+          buyToken: usdc,
           sellAmount: '1',
-          takerAddress: '0x1234567890123456789012345678901234567890',
+          takerAddress: taker,
         },
-        1,
+        137,
       );
 
-      expect(result).toBeNull();
+      expect(Number(quote!.estimatedPriceImpact)).toBeCloseTo(0.1, 6);
+      expect(enhancedSwapService.calculatePriceImpact(quote!)).toEqual({
+        percent: '10.00',
+        level: 'critical',
+      });
+      // 0.02 MATIC × $0.5 (ETH 가격이 아니라 네이티브 MATIC 가격)
+      expect(quote!.estimatedGasUsd).toBe('0.01');
+      expect(quote!.sellValueUsd).toBeCloseTo(0.5);
+      expect(global.fetch).toHaveBeenCalledWith(
+        expect.stringContaining(
+          `/simple/token_price/polygon-pos?contract_addresses=${usdc.address.toLowerCase()}`,
+        ),
+        expect.anything(),
+      );
+    });
+
+    it('leaves price impact unknown when a price is unavailable', async () => {
+      routeFetch({ quote: quoteFor('450000'), nativeUsd: null, tokenUsd: {} });
+
+      const quote = await enhancedSwapService.getQuote(
+        {
+          sellToken: matic,
+          buyToken: usdc,
+          sellAmount: '1',
+          takerAddress: taker,
+        },
+        137,
+      );
+
+      expect(quote!.estimatedPriceImpact).toBe('');
+      expect(enhancedSwapService.calculatePriceImpact(quote!)).toEqual({
+        percent: null,
+        level: 'unknown',
+      });
+      expect(quote!.estimatedGasUsd).toBeUndefined();
+      expect(quote!.sellValueUsd).toBeNull();
+    });
+
+    it('has no USD prices on testnets', async () => {
+      await expect(
+        enhancedSwapService.getNativeUsdPrice(11155111),
+      ).resolves.toBeNull();
+      await expect(
+        enhancedSwapService.getUsdPrices(11155111, [
+          { address: NATIVE_TOKEN_ADDRESS },
+        ]),
+      ).resolves.toEqual({ [NATIVE_TOKEN_ADDRESS.toLowerCase()]: null });
     });
   });
 

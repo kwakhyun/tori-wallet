@@ -3,13 +3,19 @@
  */
 
 import React, { useCallback, useMemo } from 'react';
-import { SafeAreaView } from 'react-native-safe-area-context';
-import { FlatList, StyleSheet } from 'react-native';
+import { Alert, FlatList, StyleSheet } from 'react-native';
 import styled, { useTheme } from 'styled-components/native';
 import { useNavigation } from '@react-navigation/native';
+import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useShallow } from 'zustand/react/shallow';
+import type { RootStackParamList } from '@/navigation/RootNavigator';
 import { useSwapStore, SwapHistoryItem } from '@/store/swapStore';
 import { useWalletStore } from '@/store/walletStore';
+import { showToast } from '@/store/toastStore';
+import { Screen } from '@/components/common/Screen';
+import { ScreenHeader } from '@/components/common/ScreenHeader';
+import { NetworkBadge } from '@/components/send/NetworkBadge';
+import { formatDisplayAmount } from '@/utils/format';
 
 // 스타일 정의
 const styles = StyleSheet.create({
@@ -26,11 +32,12 @@ const ItemSeparator = () => <Separator />;
 
 function SwapHistoryScreen(): React.JSX.Element {
   const theme = useTheme();
-  const navigation = useNavigation();
-  const { history, clearHistory } = useSwapStore(
+  const navigation =
+    useNavigation<NativeStackNavigationProp<RootStackParamList>>();
+  const { history, clearHistoryForChain } = useSwapStore(
     useShallow(state => ({
       history: state.history,
-      clearHistory: state.clearHistory,
+      clearHistoryForChain: state.clearHistoryForChain,
     })),
   );
   const { activeNetworkChainId, networks } = useWalletStore(
@@ -45,6 +52,31 @@ function SwapHistoryScreen(): React.JSX.Element {
   }, [history, activeNetworkChainId]);
 
   const activeNetwork = networks.find(n => n.chainId === activeNetworkChainId);
+  const networkName = activeNetwork?.name || '현재 네트워크';
+
+  // 현재 네트워크의 내역만, 확인 후 삭제한다. 다른 네트워크 내역은 유지된다.
+  const handleClear = useCallback(() => {
+    Alert.alert(
+      '스왑 내역 삭제',
+      `${networkName}의 스왑 내역 ${filteredHistory.length}건을 이 기기에서 삭제할까요?\n다른 네트워크의 내역과 블록체인 기록은 그대로 남습니다.`,
+      [
+        { text: '취소', style: 'cancel' },
+        {
+          text: '삭제',
+          style: 'destructive',
+          onPress: () => {
+            clearHistoryForChain(activeNetworkChainId);
+            showToast(`${networkName} 스왑 내역을 삭제했습니다.`, 'success');
+          },
+        },
+      ],
+    );
+  }, [
+    networkName,
+    filteredHistory.length,
+    clearHistoryForChain,
+    activeNetworkChainId,
+  ]);
 
   const formatDate = useCallback((timestamp: number): string => {
     const date = new Date(timestamp);
@@ -88,9 +120,23 @@ function SwapHistoryScreen(): React.JSX.Element {
   };
 
   const renderItem = ({ item }: { item: SwapHistoryItem }) => (
-    <HistoryItem>
+    <HistoryItem
+      onPress={() =>
+        navigation.navigate('TransactionDetail', {
+          txHash: item.txHash,
+          chainId: item.chainId,
+        })
+      }
+      accessibilityRole="button"
+      accessibilityLabel={`${item.sellToken.symbol}에서 ${
+        item.buyToken.symbol
+      } 스왑, ${getStatusText(item.status)}, ${formatDate(
+        item.timestamp,
+      )}. 거래 상세 보기`}
+      testID={`swap-history-item-${item.id}`}
+    >
       <HistoryIconContainer>
-        <HistoryIcon>🔄</HistoryIcon>
+        <HistoryIcon importantForAccessibility="no">🔄</HistoryIcon>
       </HistoryIconContainer>
 
       <HistoryContent>
@@ -105,15 +151,14 @@ function SwapHistoryScreen(): React.JSX.Element {
           <AmountRow>
             <AmountLabel>보낸 금액</AmountLabel>
             <AmountValue>
-              {parseFloat(item.sellToken.amount).toFixed(4)}{' '}
+              {formatDisplayAmount(item.sellToken.amount)}{' '}
               {item.sellToken.symbol}
             </AmountValue>
           </AmountRow>
           <AmountRow>
             <AmountLabel>받은 금액</AmountLabel>
             <AmountValue $highlight>
-              {parseFloat(item.buyToken.amount).toFixed(4)}{' '}
-              {item.buyToken.symbol}
+              {formatDisplayAmount(item.buyToken.amount)} {item.buyToken.symbol}
             </AmountValue>
           </AmountRow>
         </HistoryDetails>
@@ -134,8 +179,8 @@ function SwapHistoryScreen(): React.JSX.Element {
   );
 
   const renderEmpty = () => (
-    <EmptyContainer>
-      <EmptyIcon>📊</EmptyIcon>
+    <EmptyContainer testID="swap-history-empty">
+      <EmptyIcon importantForAccessibility="no">📊</EmptyIcon>
       <EmptyTitle>스왑 내역이 없습니다</EmptyTitle>
       <EmptyText>
         {activeNetwork?.name || '현재 네트워크'}에서{'\n'}
@@ -145,24 +190,31 @@ function SwapHistoryScreen(): React.JSX.Element {
   );
 
   return (
-    <Container>
-      <Header>
-        <BackButton onPress={() => navigation.goBack()}>
-          <BackIcon>←</BackIcon>
-        </BackButton>
-        <HeaderTitle>스왑 내역</HeaderTitle>
-        {filteredHistory.length > 0 && (
-          <ClearButton onPress={clearHistory}>
-            <ClearButtonText>삭제</ClearButtonText>
-          </ClearButton>
-        )}
-        {filteredHistory.length === 0 && <HeaderSpacer />}
-      </Header>
+    <Screen testID="swap-history-screen">
+      <ScreenHeader
+        title="스왑 내역"
+        backTestID="swap-history-back"
+        right={
+          filteredHistory.length > 0 ? (
+            <ClearButton
+              onPress={handleClear}
+              accessibilityRole="button"
+              accessibilityLabel={`${networkName} 스왑 내역 삭제`}
+              testID="swap-history-clear"
+            >
+              <ClearButtonText>삭제</ClearButtonText>
+            </ClearButton>
+          ) : undefined
+        }
+      />
 
-      <NetworkBadge>
-        <NetworkDot />
-        <NetworkText>{activeNetwork?.name || 'Unknown'}</NetworkText>
-      </NetworkBadge>
+      <BadgeWrapper>
+        <NetworkBadge
+          name={activeNetwork?.name}
+          isTestnet={activeNetwork?.isTestnet}
+          testID="swap-history-network"
+        />
+      </BadgeWrapper>
 
       <FlatList
         data={filteredHistory}
@@ -176,79 +228,28 @@ function SwapHistoryScreen(): React.JSX.Element {
         }
         ItemSeparatorComponent={ItemSeparator}
       />
-    </Container>
+    </Screen>
   );
 }
 
 // Styled Components
-const Container = styled(SafeAreaView)`
-  flex: 1;
-  background-color: ${({ theme }) => theme.colors.background};
-`;
-
-const Header = styled.View`
-  flex-direction: row;
-  align-items: center;
-  justify-content: space-between;
-  padding: ${({ theme }) => theme.spacing.md}px;
-`;
-
-const BackButton = styled.TouchableOpacity`
-  width: 40px;
-  height: 40px;
-  align-items: center;
-  justify-content: center;
-`;
-
-const BackIcon = styled.Text`
-  font-size: 24px;
-  color: ${({ theme }) => theme.colors.textPrimary};
-`;
-
-const HeaderTitle = styled.Text`
-  font-size: 18px;
-  font-weight: 600;
-  color: ${({ theme }) => theme.colors.textPrimary};
-`;
-
 const ClearButton = styled.TouchableOpacity`
-  padding: ${({ theme }) => theme.spacing.sm}px;
+  min-height: 44px;
+  justify-content: center;
+  padding: 0 ${({ theme }) => theme.spacing.sm}px;
 `;
 
 const ClearButtonText = styled.Text`
-  font-size: 14px;
+  font-size: 15px;
+  font-weight: 600;
   color: ${({ theme }) => theme.colors.error};
 `;
 
-const HeaderSpacer = styled.View`
-  width: 40px;
-`;
-
-const NetworkBadge = styled.View`
-  flex-direction: row;
-  align-items: center;
-  align-self: center;
-  background-color: ${({ theme }) => theme.colors.surface};
-  padding: ${({ theme }) => theme.spacing.xs}px
-    ${({ theme }) => theme.spacing.md}px;
-  border-radius: ${({ theme }) => theme.borderRadius.full}px;
+const BadgeWrapper = styled.View`
   margin-bottom: ${({ theme }) => theme.spacing.md}px;
 `;
 
-const NetworkDot = styled.View`
-  width: 8px;
-  height: 8px;
-  border-radius: 4px;
-  background-color: ${({ theme }) => theme.colors.primary};
-  margin-right: ${({ theme }) => theme.spacing.xs}px;
-`;
-
-const NetworkText = styled.Text`
-  font-size: 13px;
-  color: ${({ theme }) => theme.colors.textSecondary};
-`;
-
-const HistoryItem = styled.View`
+const HistoryItem = styled.TouchableOpacity`
   flex-direction: row;
   background-color: ${({ theme }) => theme.colors.surface};
   border-radius: ${({ theme }) => theme.borderRadius.lg}px;

@@ -2,12 +2,53 @@
  * 멀티 DEX 스왑 서비스 (가격 비교, 최적 경로 탐색)
  */
 
-import { formatUnits } from 'viem';
+import { formatEther, formatUnits } from 'viem';
 import { isSwapApiSupported } from './swapApiConfig';
 import {
   swapService as baseSwapService,
+  classifyPriceImpact,
+  computePriceImpact,
+  isNativeSwapToken,
+  type PriceImpactInfo,
+  type SwapPriceResult,
   type SwapQuote as BaseSwapQuote,
 } from './swapService';
+
+const COINGECKO_API = 'https://api.coingecko.com/api/v3';
+const PRICE_FETCH_TIMEOUT_MS = 6000;
+
+/** CoinGecko 자산 플랫폼 ID (ERC-20 계약 주소 시세 조회용) */
+const COINGECKO_PLATFORMS: Record<number, string> = {
+  1: 'ethereum',
+  137: 'polygon-pos',
+  42161: 'arbitrum-one',
+  10: 'optimistic-ethereum',
+  8453: 'base',
+};
+
+/** 체인별 네이티브 자산 CoinGecko ID (테스트넷은 시세 없음) */
+const NATIVE_COINGECKO_IDS: Record<number, string> = {
+  1: 'ethereum',
+  137: 'matic-network',
+  42161: 'ethereum',
+  10: 'ethereum',
+  8453: 'ethereum',
+};
+
+async function fetchJsonWithTimeout(url: string): Promise<unknown | null> {
+  const controller =
+    typeof AbortController !== 'undefined' ? new AbortController() : null;
+  const timer = setTimeout(() => controller?.abort(), PRICE_FETCH_TIMEOUT_MS);
+  try {
+    const response = await fetch(url, { signal: controller?.signal });
+    if (!response.ok) return null;
+    return await response.json();
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 // 체인별 네이티브 토큰 주소
 export const NATIVE_TOKEN_ADDRESS =
@@ -62,7 +103,7 @@ export const SWAP_TOKENS: Record<number, SwapToken[]> = {
     {
       symbol: 'DAI',
       name: 'Dai',
-      address: '0x6B175474E89094C44Da98b954EescdeCB5C27Eb',
+      address: '0x6B175474E89094C44Da98b954EedeAC495271d0F',
       decimals: 18,
       logoUrl:
         'https://assets.coingecko.com/coins/images/9956/small/dai-multi-collateral-mcd.png',
@@ -320,6 +361,12 @@ export interface SwapQuote extends BaseSwapQuote {
   estimatedGasUsd?: string;
   minimumReceived?: string;
   route?: SwapRoute[];
+  /** 판매 토큰 USD 단가 (모르면 null) */
+  sellPriceUsd?: number | null;
+  /** 판매 수량의 USD 가치 (모르면 null) */
+  sellValueUsd?: number | null;
+  /** 네이티브 자산 USD 단가 (모르면 null) */
+  nativePriceUsd?: number | null;
 }
 
 export interface SwapSource {
@@ -391,39 +438,133 @@ class EnhancedSwapService {
   }
 
   /**
-   * 견적에 추가 정보 붙이기
+   * 견적에 추가 정보 붙이기 (가격 영향, USD 가스비, 경로)
+   * 시세 조회 실패는 견적을 막지 않고 '알 수 없음'으로 남긴다.
    */
   private async enhanceQuote(
     quote: SwapQuote,
     params: SwapParams,
-    _chainId: number,
+    chainId: number,
   ): Promise<SwapQuote> {
     // API v2가 실행 견적에 서명한 최소 수령량을 그대로 사용한다.
     const minimumReceived = BigInt(quote.minBuyAmount);
 
-    // USD 가스비 추정 (ETH 가격 가져오기)
+    const prices = await this.getUsdPrices(chainId, [
+      params.sellToken,
+      params.buyToken,
+    ]);
+    const nativePriceUsd = await this.getNativeUsdPrice(chainId);
+    const sellPriceUsd = prices[params.sellToken.address.toLowerCase()] ?? null;
+    const buyPriceUsd = prices[params.buyToken.address.toLowerCase()] ?? null;
+
+    const buyAmount = formatUnits(
+      BigInt(quote.buyAmount),
+      params.buyToken.decimals,
+    );
+    const impact = computePriceImpact({
+      sellAmount: params.sellAmount,
+      sellPriceUsd,
+      buyAmount,
+      buyPriceUsd,
+    });
+
     let estimatedGasUsd: string | undefined;
-    try {
-      const ethPrice = await this.getTokenPrice('ethereum');
-      if (ethPrice) {
-        const gasCostEth = parseFloat(
-          formatUnits(BigInt(quote.gas) * BigInt(quote.gasPrice), 18),
-        );
-        estimatedGasUsd = (gasCostEth * ethPrice.usd).toFixed(2);
+    if (nativePriceUsd !== null) {
+      const gasCost = Number(
+        formatEther(BigInt(quote.gas) * BigInt(quote.gasPrice)),
+      );
+      if (Number.isFinite(gasCost)) {
+        estimatedGasUsd = (gasCost * nativePriceUsd).toFixed(2);
       }
-    } catch {
-      // 무시
     }
 
-    // 경로 파싱
-    const route = this.parseRoute(quote.sources);
+    const sellValue =
+      sellPriceUsd !== null ? Number(params.sellAmount) * sellPriceUsd : null;
 
     return {
       ...quote,
+      estimatedPriceImpact: impact === null ? '' : impact.toString(),
       minimumReceived: formatUnits(minimumReceived, params.buyToken.decimals),
       estimatedGasUsd,
-      route,
+      route: this.parseRoute(quote.sources),
+      sellPriceUsd,
+      sellValueUsd:
+        sellValue !== null && Number.isFinite(sellValue) ? sellValue : null,
+      nativePriceUsd,
     };
+  }
+
+  /**
+   * 네이티브 자산 USD 시세 (테스트넷/조회 실패 시 null)
+   */
+  async getNativeUsdPrice(chainId: number): Promise<number | null> {
+    const id = NATIVE_COINGECKO_IDS[chainId];
+    if (!id) return null;
+    const price = await this.getTokenPrice(id);
+    return price && price.usd > 0 ? price.usd : null;
+  }
+
+  /**
+   * 토큰들의 USD 시세 (소문자 주소 → 가격, 모르면 null)
+   * 네이티브는 /simple/price, ERC-20은 /simple/token_price/{platform}을 쓴다.
+   */
+  async getUsdPrices(
+    chainId: number,
+    tokens: Pick<SwapToken, 'address' | 'isNative'>[],
+  ): Promise<Record<string, number | null>> {
+    const result: Record<string, number | null> = {};
+    const contracts: string[] = [];
+    let hasNative = false;
+
+    for (const token of tokens) {
+      const key = token.address.toLowerCase();
+      if (isNativeSwapToken(token)) {
+        hasNative = true;
+        continue;
+      }
+      const cached = this.priceCache.get(`${chainId}:${key}`);
+      if (cached && Date.now() - cached.timestamp < this.PRICE_CACHE_TTL) {
+        result[key] = cached.price.usd > 0 ? cached.price.usd : null;
+      } else {
+        contracts.push(key);
+      }
+    }
+
+    if (hasNative) {
+      const native = await this.getNativeUsdPrice(chainId);
+      for (const token of tokens) {
+        if (isNativeSwapToken(token))
+          result[token.address.toLowerCase()] = native;
+      }
+    }
+
+    const platform = COINGECKO_PLATFORMS[chainId];
+    if (contracts.length > 0 && platform) {
+      const unique = [...new Set(contracts)];
+      const data = (await fetchJsonWithTimeout(
+        `${COINGECKO_API}/simple/token_price/${platform}?contract_addresses=${unique.join(
+          ',',
+        )}&vs_currencies=usd`,
+      )) as Record<string, { usd?: number }> | null;
+      for (const key of unique) {
+        const usd = data?.[key]?.usd;
+        if (typeof usd === 'number' && usd > 0) {
+          result[key] = usd;
+          this.priceCache.set(`${chainId}:${key}`, {
+            price: { usd },
+            timestamp: Date.now(),
+          });
+        } else {
+          result[key] = null;
+        }
+      }
+    }
+
+    for (const token of tokens) {
+      const key = token.address.toLowerCase();
+      if (!(key in result)) result[key] = null;
+    }
+    return result;
   }
 
   /**
@@ -448,17 +589,11 @@ class EnhancedSwapService {
   async getPrice(
     params: SwapParams,
     chainId: number,
-  ): Promise<{ price: string; buyAmount: string } | null> {
+  ): Promise<SwapPriceResult | null> {
     if (!isSwapApiSupported(chainId)) {
       return null;
     }
-
-    try {
-      return baseSwapService.getPrice(params, chainId);
-    } catch (error: unknown) {
-      console.error('Failed to get price:', error);
-      return null;
-    }
+    return baseSwapService.getPrice(params, chainId);
   }
 
   /**
@@ -588,7 +723,7 @@ class EnhancedSwapService {
    * 토큰 승인 필요 여부 확인
    */
   needsApproval(sellToken: SwapToken): boolean {
-    return sellToken.address !== NATIVE_TOKEN_ADDRESS;
+    return !isNativeSwapToken(sellToken);
   }
 
   /**
@@ -605,26 +740,12 @@ class EnhancedSwapService {
 
   /**
    * 가격 영향 계산 및 경고 레벨
+   * 시세를 몰라 계산하지 못한 견적은 'unknown' (0%로 표시하지 않음)
    */
-  calculatePriceImpact(quote: SwapQuote): {
-    percent: string;
-    level: 'low' | 'medium' | 'high' | 'critical';
-  } {
-    const impact = parseFloat(quote.estimatedPriceImpact || '0') * 100;
-    let level: 'low' | 'medium' | 'high' | 'critical' = 'low';
-
-    if (impact >= 10) {
-      level = 'critical';
-    } else if (impact >= 5) {
-      level = 'high';
-    } else if (impact >= 1) {
-      level = 'medium';
-    }
-
-    return {
-      percent: impact.toFixed(2),
-      level,
-    };
+  calculatePriceImpact(
+    quote: Pick<SwapQuote, 'estimatedPriceImpact'>,
+  ): PriceImpactInfo {
+    return classifyPriceImpact(quote.estimatedPriceImpact);
   }
 
   /**

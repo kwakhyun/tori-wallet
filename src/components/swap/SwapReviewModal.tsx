@@ -1,11 +1,32 @@
 /**
  * 스왑 확인 모달
+ *
+ * PIN 전에 사용자가 확인해야 할 모든 것을 보여 준다.
+ *  - 승인 트랜잭션이 먼저 필요한지 (토큰, 정확한 수량, 승인 대상 AllowanceHolder)
+ *  - 견적 유효 시간(카운트다운)과 새로고침
+ *  - 가격 영향 (계산 불가 시 경고, 10% 이상은 위험 확인 후에만 진행)
+ *  - 예상 가스비 (네트워크 네이티브 단위 + 법정화폐)
  */
 
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { Modal, ActivityIndicator } from 'react-native';
-import styled from 'styled-components/native';
+import styled, { useTheme } from 'styled-components/native';
+import { formatEther } from 'viem';
 import { SwapToken, SwapQuote } from '@/services/enhancedSwapService';
+import { quoteRemainingMs, type PriceImpactInfo } from '@/services/swapService';
+import { useFiat } from '@/hooks/useFiat';
+import { formatDisplayAmount } from '@/utils/format';
+import { Screen } from '@/components/common/Screen';
+import { ScreenHeader } from '@/components/common/ScreenHeader';
+
+export interface ApprovalRequirement {
+  tokenSymbol: string;
+  tokenAddress: string;
+  /** 사람이 읽는 정확한 승인 수량 */
+  amount: string;
+  /** 승인 대상 (0x AllowanceHolder) */
+  spender: string;
+}
 
 interface Props {
   visible: boolean;
@@ -18,10 +39,16 @@ interface Props {
   buyAmount: string;
   quote: SwapQuote | null;
   slippage: number;
-  priceImpact: {
-    percent: string;
-    level: 'low' | 'medium' | 'high' | 'critical';
-  };
+  priceImpact: PriceImpactInfo;
+  /** 스왑 전에 필요한 승인 트랜잭션 (없으면 null) */
+  approval?: ApprovalRequirement | null;
+  /** 가스비 단위 (네트워크 네이티브 심볼) */
+  nativeSymbol?: string;
+  networkName?: string;
+  onRefreshQuote?: () => void;
+  isRefreshing?: boolean;
+  /** 다시 검토가 필요한 이유 등 상단 안내 */
+  notice?: string | null;
 }
 
 export function SwapReviewModal({
@@ -36,14 +63,64 @@ export function SwapReviewModal({
   quote,
   slippage,
   priceImpact,
+  approval = null,
+  nativeSymbol = 'ETH',
+  networkName,
+  onRefreshQuote,
+  isRefreshing = false,
+  notice,
 }: Props): React.JSX.Element {
+  const theme = useTheme();
+  const { formatFiat } = useFiat();
+  const [now, setNow] = useState(() => Date.now());
+  const [acknowledged, setAcknowledged] = useState(false);
+
+  // 새 견적이 오면 위험 확인을 다시 받는다.
+  const quoteKey = quote?.security.quoteFingerprint;
+  useEffect(() => {
+    setAcknowledged(false);
+    setNow(Date.now());
+  }, [quoteKey]);
+
+  useEffect(() => {
+    if (!visible || !quote) return;
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [visible, quote]);
+
   if (!sellToken || !buyToken || !quote) {
     return <></>;
   }
 
+  const remainingSeconds = Math.max(
+    0,
+    Math.ceil(quoteRemainingMs(quote, now) / 1000),
+  );
+  const isExpired = remainingSeconds <= 0;
   const rate = parseFloat(buyAmount) / parseFloat(sellAmount);
-  const isHighImpact =
-    priceImpact.level === 'high' || priceImpact.level === 'critical';
+  const isCritical = priceImpact.level === 'critical';
+  const isHigh = priceImpact.level === 'high';
+  const isUnknownImpact = priceImpact.level === 'unknown';
+  const needsAcknowledgement = isCritical && !acknowledged;
+  const confirmDisabled =
+    isLoading || isRefreshing || isExpired || needsAcknowledgement;
+
+  let gasNative: string | null = null;
+  try {
+    gasNative = formatDisplayAmount(
+      formatEther(BigInt(quote.gas || 0) * BigInt(quote.gasPrice || 0)),
+    );
+  } catch {
+    gasNative = null;
+  }
+  const gasUsd =
+    quote.estimatedGasUsd !== undefined ? Number(quote.estimatedGasUsd) : null;
+
+  const confirmLabel = isCritical
+    ? '그래도 스왑하기'
+    : approval
+    ? '승인 후 스왑하기'
+    : '스왑 확인';
 
   return (
     <Modal
@@ -52,16 +129,79 @@ export function SwapReviewModal({
       presentationStyle="pageSheet"
       onRequestClose={onClose}
     >
-      <Container>
-        <Header>
-          <CloseButton onPress={onClose}>
-            <CloseIcon>✕</CloseIcon>
-          </CloseButton>
-          <HeaderTitle>스왑 확인</HeaderTitle>
-          <HeaderSpacer />
-        </Header>
+      <Screen testID="swap-review-modal">
+        <ScreenHeader
+          title="스왑 확인"
+          subtitle={networkName}
+          leftIcon="close"
+          onBack={onClose}
+          backDisabled={isLoading}
+          backTestID="swap-review-close"
+        />
 
         <Content>
+          {notice ? (
+            <NoticeBox accessibilityRole="alert" testID="swap-review-notice">
+              <NoticeText>{notice}</NoticeText>
+            </NoticeBox>
+          ) : null}
+
+          {/* 견적 유효 시간 */}
+          <QuoteTimerRow $expired={isExpired} testID="swap-quote-timer">
+            <QuoteTimerText
+              $expired={isExpired}
+              accessibilityLiveRegion="polite"
+            >
+              {isExpired
+                ? '견적이 만료되었습니다. 새로고침 후 다시 확인해주세요.'
+                : `견적 유효 시간 ${remainingSeconds}초`}
+            </QuoteTimerText>
+            {onRefreshQuote ? (
+              <RefreshButton
+                onPress={onRefreshQuote}
+                disabled={isRefreshing || isLoading}
+                accessibilityRole="button"
+                accessibilityLabel="견적 새로고침"
+                testID="swap-quote-refresh"
+              >
+                {isRefreshing ? (
+                  <ActivityIndicator
+                    size="small"
+                    color={theme.colors.primary}
+                  />
+                ) : (
+                  <RefreshText>견적 새로고침</RefreshText>
+                )}
+              </RefreshButton>
+            ) : null}
+          </QuoteTimerRow>
+
+          {/* 승인 필요 안내 */}
+          {approval ? (
+            <ApprovalBox testID="swap-review-approval">
+              <ApprovalTitle>먼저 토큰 승인이 필요합니다</ApprovalTitle>
+              <ApprovalText>
+                스왑 전에 {approval.tokenSymbol}을(를) 0x AllowanceHolder가
+                정확히 아래 수량만 사용할 수 있도록 승인하는 트랜잭션을 먼저
+                보냅니다. 승인과 스왑, 두 번의 네트워크 수수료가 발생합니다.
+              </ApprovalText>
+              <DetailRow>
+                <DetailLabel>승인 토큰</DetailLabel>
+                <DetailValue>{approval.tokenSymbol}</DetailValue>
+              </DetailRow>
+              <DetailRow>
+                <DetailLabel>승인 수량</DetailLabel>
+                <DetailValue testID="swap-review-approval-amount">
+                  {approval.amount} {approval.tokenSymbol}
+                </DetailValue>
+              </DetailRow>
+              <AddressDetail>
+                <DetailLabel>승인 대상 (0x AllowanceHolder)</DetailLabel>
+                <AddressValue selectable>{approval.spender}</AddressValue>
+              </AddressDetail>
+            </ApprovalBox>
+          ) : null}
+
           {/* 스왑 토큰 표시 */}
           <TokensContainer>
             <TokenCard>
@@ -70,23 +210,23 @@ export function SwapReviewModal({
                 {sellToken.logoUrl && (
                   <TokenLogo source={{ uri: sellToken.logoUrl }} />
                 )}
-                <TokenAmount>{parseFloat(sellAmount).toFixed(6)}</TokenAmount>
+                <TokenAmount>{formatDisplayAmount(sellAmount)}</TokenAmount>
                 <TokenSymbol>{sellToken.symbol}</TokenSymbol>
               </TokenRow>
             </TokenCard>
 
             <ArrowContainer>
-              <ArrowIcon>↓</ArrowIcon>
+              <ArrowIcon importantForAccessibility="no">↓</ArrowIcon>
             </ArrowContainer>
 
             <TokenCard>
-              <TokenLabel>받는 토큰</TokenLabel>
+              <TokenLabel>받는 토큰 (예상)</TokenLabel>
               <TokenRow>
                 {buyToken.logoUrl && (
                   <TokenLogo source={{ uri: buyToken.logoUrl }} />
                 )}
                 <TokenAmount $highlight>
-                  {parseFloat(buyAmount).toFixed(6)}
+                  {formatDisplayAmount(buyAmount)}
                 </TokenAmount>
                 <TokenSymbol>{buyToken.symbol}</TokenSymbol>
               </TokenRow>
@@ -98,7 +238,9 @@ export function SwapReviewModal({
             <DetailRow>
               <DetailLabel>환율</DetailLabel>
               <DetailValue>
-                1 {sellToken.symbol} = {rate.toFixed(6)} {buyToken.symbol}
+                1 {sellToken.symbol} ={' '}
+                {Number.isFinite(rate) ? formatDisplayAmount(rate) : '—'}{' '}
+                {buyToken.symbol}
               </DetailValue>
             </DetailRow>
 
@@ -108,10 +250,10 @@ export function SwapReviewModal({
               <DetailLabel>최소 수령량</DetailLabel>
               <DetailValue>
                 {quote.minimumReceived
-                  ? `${parseFloat(quote.minimumReceived).toFixed(6)} ${
+                  ? `${formatDisplayAmount(quote.minimumReceived)} ${
                       buyToken.symbol
                     }`
-                  : '-'}
+                  : '—'}
               </DetailValue>
             </DetailRow>
 
@@ -124,26 +266,27 @@ export function SwapReviewModal({
 
             <DetailRow>
               <DetailLabel>가격 영향</DetailLabel>
-              <PriceImpactValue $level={priceImpact.level}>
-                {priceImpact.percent}%
+              <PriceImpactValue
+                $level={priceImpact.level}
+                testID="swap-review-price-impact"
+              >
+                {priceImpact.percent !== null
+                  ? `${priceImpact.percent}%`
+                  : '계산할 수 없음'}
               </PriceImpactValue>
             </DetailRow>
 
             <DetailRow>
               <DetailLabel>예상 가스비</DetailLabel>
-              <DetailValue>
-                {quote.estimatedGasUsd
-                  ? `~$${quote.estimatedGasUsd}`
-                  : '계산 중...'}
+              <DetailValue testID="swap-review-gas">
+                {gasNative !== null ? `${gasNative} ${nativeSymbol}` : '—'}
+                {gasUsd !== null && Number.isFinite(gasUsd)
+                  ? ` (≈ ${formatFiat(gasUsd, { ignoreHidden: true })})`
+                  : ''}
               </DetailValue>
             </DetailRow>
 
             <Divider />
-
-            <AddressDetail>
-              <DetailLabel>토큰 승인 대상</DetailLabel>
-              <AddressValue selectable>{quote.allowanceTarget}</AddressValue>
-            </AddressDetail>
 
             <AddressDetail>
               <DetailLabel>스왑 실행 대상</DetailLabel>
@@ -172,17 +315,40 @@ export function SwapReviewModal({
           </DetailsCard>
 
           {/* 가격 영향 경고 */}
-          {isHighImpact && (
-            <WarningBox $critical={priceImpact.level === 'critical'}>
-              <WarningIcon>
-                {priceImpact.level === 'critical' ? '🚨' : '⚠️'}
+          {(isHigh || isCritical || isUnknownImpact) && (
+            <WarningBox
+              $critical={isCritical}
+              accessibilityRole="alert"
+              testID="swap-review-impact-warning"
+            >
+              <WarningIcon importantForAccessibility="no">
+                {isCritical ? '🚨' : '⚠️'}
               </WarningIcon>
               <WarningText>
-                {priceImpact.level === 'critical'
-                  ? '가격 영향이 매우 높습니다! 이 거래로 인해 큰 손실이 발생할 수 있습니다.'
-                  : '가격 영향이 높습니다. 거래 전 다시 확인해주세요.'}
+                {isCritical
+                  ? `가격 영향이 ${priceImpact.percent}%로 매우 높습니다. 이 거래로 큰 손실이 발생할 수 있습니다.`
+                  : isHigh
+                  ? `가격 영향이 ${priceImpact.percent}%로 높습니다. 수량을 줄이면 손실을 줄일 수 있습니다.`
+                  : '가격 영향을 계산할 수 없습니다. 시세 정보를 가져오지 못했습니다. 받는 수량과 최소 수령량을 직접 확인해주세요.'}
               </WarningText>
             </WarningBox>
+          )}
+
+          {isCritical && (
+            <AckRow
+              onPress={() => setAcknowledged(value => !value)}
+              accessibilityRole="checkbox"
+              accessibilityState={{ checked: acknowledged }}
+              accessibilityLabel="큰 손실 위험을 이해했으며 계속 진행합니다"
+              testID="swap-review-acknowledge"
+            >
+              <AckBox $checked={acknowledged}>
+                {acknowledged ? (
+                  <AckMark importantForAccessibility="no">✓</AckMark>
+                ) : null}
+              </AckBox>
+              <AckText>큰 손실 위험을 이해했으며 계속 진행합니다</AckText>
+            </AckRow>
           )}
         </Content>
 
@@ -190,67 +356,106 @@ export function SwapReviewModal({
         <BottomContainer>
           <ConfirmButton
             onPress={onConfirm}
-            disabled={isLoading}
-            $warning={isHighImpact}
+            disabled={confirmDisabled}
+            $warning={isCritical}
+            accessibilityRole="button"
+            accessibilityState={{ disabled: confirmDisabled }}
+            testID="swap-review-confirm"
           >
             {isLoading ? (
-              <ActivityIndicator color="#fff" />
+              <ActivityIndicator color={theme.colors.onPrimary} />
             ) : (
-              <ConfirmButtonText>
-                {isHighImpact ? '그래도 스왑하기' : '스왑 확인'}
+              <ConfirmButtonText $disabled={confirmDisabled}>
+                {confirmLabel}
               </ConfirmButtonText>
             )}
           </ConfirmButton>
 
-          <CancelButton onPress={onClose} disabled={isLoading}>
+          <CancelButton
+            onPress={onClose}
+            disabled={isLoading}
+            accessibilityRole="button"
+            testID="swap-review-cancel"
+          >
             <CancelButtonText>취소</CancelButtonText>
           </CancelButton>
         </BottomContainer>
-      </Container>
+      </Screen>
     </Modal>
   );
 }
 
 // Styled Components
-const Container = styled.View`
-  flex: 1;
-  background-color: ${({ theme }) => theme.colors.background};
-`;
-
-const Header = styled.View`
-  flex-direction: row;
-  align-items: center;
-  justify-content: space-between;
-  padding: ${({ theme }) => theme.spacing.md}px;
-  border-bottom-width: 1px;
-  border-bottom-color: ${({ theme }) => theme.colors.border};
-`;
-
-const CloseButton = styled.TouchableOpacity`
-  width: 40px;
-  height: 40px;
-  align-items: center;
-  justify-content: center;
-`;
-
-const CloseIcon = styled.Text`
-  font-size: 20px;
-  color: ${({ theme }) => theme.colors.textSecondary};
-`;
-
-const HeaderTitle = styled.Text`
-  font-size: 18px;
-  font-weight: 600;
-  color: ${({ theme }) => theme.colors.textPrimary};
-`;
-
-const HeaderSpacer = styled.View`
-  width: 40px;
-`;
-
 const Content = styled.ScrollView`
   flex: 1;
   padding: ${({ theme }) => theme.spacing.md}px;
+`;
+
+const NoticeBox = styled.View`
+  background-color: ${({ theme }) => theme.colors.primarySubtle};
+  border: 1px solid ${({ theme }) => theme.colors.primary};
+  border-radius: ${({ theme }) => theme.borderRadius.md}px;
+  padding: ${({ theme }) => theme.spacing.md}px;
+  margin-bottom: ${({ theme }) => theme.spacing.md}px;
+`;
+
+const NoticeText = styled.Text`
+  color: ${({ theme }) => theme.colors.textPrimary};
+  font-size: 14px;
+  line-height: 20px;
+`;
+
+const QuoteTimerRow = styled.View<{ $expired: boolean }>`
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  background-color: ${({ theme, $expired }) =>
+    $expired ? theme.colors.errorSubtle : theme.colors.surface};
+  border-radius: ${({ theme }) => theme.borderRadius.md}px;
+  padding: ${({ theme }) => theme.spacing.xs}px
+    ${({ theme }) => theme.spacing.md}px;
+  margin-bottom: ${({ theme }) => theme.spacing.md}px;
+`;
+
+const QuoteTimerText = styled.Text<{ $expired: boolean }>`
+  flex: 1;
+  font-size: 13px;
+  color: ${({ theme, $expired }) =>
+    $expired ? theme.colors.textPrimary : theme.colors.textSecondary};
+`;
+
+const RefreshButton = styled.TouchableOpacity`
+  min-height: 44px;
+  justify-content: center;
+  padding-left: ${({ theme }) => theme.spacing.sm}px;
+`;
+
+const RefreshText = styled.Text`
+  font-size: 14px;
+  font-weight: 600;
+  color: ${({ theme }) => theme.colors.primary};
+`;
+
+const ApprovalBox = styled.View`
+  background-color: ${({ theme }) => theme.colors.warningSubtle};
+  border: 1px solid ${({ theme }) => theme.colors.warning};
+  border-radius: ${({ theme }) => theme.borderRadius.md}px;
+  padding: ${({ theme }) => theme.spacing.md}px;
+  margin-bottom: ${({ theme }) => theme.spacing.md}px;
+`;
+
+const ApprovalTitle = styled.Text`
+  font-size: 15px;
+  font-weight: 700;
+  color: ${({ theme }) => theme.colors.textPrimary};
+  margin-bottom: ${({ theme }) => theme.spacing.xs}px;
+`;
+
+const ApprovalText = styled.Text`
+  font-size: 13px;
+  line-height: 19px;
+  color: ${({ theme }) => theme.colors.textPrimary};
+  margin-bottom: ${({ theme }) => theme.spacing.sm}px;
 `;
 
 const TokensContainer = styled.View`
@@ -336,23 +541,26 @@ const DetailLabel = styled.Text`
 `;
 
 const DetailValue = styled.Text`
+  flex-shrink: 1;
+  text-align: right;
+  margin-left: ${({ theme }) => theme.spacing.sm}px;
   font-size: 14px;
   color: ${({ theme }) => theme.colors.textPrimary};
   font-weight: 500;
 `;
 
 const PriceImpactValue = styled.Text<{
-  $level: 'low' | 'medium' | 'high' | 'critical';
+  $level: PriceImpactInfo['level'];
 }>`
   font-size: 14px;
   font-weight: 600;
   color: ${({ theme, $level }) => {
     switch ($level) {
       case 'critical':
-        return theme.colors.error;
       case 'high':
-        return '#FF6B6B';
+        return theme.colors.error;
       case 'medium':
+      case 'unknown':
         return theme.colors.warning;
       default:
         return theme.colors.success;
@@ -390,16 +598,18 @@ const RouteName = styled.Text`
 
 const RouteProportion = styled.Text`
   font-size: 12px;
-  color: ${({ theme }) => theme.colors.primary};
+  color: ${({ theme }) => theme.colors.textPrimary};
   font-weight: 600;
 `;
 
 const WarningBox = styled.View<{ $critical?: boolean }>`
   flex-direction: row;
   align-items: flex-start;
-  background-color: ${({ $critical }) =>
-    $critical ? 'rgba(255, 77, 79, 0.15)' : 'rgba(255, 193, 7, 0.15)'};
-  border: 1px solid ${({ $critical }) => ($critical ? '#FF4D4F' : '#FFC107')};
+  background-color: ${({ theme, $critical }) =>
+    $critical ? theme.colors.errorSubtle : theme.colors.warningSubtle};
+  border: 1px solid
+    ${({ theme, $critical }) =>
+      $critical ? theme.colors.error : theme.colors.warning};
   border-radius: ${({ theme }) => theme.borderRadius.md}px;
   padding: ${({ theme }) => theme.spacing.md}px;
   margin-top: ${({ theme }) => theme.spacing.md}px;
@@ -417,6 +627,40 @@ const WarningText = styled.Text`
   line-height: 20px;
 `;
 
+const AckRow = styled.TouchableOpacity`
+  flex-direction: row;
+  align-items: center;
+  min-height: 44px;
+  margin-top: ${({ theme }) => theme.spacing.sm}px;
+  margin-bottom: ${({ theme }) => theme.spacing.lg}px;
+`;
+
+const AckBox = styled.View<{ $checked: boolean }>`
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  border-width: 2px;
+  border-color: ${({ theme, $checked }) =>
+    $checked ? theme.colors.error : theme.colors.border};
+  background-color: ${({ theme, $checked }) =>
+    $checked ? theme.colors.error : 'transparent'};
+  align-items: center;
+  justify-content: center;
+  margin-right: ${({ theme }) => theme.spacing.sm}px;
+`;
+
+const AckMark = styled.Text`
+  color: ${({ theme }) => theme.colors.onError};
+  font-size: 14px;
+  font-weight: 700;
+`;
+
+const AckText = styled.Text`
+  flex: 1;
+  font-size: 14px;
+  color: ${({ theme }) => theme.colors.textPrimary};
+`;
+
 const BottomContainer = styled.View`
   padding: ${({ theme }) => theme.spacing.md}px;
   border-top-width: 1px;
@@ -429,24 +673,28 @@ const ConfirmButton = styled.TouchableOpacity<{
 }>`
   background-color: ${({ theme, disabled, $warning }) =>
     disabled
-      ? theme.colors.border
+      ? theme.colors.disabledBackground
       : $warning
-      ? '#FF6B6B'
+      ? theme.colors.error
       : theme.colors.primary};
+  min-height: 48px;
+  justify-content: center;
   padding: ${({ theme }) => theme.spacing.md}px;
   border-radius: ${({ theme }) => theme.borderRadius.md}px;
   align-items: center;
   margin-bottom: ${({ theme }) => theme.spacing.sm}px;
 `;
 
-const ConfirmButtonText = styled.Text`
-  color: #fff;
+const ConfirmButtonText = styled.Text<{ $disabled?: boolean }>`
+  color: ${({ theme, $disabled }) =>
+    $disabled ? theme.colors.disabledText : theme.colors.onPrimary};
   font-size: 16px;
   font-weight: 600;
 `;
 
 const CancelButton = styled.TouchableOpacity<{ disabled?: boolean }>`
-  padding: ${({ theme }) => theme.spacing.md}px;
+  min-height: 44px;
+  justify-content: center;
   align-items: center;
   opacity: ${({ disabled }) => (disabled ? 0.5 : 1)};
 `;
