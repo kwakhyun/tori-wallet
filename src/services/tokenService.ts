@@ -35,7 +35,7 @@ interface TokenConfig {
 }
 
 // 체인별 기본 토큰 설정
-const DEFAULT_TOKENS: Record<number, TokenConfig[]> = {
+export const DEFAULT_TOKENS: Record<number, TokenConfig[]> = {
   // Ethereum 메인넷
   1: [
     {

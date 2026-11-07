@@ -24,6 +24,7 @@ import RootNavigator from '@/navigation/RootNavigator';
 import { useThemeStore } from '@/store/themeStore';
 import ErrorBoundary from '@/components/common/ErrorBoundary';
 import { ToastHost } from '@/components/common/ToastHost';
+import { TransactionNotifier } from '@/components/transactions/TransactionNotifier';
 import { OfflineBanner } from '@/components/common/OfflineBanner';
 import { useAppState } from '@/hooks/useAppState';
 import {
@@ -96,6 +97,7 @@ function ThemedApp(): React.JSX.Element {
             </ErrorBoundary>
             <OfflineBanner />
             <ToastHost />
+            <TransactionNotifier />
           </AppStateManager>
         </NavigationContainer>
       </SafeAreaProvider>
