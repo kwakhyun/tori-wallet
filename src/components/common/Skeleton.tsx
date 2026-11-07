@@ -79,6 +79,9 @@ export function Skeleton({
   return (
     <View
       testID={testID}
+      // 장식용 도형은 화면 낭독기에서 숨기고, 묶음 스켈레톤이 "불러오는 중"을 알린다.
+      importantForAccessibility="no-hide-descendants"
+      accessibilityElementsHidden
       style={{
         overflow: 'hidden',
         backgroundColor: containerColor,
@@ -153,9 +156,13 @@ const SkeletonTextContainer = styled.View`
 /**
  * 홈 화면 잔액 스켈레톤
  */
-export function BalanceSkeleton() {
+export function BalanceSkeleton({ testID }: { testID?: string } = {}) {
   return (
-    <BalanceSkeletonContainer>
+    <BalanceSkeletonContainer
+      testID={testID}
+      accessible
+      accessibilityLabel="잔액 불러오는 중"
+    >
       <Skeleton width={180} height={36} borderRadius={8} />
       <Skeleton width={100} height={18} borderRadius={6} marginTop={8} />
     </BalanceSkeletonContainer>
@@ -170,9 +177,13 @@ const BalanceSkeletonContainer = styled.View`
 /**
  * 토큰 아이템 스켈레톤
  */
-export function TokenItemSkeleton() {
+export function TokenItemSkeleton({ testID }: { testID?: string } = {}) {
   return (
-    <TokenSkeletonContainer>
+    <TokenSkeletonContainer
+      testID={testID}
+      accessible
+      accessibilityLabel="토큰 불러오는 중"
+    >
       <SkeletonCircle size={44} />
       <TokenSkeletonInfo>
         <Skeleton width={80} height={16} borderRadius={6} />
@@ -235,7 +246,11 @@ const ActionSkeletonItem = styled.View`
  */
 export function HomeScreenSkeleton() {
   return (
-    <HomeSkeletonContainer testID="home-skeleton">
+    <HomeSkeletonContainer
+      testID="home-skeleton"
+      accessible
+      accessibilityLabel="불러오는 중"
+    >
       {/* Network Badge */}
       <NetworkSkeletonBadge>
         <SkeletonCircle size={8} />
@@ -296,7 +311,11 @@ const WalletCardSkeleton = styled.View`
  */
 export function PortfolioScreenSkeleton() {
   return (
-    <PortfolioSkeletonContainer>
+    <PortfolioSkeletonContainer
+      testID="portfolio-skeleton"
+      accessible
+      accessibilityLabel="불러오는 중"
+    >
       {/* Total Value Card */}
       <TotalValueCardSkeleton>
         <Skeleton width={80} height={14} borderRadius={6} alignSelf="center" />
@@ -375,7 +394,11 @@ const TransactionSkeletonRow = styled.View`
  */
 export function ActivityScreenSkeleton() {
   return (
-    <ActivitySkeletonContainer>
+    <ActivitySkeletonContainer
+      testID="activity-skeleton"
+      accessible
+      accessibilityLabel="불러오는 중"
+    >
       <TransactionItemSkeleton />
       <TransactionItemSkeleton />
       <TransactionItemSkeleton />

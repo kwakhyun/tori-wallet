@@ -1,9 +1,12 @@
 /**
- * 포트폴리오 가치 추이 라인 차트
+ * 가치/가격 추이 라인 차트
+ *
+ * 색상은 모두 테마 토큰을 사용해 라이트/다크 모드 모두에서 읽힌다.
+ * Y축 라벨은 표시 통화(useFiat) 압축 표기로, 서로 구분될 때까지 소수 자릿수를 늘린다.
  */
 
-import React from 'react';
-import styled from 'styled-components/native';
+import React, { useId, useMemo } from 'react';
+import styled, { useTheme } from 'styled-components/native';
 import Svg, {
   Path,
   Line,
@@ -11,9 +14,9 @@ import Svg, {
   Defs,
   LinearGradient,
   Stop,
-  Rect,
   Circle,
 } from 'react-native-svg';
+import { useFiat } from '@/hooks/useFiat';
 
 interface Props {
   labels: string[];
@@ -21,8 +24,18 @@ interface Props {
   width?: number;
   height?: number;
   showLabels?: boolean;
+  /** 기간 수익률 행 표시 여부 */
+  showChange?: boolean;
   color?: string;
   gradientColor?: string;
+  /** Y축/요약 라벨 포맷 (기본: 표시 통화 압축 표기) */
+  formatValue?: (value: number, fractionDigits: number) => string;
+  /** 화면 낭독기 요약 앞에 붙는 제목 (예: "포트폴리오 추이") */
+  title?: string;
+  accessibilityLabel?: string;
+  emptyTitle?: string;
+  emptyMessage?: string;
+  testID?: string;
 }
 
 // 안전한 숫자 검증 함수
@@ -33,15 +46,53 @@ const safeNumber = (value: number, fallback: number = 0): number => {
   return value;
 };
 
+/** 라벨이 서로 구분될 때까지 소수 자릿수를 늘린다 (예: "$0 $0 $1" 방지) */
+export function formatDistinctLabels(
+  values: number[],
+  format: (value: number, fractionDigits: number) => string,
+  maxDigits = 6,
+): string[] {
+  let labels = values.map(v => format(v, 0));
+  for (let digits = 1; digits <= maxDigits; digits++) {
+    if (new Set(labels).size === labels.length) break;
+    labels = values.map(v => format(v, digits));
+  }
+  return labels;
+}
+
 export function LineChart({
   labels,
   values,
   width = 320,
   height = 180,
   showLabels = true,
-  color = '#6366F1',
-  gradientColor = '#6366F1',
+  showChange = true,
+  color,
+  gradientColor,
+  formatValue,
+  title = '추이',
+  accessibilityLabel,
+  emptyTitle = '아직 기록이 없어요',
+  emptyMessage = '포트폴리오 탭을 열 때마다 하루 한 번 기록됩니다.',
+  testID = 'line-chart',
 }: Props) {
+  const theme = useTheme();
+  const { formatFiat } = useFiat();
+  const gradientId = `lc${useId().replace(/[^a-zA-Z0-9]/g, '')}`;
+
+  const lineColor = color ?? theme.colors.primary;
+  const fillColor = gradientColor ?? lineColor;
+  const gridColor = theme.colors.chartGrid;
+  const labelColor = theme.colors.chartLabel;
+
+  const format = useMemo(
+    () =>
+      formatValue ??
+      ((value: number, digits: number) =>
+        formatFiat(value, { compact: true, maximumFractionDigits: digits })),
+    [formatValue, formatFiat],
+  );
+
   // 안전한 크기 값 보장
   const safeWidth = safeNumber(width, 320);
   const safeHeight = safeNumber(height, 180);
@@ -50,28 +101,31 @@ export function LineChart({
     top: 20,
     right: 10,
     bottom: showLabels ? 30 : 10,
-    left: 50,
+    left: 56,
   };
   const chartWidth = Math.max(safeWidth - padding.left - padding.right, 1);
   const chartHeight = Math.max(safeHeight - padding.top - padding.bottom, 1);
 
-  // 빈 데이터 처리 - 개선된 Empty State
-  if (!values || values.length === 0) {
+  const validValues = (values || []).filter(v => Number.isFinite(v));
+  const containerHeight = safeHeight + (showChange ? 40 : 0);
+
+  // 빈 데이터 처리
+  if (validValues.length === 0) {
     return (
-      <Container style={{ width: safeWidth, height: safeHeight + 40 }}>
-        <ChangeRow>
-          <ChangeLabel>기간 수익률</ChangeLabel>
-          <ChangeValue $positive={true}>--</ChangeValue>
-        </ChangeRow>
+      <Container
+        style={{ width: safeWidth, height: containerHeight }}
+        testID={`${testID}-empty`}
+        accessible
+        accessibilityLabel={`${title}, ${emptyTitle}. ${emptyMessage}`}
+      >
+        {showChange && (
+          <ChangeRow>
+            <ChangeLabel>기간 수익률</ChangeLabel>
+            <ChangeValue $color={theme.colors.textSecondary}>—</ChangeValue>
+          </ChangeRow>
+        )}
         <EmptyStateContainer style={{ height: safeHeight }}>
           <Svg width={safeWidth} height={safeHeight}>
-            <Defs>
-              <LinearGradient id="emptyGradient" x1="0" y1="0" x2="0" y2="1">
-                <Stop offset="0%" stopColor="#3A3A4C" stopOpacity="0.3" />
-                <Stop offset="100%" stopColor="#3A3A4C" stopOpacity="0.05" />
-              </LinearGradient>
-            </Defs>
-            {/* 배경 그리드 라인 */}
             {[0.25, 0.5, 0.75].map((ratio, index) => (
               <Line
                 key={index}
@@ -79,72 +133,46 @@ export function LineChart({
                 y1={padding.top + chartHeight * ratio}
                 x2={safeWidth - padding.right}
                 y2={padding.top + chartHeight * ratio}
-                stroke="#333"
+                stroke={gridColor}
                 strokeWidth={1}
                 strokeDasharray="4,4"
               />
             ))}
-            {/* 플레이스홀더 웨이브 라인 */}
-            <Path
-              d={`M ${padding.left} ${padding.top + chartHeight * 0.6}
-                  Q ${padding.left + chartWidth * 0.25} ${
-                padding.top + chartHeight * 0.4
-              },
-                    ${padding.left + chartWidth * 0.5} ${
-                padding.top + chartHeight * 0.5
-              }
-                  T ${padding.left + chartWidth} ${
-                padding.top + chartHeight * 0.45
-              }`}
-              stroke="#3A3A4C"
-              strokeWidth={2}
-              strokeDasharray="8,8"
-              fill="none"
-            />
           </Svg>
           <EmptyOverlay>
-            <EmptyIcon>📊</EmptyIcon>
-            <EmptyTitle>아직 데이터가 없어요</EmptyTitle>
-            <EmptyDescription>
-              거래 기록이 쌓이면 포트폴리오 추이를{'\n'}확인할 수 있어요
-            </EmptyDescription>
+            <EmptyTitle>{emptyTitle}</EmptyTitle>
+            {emptyMessage ? (
+              <EmptyDescription>{emptyMessage}</EmptyDescription>
+            ) : null}
           </EmptyOverlay>
         </EmptyStateContainer>
       </Container>
     );
   }
 
-  // 유효한 숫자값만 필터링
-  const validValues = values.map(v => safeNumber(v, 0));
-
-  // 데이터가 1개일 때 처리 - 개선된 UI
+  // 데이터가 1개일 때
   if (validValues.length === 1) {
-    const singleValue = safeNumber(validValues[0], 0);
+    const singleValue = validValues[0];
+    const singleLabel = format(singleValue, 2);
     return (
-      <Container style={{ width: safeWidth, height: safeHeight + 40 }}>
-        <ChangeRow>
-          <ChangeLabel>기간 수익률</ChangeLabel>
-          <ChangeValue $positive={true}>0.00%</ChangeValue>
-        </ChangeRow>
+      <Container
+        style={{ width: safeWidth, height: containerHeight }}
+        testID={`${testID}-single`}
+        accessible
+        accessibilityRole="image"
+        accessibilityLabel={
+          accessibilityLabel ??
+          `${title}, 기록 1개, ${singleLabel}. 내일부터 추이가 표시됩니다.`
+        }
+      >
+        {showChange && (
+          <ChangeRow>
+            <ChangeLabel>기간 수익률</ChangeLabel>
+            <ChangeValue $color={theme.colors.textSecondary}>—</ChangeValue>
+          </ChangeRow>
+        )}
         <EmptyStateContainer style={{ height: safeHeight }}>
           <Svg width={safeWidth} height={safeHeight}>
-            <Defs>
-              <LinearGradient
-                id="singlePointGradient"
-                x1="0"
-                y1="0"
-                x2="0"
-                y2="1"
-              >
-                <Stop offset="0%" stopColor={gradientColor} stopOpacity="0.2" />
-                <Stop
-                  offset="100%"
-                  stopColor={gradientColor}
-                  stopOpacity="0.05"
-                />
-              </LinearGradient>
-            </Defs>
-            {/* 배경 그리드 */}
             {[0.25, 0.5, 0.75].map((ratio, index) => (
               <Line
                 key={index}
@@ -152,46 +180,35 @@ export function LineChart({
                 y1={padding.top + chartHeight * ratio}
                 x2={safeWidth - padding.right}
                 y2={padding.top + chartHeight * ratio}
-                stroke="#333"
+                stroke={gridColor}
                 strokeWidth={1}
                 strokeDasharray="4,4"
               />
             ))}
-            {/* 단일 포인트 - 중앙에 큰 원 */}
-            <Circle
-              cx={padding.left + chartWidth / 2}
-              cy={padding.top + chartHeight / 2}
-              r={20}
-              fill="url(#singlePointGradient)"
-            />
             <Circle
               cx={padding.left + chartWidth / 2}
               cy={padding.top + chartHeight / 2}
               r={6}
-              fill={color}
+              fill={lineColor}
             />
-            {/* 가격 표시 */}
             <SvgText
               x={padding.left + chartWidth / 2}
-              y={padding.top + chartHeight / 2 + 40}
+              y={padding.top + chartHeight / 2 + 28}
               fontSize={14}
               fontWeight="bold"
-              fill="#FFF"
+              fill={theme.colors.textPrimary}
               textAnchor="middle"
             >
-              $
-              {singleValue.toLocaleString('en-US', {
-                maximumFractionDigits: 0,
-              })}
+              {singleLabel}
             </SvgText>
             <SvgText
               x={padding.left + chartWidth / 2}
-              y={padding.top + chartHeight / 2 + 56}
+              y={padding.top + chartHeight / 2 + 44}
               fontSize={10}
-              fill="#888"
+              fill={labelColor}
               textAnchor="middle"
             >
-              현재 자산
+              {labels[0] ?? ''}
             </SvgText>
           </Svg>
         </EmptyStateContainer>
@@ -199,104 +216,112 @@ export function LineChart({
     );
   }
 
-  // 최소/최대값 계산 (안전하게)
+  // 최소/최대값 계산 (값 범위의 5% 여백)
   const rawMin = Math.min(...validValues);
   const rawMax = Math.max(...validValues);
-  const minValue = safeNumber(rawMin * 0.95, 0);
-  const maxValue = safeNumber(rawMax * 1.05, 100);
-  const valueRange = Math.max(maxValue - minValue, 0.01); // 0으로 나누기 방지
+  const spread = rawMax - rawMin;
+  const margin = spread > 0 ? spread * 0.1 : Math.abs(rawMax) * 0.05 || 1;
+  const minValue = Math.max(rawMin - margin, rawMin >= 0 ? 0 : -Infinity);
+  const maxValue = rawMax + margin;
+  const valueRange = Math.max(maxValue - minValue, Number.EPSILON);
 
-  // 좌표 계산 (안전하게)
   const getX = (index: number): number => {
     const divisor = Math.max(validValues.length - 1, 1);
-    const x = padding.left + (index / divisor) * chartWidth;
-    return safeNumber(x, padding.left);
+    return safeNumber(
+      padding.left + (index / divisor) * chartWidth,
+      padding.left,
+    );
   };
 
   const getY = (value: number): number => {
-    const safeValue = safeNumber(value, minValue);
     const y =
       padding.top +
       chartHeight -
-      ((safeValue - minValue) / valueRange) * chartHeight;
+      ((safeNumber(value, minValue) - minValue) / valueRange) * chartHeight;
     return safeNumber(y, padding.top + chartHeight / 2);
   };
 
-  // 라인 경로 생성 (유효한 좌표만)
   const linePath = validValues
-    .map((value, index) => {
-      const x = getX(index);
-      const y = getY(value);
-      // 유효하지 않은 좌표는 스킵
-      if (!Number.isFinite(x) || !Number.isFinite(y)) {
-        return null;
-      }
-      return `${index === 0 ? 'M' : 'L'} ${x.toFixed(2)} ${y.toFixed(2)}`;
-    })
-    .filter(Boolean)
+    .map(
+      (value, index) =>
+        `${index === 0 ? 'M' : 'L'} ${getX(index).toFixed(2)} ${getY(
+          value,
+        ).toFixed(2)}`,
+    )
     .join(' ');
 
-  // 경로가 비어있으면 빈 차트 표시
-  if (!linePath || linePath.trim() === '') {
-    return (
-      <Container style={{ width: safeWidth, height: safeHeight }}>
-        <EmptyText>차트를 그릴 수 없습니다</EmptyText>
-      </Container>
-    );
-  }
-
-  // 그라데이션 영역 경로
-  const lastX = getX(validValues.length - 1);
-  const firstX = getX(0);
   const bottomY = padding.top + chartHeight;
-  const areaPath = `
-    ${linePath}
-    L ${safeNumber(lastX, padding.left).toFixed(2)} ${bottomY.toFixed(2)}
-    L ${safeNumber(firstX, padding.left).toFixed(2)} ${bottomY.toFixed(2)}
-    Z
-  `;
+  const areaPath = `${linePath} L ${getX(validValues.length - 1).toFixed(
+    2,
+  )} ${bottomY.toFixed(2)} L ${getX(0).toFixed(2)} ${bottomY.toFixed(2)} Z`;
 
-  // Y축 라벨 생성 (3개)
-  const yLabels = [minValue, (minValue + maxValue) / 2, maxValue].map(v =>
-    safeNumber(v, 0),
-  );
+  // Y축 라벨 (최저/중간/최고)
+  const yValues = [minValue, (minValue + maxValue) / 2, maxValue];
+  const yLabels = formatDistinctLabels(yValues, format);
 
   // 변화율 계산
-  const firstValue = safeNumber(validValues[0], 0);
-  const lastValue = safeNumber(validValues[validValues.length - 1], 0);
+  const firstValue = validValues[0];
+  const lastValue = validValues[validValues.length - 1];
   const changePercent =
-    firstValue > 0
-      ? safeNumber(((lastValue - firstValue) / firstValue) * 100, 0)
-      : 0;
-  const isPositive = changePercent >= 0;
+    firstValue > 0 ? ((lastValue - firstValue) / firstValue) * 100 : null;
+  const changeColor =
+    changePercent === null
+      ? theme.colors.textSecondary
+      : changePercent >= 0
+      ? theme.colors.success
+      : theme.colors.error;
 
-  // 마지막 포인트 좌표
-  const lastPointX = safeNumber(getX(validValues.length - 1), padding.left);
-  const lastPointY = safeNumber(getY(lastValue), padding.top + chartHeight / 2);
+  const lastPointX = getX(validValues.length - 1);
+  const lastPointY = getY(lastValue);
+
+  const [minLabel, maxLabel] = formatDistinctLabels([rawMin, rawMax], format);
+  const summary =
+    accessibilityLabel ??
+    `${title}, ${labels[0] ?? ''}부터 ${
+      labels[labels.length - 1] ?? ''
+    }까지, 최저 ${minLabel}, 최고 ${maxLabel}, 현재 ${format(lastValue, 2)}${
+      changePercent !== null
+        ? `, 기간 수익률 ${
+            changePercent >= 0 ? '+' : ''
+          }${changePercent.toFixed(2)}%`
+        : ''
+    }`;
+
+  // X축 라벨 인덱스 (처음/가운데/끝, 중복 제거)
+  const xLabelIndexes = [
+    ...new Set([0, Math.floor((labels.length - 1) / 2), labels.length - 1]),
+  ].filter(i => i >= 0 && i < validValues.length);
 
   return (
-    <Container style={{ width: safeWidth, height: safeHeight + 40 }}>
-      {/* 변화율 표시 */}
-      <ChangeRow>
-        <ChangeLabel>기간 수익률</ChangeLabel>
-        <ChangeValue $positive={isPositive}>
-          {isPositive ? '+' : ''}
-          {changePercent.toFixed(2)}%
-        </ChangeValue>
-      </ChangeRow>
+    <Container
+      style={{ width: safeWidth, height: containerHeight }}
+      testID={testID}
+      accessible
+      accessibilityRole="image"
+      accessibilityLabel={summary}
+    >
+      {showChange && (
+        <ChangeRow>
+          <ChangeLabel>기간 수익률</ChangeLabel>
+          <ChangeValue $color={changeColor}>
+            {changePercent === null
+              ? '—'
+              : `${changePercent >= 0 ? '+' : ''}${changePercent.toFixed(2)}%`}
+          </ChangeValue>
+        </ChangeRow>
+      )}
 
       <Svg width={safeWidth} height={safeHeight}>
         <Defs>
-          <LinearGradient id="areaGradient" x1="0" y1="0" x2="0" y2="1">
-            <Stop offset="0%" stopColor={gradientColor} stopOpacity="0.3" />
-            <Stop offset="100%" stopColor={gradientColor} stopOpacity="0.05" />
+          <LinearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
+            <Stop offset="0%" stopColor={fillColor} stopOpacity="0.3" />
+            <Stop offset="100%" stopColor={fillColor} stopOpacity="0.05" />
           </LinearGradient>
         </Defs>
 
-        {/* 배경 그리드 */}
-        {yLabels.map((value, index) => {
+        {/* 배경 그리드 + Y축 라벨 */}
+        {yValues.map((value, index) => {
           const y = getY(value);
-          if (!Number.isFinite(y)) return null;
           return (
             <React.Fragment key={index}>
               <Line
@@ -304,75 +329,58 @@ export function LineChart({
                 y1={y}
                 x2={safeWidth - padding.right}
                 y2={y}
-                stroke="#333"
+                stroke={gridColor}
                 strokeWidth={1}
                 strokeDasharray="4,4"
               />
               <SvgText
-                x={padding.left - 5}
+                x={padding.left - 6}
                 y={y + 4}
                 fontSize={10}
-                fill="#888"
+                fill={labelColor}
                 textAnchor="end"
               >
-                ${safeNumber(value, 0).toFixed(0)}
+                {yLabels[index]}
               </SvgText>
             </React.Fragment>
           );
         })}
 
-        {/* 그라데이션 영역 */}
-        <Path d={areaPath} fill="url(#areaGradient)" />
+        <Path d={areaPath} fill={`url(#${gradientId})`} />
 
-        {/* 라인 */}
         <Path
           d={linePath}
-          stroke={color}
+          stroke={lineColor}
           strokeWidth={2.5}
           fill="none"
           strokeLinecap="round"
           strokeLinejoin="round"
         />
 
-        {/* X축 라벨 */}
-        {showLabels && labels.length > 0 && (
-          <>
-            {[0, Math.floor(labels.length / 2), labels.length - 1]
-              .filter(
-                (i, _, arr) =>
-                  arr.indexOf(i) === arr.lastIndexOf(i) ||
-                  i === 0 ||
-                  i === labels.length - 1,
-              )
-              .map(labelIndex => {
-                if (!labels[labelIndex]) return null;
-                const x = getX(labelIndex);
-                if (!Number.isFinite(x)) return null;
-                return (
-                  <SvgText
-                    key={labelIndex}
-                    x={x}
-                    y={safeHeight - 5}
-                    fontSize={10}
-                    fill="#888"
-                    textAnchor="middle"
-                  >
-                    {labels[labelIndex]}
-                  </SvgText>
-                );
-              })}
-          </>
-        )}
+        {showLabels &&
+          labels.length > 0 &&
+          xLabelIndexes.map(labelIndex =>
+            labels[labelIndex] ? (
+              <SvgText
+                key={labelIndex}
+                x={getX(labelIndex)}
+                y={safeHeight - 5}
+                fontSize={10}
+                fill={labelColor}
+                textAnchor={
+                  labelIndex === 0
+                    ? 'start'
+                    : labelIndex === validValues.length - 1
+                    ? 'end'
+                    : 'middle'
+                }
+              >
+                {labels[labelIndex]}
+              </SvgText>
+            ) : null,
+          )}
 
-        {/* 마지막 포인트 강조 */}
-        <Rect
-          x={lastPointX - 4}
-          y={lastPointY - 4}
-          width={8}
-          height={8}
-          rx={4}
-          fill={color}
-        />
+        <Circle cx={lastPointX} cy={lastPointY} r={4} fill={lineColor} />
       </Svg>
     </Container>
   );
@@ -383,7 +391,6 @@ const Container = styled.View`
 `;
 
 const EmptyStateContainer = styled.View`
-  flex: 1;
   justify-content: center;
   align-items: center;
   position: relative;
@@ -400,29 +407,19 @@ const EmptyOverlay = styled.View`
   padding: 0 20px;
 `;
 
-const EmptyIcon = styled.Text`
-  font-size: 48px;
-  margin-bottom: 12px;
-`;
-
 const EmptyTitle = styled.Text`
   color: ${({ theme }) => theme.colors.textPrimary};
-  font-size: 18px;
+  font-size: 16px;
   font-weight: 600;
-  margin-bottom: 8px;
+  margin-bottom: 6px;
+  text-align: center;
 `;
 
 const EmptyDescription = styled.Text`
   color: ${({ theme }) => theme.colors.textSecondary};
-  font-size: 14px;
+  font-size: 13px;
+  line-height: 19px;
   text-align: center;
-`;
-
-const EmptyText = styled.Text`
-  color: ${({ theme }) => theme.colors.textSecondary};
-  font-size: 14px;
-  text-align: center;
-  margin-top: 60px;
 `;
 
 const ChangeRow = styled.View`
@@ -439,8 +436,8 @@ const ChangeLabel = styled.Text`
   font-size: 12px;
 `;
 
-const ChangeValue = styled.Text<{ $positive: boolean }>`
-  color: ${({ $positive }) => ($positive ? '#22C55E' : '#EF4444')};
+const ChangeValue = styled.Text<{ $color: string }>`
+  color: ${({ $color }) => $color};
   font-size: 14px;
   font-weight: 600;
 `;
