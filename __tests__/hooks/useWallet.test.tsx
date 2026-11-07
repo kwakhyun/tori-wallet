@@ -3,7 +3,11 @@
  */
 
 import { renderHook, act } from '@testing-library/react-native';
-import { useWallet } from '../../src/hooks/useWallet';
+import {
+  useWallet,
+  accountIndexOf,
+  nextAccountIndex,
+} from '../../src/hooks/useWallet';
 
 // Store 모킹
 const mockAddWallet = jest.fn();
@@ -11,6 +15,7 @@ const mockSetActiveWallet = jest.fn();
 const mockLock = jest.fn();
 const mockUnlock = jest.fn();
 const mockReset = jest.fn();
+const mockRenameWallet = jest.fn();
 
 jest.mock('../../src/store/walletStore', () => ({
   useWalletStore: () => ({
@@ -28,6 +33,7 @@ jest.mock('../../src/store/walletStore', () => ({
     activeNetworkChainId: 1,
     addWallet: mockAddWallet,
     setActiveWallet: mockSetActiveWallet,
+    renameWallet: mockRenameWallet,
     lock: mockLock,
     unlock: mockUnlock,
     reset: mockReset,
@@ -307,9 +313,7 @@ describe('useWallet', () => {
         expect(address).toBeDefined();
       });
 
-      expect(mockDeriveAccountAtPath).toHaveBeenCalledWith(
-        "m/44'/60'/0'/0/1",
-      );
+      expect(mockDeriveAccountAtPath).toHaveBeenCalledWith("m/44'/60'/0'/0/1");
       expect(mockStoreAccounts).toHaveBeenCalled();
       expect(mockAddWallet).toHaveBeenCalled();
     });
@@ -330,6 +334,112 @@ describe('useWallet', () => {
       }
 
       expect(mockDeriveAccountAtPath).toHaveBeenCalled();
+    });
+
+    it('derives the next index after the highest stored account', async () => {
+      mockRetrieveAccounts.mockResolvedValueOnce([
+        {
+          address: '0x1234567890123456789012345678901234567890',
+          derivationPath: "m/44'/60'/0'/0/0",
+          name: 'Account 1',
+        },
+        {
+          address: '0x2222222222222222222222222222222222222222',
+          derivationPath: "m/44'/60'/0'/0/2",
+          name: 'Account 3',
+        },
+      ]);
+      const { result } = renderHook(() => useWallet());
+
+      await act(async () => {
+        await result.current.addAccount();
+      });
+
+      expect(mockDeriveAccountAtPath).toHaveBeenCalledWith("m/44'/60'/0'/0/3");
+      expect(mockStoreAccounts).toHaveBeenCalledWith(
+        expect.arrayContaining([
+          expect.objectContaining({
+            address: '0x0987654321098765432109876543210987654321',
+            derivationPath: "m/44'/60'/0'/0/3",
+            name: 'Account 4',
+          }),
+        ]),
+      );
+      // 암호화 저장소에 먼저 기록한 뒤 스토어에 추가해야 서명 바인딩이 성립한다.
+      expect(mockStoreAccounts.mock.invocationCallOrder[0]).toBeLessThan(
+        mockAddWallet.mock.invocationCallOrder[0],
+      );
+    });
+
+    it('does not add an account while the signer vault is locked', async () => {
+      mockDeriveAccountAtPath.mockImplementationOnce(() => {
+        throw new Error('Wallet is locked');
+      });
+      const { result } = renderHook(() => useWallet());
+
+      await act(async () => {
+        await expect(result.current.addAccount()).rejects.toBeDefined();
+      });
+      expect(mockStoreAccounts).not.toHaveBeenCalled();
+      expect(mockAddWallet).not.toHaveBeenCalled();
+    });
+
+    it('rejects a concurrent add while one is in progress', async () => {
+      let release!: (value: unknown[]) => void;
+      mockRetrieveAccounts.mockReturnValueOnce(
+        new Promise(resolve => {
+          release = resolve as (value: unknown[]) => void;
+        }),
+      );
+      const { result } = renderHook(() => useWallet());
+
+      let first!: Promise<string>;
+      await act(async () => {
+        first = result.current.addAccount();
+        await expect(result.current.addAccount()).rejects.toBeDefined();
+        release([]);
+        await first;
+      });
+      expect(mockAddWallet).toHaveBeenCalledTimes(1);
+    });
+
+    it('renames an account in encrypted storage and the store', async () => {
+      mockRetrieveAccounts.mockResolvedValueOnce([
+        {
+          address: '0x1234567890123456789012345678901234567890',
+          derivationPath: "m/44'/60'/0'/0/0",
+          name: 'Account 1',
+        },
+      ]);
+      const { result } = renderHook(() => useWallet());
+
+      await act(async () => {
+        await result.current.renameAccount(
+          '0x1234567890123456789012345678901234567890',
+          '  메인 지갑 ',
+        );
+      });
+
+      expect(mockStoreAccounts).toHaveBeenCalledWith([
+        expect.objectContaining({ name: '메인 지갑' }),
+      ]);
+      expect(mockRenameWallet).toHaveBeenCalledWith(
+        '0x1234567890123456789012345678901234567890',
+        '메인 지갑',
+      );
+      await act(async () => {
+        await expect(
+          result.current.renameAccount('0x1234', '   '),
+        ).rejects.toBeDefined();
+      });
+    });
+
+    it('parses account indexes from derivation paths', () => {
+      expect(accountIndexOf("m/44'/60'/0'/0/7")).toBe(7);
+      expect(accountIndexOf("m/44'/60'/1'/0/0")).toBeNull();
+      expect(accountIndexOf(undefined)).toBeNull();
+      expect(nextAccountIndex(["m/44'/60'/0'/0/0", undefined], 1)).toBe(1);
+      expect(nextAccountIndex([], 2)).toBe(2);
     });
 
     it('should switch account', () => {

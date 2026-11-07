@@ -12,6 +12,7 @@ import {
   sepolia,
 } from 'viem/chains';
 import type { Chain, PublicClient } from 'viem';
+import { customNetworkRegistry } from './customNetworks';
 
 const CHAIN_MAP: Record<number, Chain> = {
   1: mainnet,
@@ -52,25 +53,57 @@ const FALLBACK_RPC_URLS: Record<number, string[]> = {
   11155111: ['https://rpc.sepolia.org', 'https://rpc2.sepolia.org'],
 };
 
+const RPC_PROBE_TIMEOUT_MS = 10_000;
+
+export type RpcChainIdCheck =
+  | { ok: true }
+  | { ok: false; reason: 'mismatch'; actualChainId: number }
+  | { ok: false; reason: 'unreachable'; message: string };
+
 class ChainClient {
-  private clients: Map<number, PublicClient> = new Map();
+  private clients: Map<string, PublicClient> = new Map();
   private retryCount = 3;
   private retryDelay = 1000;
 
+  constructor() {
+    // 커스텀 네트워크가 바뀌면 이전 RPC/체인 정의로 만든 클라이언트를 버린다.
+    customNetworkRegistry.subscribe(() => this.clearCache());
+  }
+
+  /** 기본 체인 또는 등록된 커스텀 체인의 viem Chain 정의 */
+  getChain(chainId: number): Chain | undefined {
+    return CHAIN_MAP[chainId] ?? customNetworkRegistry.getChain(chainId);
+  }
+
+  /** 기본 체인 또는 등록된 커스텀 체인의 RPC URL */
+  getRpcUrl(chainId: number): string | undefined {
+    return (
+      DEFAULT_RPC_URLS[chainId] ?? customNetworkRegistry.get(chainId)?.rpcUrl
+    );
+  }
+
+  isSupportedChain(chainId: number): boolean {
+    return this.getChain(chainId) !== undefined;
+  }
+
+  isCustomChain(chainId: number): boolean {
+    return !CHAIN_MAP[chainId] && customNetworkRegistry.has(chainId);
+  }
+
   getClient(chainId: number, rpcUrl?: string): PublicClient {
-    const cacheKey = chainId;
-
-    if (this.clients.has(cacheKey)) {
-      return this.clients.get(cacheKey)!;
-    }
-
-    const chain = CHAIN_MAP[chainId];
+    const chain = this.getChain(chainId);
     if (!chain) {
       throw new Error(`Unsupported chain: ${chainId}`);
     }
 
-    // rpcUrl이 없으면 기본 RPC 사용
-    const finalRpcUrl = rpcUrl || DEFAULT_RPC_URLS[chainId];
+    // rpcUrl이 없으면 기본(또는 커스텀 네트워크에 저장된) RPC 사용
+    const finalRpcUrl = rpcUrl || this.getRpcUrl(chainId);
+    const cacheKey = `${chainId}|${finalRpcUrl ?? ''}`;
+
+    const cached = this.clients.get(cacheKey);
+    if (cached) {
+      return cached;
+    }
 
     const client = createPublicClient({
       chain,
@@ -218,17 +251,100 @@ class ChainClient {
   }
 
   /**
-   * 지원하는 체인 ID 목록
+   * RPC 엔드포인트가 보고하는 체인 ID (eth_chainId)
+   */
+  async fetchChainId(
+    rpcUrl: string,
+    timeoutMs: number = RPC_PROBE_TIMEOUT_MS,
+  ): Promise<number> {
+    const controller =
+      typeof AbortController !== 'undefined' ? new AbortController() : null;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => {
+        controller?.abort();
+        reject(new ChainError('RPC_TIMEOUT', 'RPC 서버 응답 시간 초과'));
+      }, timeoutMs);
+    });
+    try {
+      const response = await Promise.race([
+        fetch(rpcUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            jsonrpc: '2.0',
+            id: 1,
+            method: 'eth_chainId',
+            params: [],
+          }),
+          signal: controller?.signal,
+        }),
+        timeout,
+      ]);
+      if (!response.ok) {
+        throw new ChainError('RPC_ERROR', `RPC 오류 (HTTP ${response.status})`);
+      }
+      const body = (await Promise.race([response.json(), timeout])) as {
+        result?: unknown;
+      };
+      const result = body?.result;
+      if (typeof result !== 'string' || !/^0x[0-9a-f]+$/i.test(result)) {
+        throw new ChainError(
+          'RPC_ERROR',
+          'RPC가 체인 ID를 반환하지 않았습니다.',
+        );
+      }
+      const chainId = Number(BigInt(result));
+      if (!Number.isSafeInteger(chainId) || chainId <= 0) {
+        throw new ChainError(
+          'RPC_ERROR',
+          'RPC가 올바르지 않은 체인 ID를 반환했습니다.',
+        );
+      }
+      return chainId;
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+
+  /**
+   * 커스텀 네트워크 추가 전 RPC가 입력한 체인 ID와 같은 체인을 가리키는지 확인한다.
+   * 다른 체인의 RPC를 등록하면 서명이 다른 체인에서 재사용될 수 있으므로 일치를 요구한다.
+   */
+  async verifyRpcChainId(
+    rpcUrl: string,
+    expectedChainId: number,
+  ): Promise<RpcChainIdCheck> {
+    try {
+      const actualChainId = await this.fetchChainId(rpcUrl);
+      return actualChainId === expectedChainId
+        ? { ok: true }
+        : { ok: false, reason: 'mismatch', actualChainId };
+    } catch (error) {
+      return {
+        ok: false,
+        reason: 'unreachable',
+        message:
+          error instanceof Error ? error.message : 'RPC에 연결할 수 없습니다.',
+      };
+    }
+  }
+
+  /**
+   * 지원하는 체인 ID 목록 (기본 + 등록된 커스텀)
    */
   getSupportedChainIds(): number[] {
-    return Object.keys(CHAIN_MAP).map(Number);
+    return [
+      ...Object.keys(CHAIN_MAP).map(Number),
+      ...customNetworkRegistry.list().map(network => network.chainId),
+    ];
   }
 
   /**
    * 체인 정보 조회
    */
   getChainInfo(chainId: number): { name: string; isTestnet: boolean } | null {
-    const chain = CHAIN_MAP[chainId];
+    const chain = this.getChain(chainId);
     if (!chain) return null;
 
     return {

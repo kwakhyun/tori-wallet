@@ -3,7 +3,7 @@
  */
 
 import React from 'react';
-import { renderHook, waitFor } from '@testing-library/react-native';
+import { act, renderHook, waitFor } from '@testing-library/react-native';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
 // 서비스 모킹
@@ -26,6 +26,7 @@ import {
   useAddressSearch,
   useAddressName,
 } from '../../../src/realm/hooks/useAddressBook';
+import { addressBookService } from '../../../src/realm/services';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -162,6 +163,68 @@ describe('useAddressBook hooks', () => {
       });
 
       expect(result.current.name).toBeNull();
+    });
+  });
+
+  describe('cross-hook refresh', () => {
+    const mockedService = addressBookService as jest.Mocked<
+      typeof addressBookService
+    >;
+
+    it('refreshes the favorites list after toggling a favorite', async () => {
+      const entry = {
+        id: 'a',
+        address: '0x1111111111111111111111111111111111111111',
+        name: 'Alice',
+        chainId: 1,
+        isFavorite: false,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      };
+      mockedService.getAll.mockResolvedValue([entry]);
+      mockedService.getFavorites.mockResolvedValueOnce([]);
+      const { result } = renderHook(
+        () => ({ book: useAddressBook(), favorites: useFavoriteAddresses() }),
+        { wrapper },
+      );
+      await waitFor(() =>
+        expect(result.current.favorites.isLoading).toBe(false),
+      );
+      expect(result.current.favorites.favorites).toEqual([]);
+
+      mockedService.getFavorites.mockResolvedValueOnce([
+        { ...entry, isFavorite: true },
+      ]);
+      await act(async () => {
+        await result.current.book.toggleFavorite('a');
+      });
+
+      expect(mockedService.getFavorites).toHaveBeenCalledTimes(2);
+      expect(result.current.favorites.favorites).toHaveLength(1);
+    });
+
+    it('refreshes saved names after an address is edited', async () => {
+      mockedService.getByAddress.mockResolvedValueOnce(null);
+      const { result } = renderHook(
+        () => ({
+          book: useAddressBook(),
+          name: useAddressName('0x3333333333333333333333333333333333333333'),
+        }),
+        { wrapper },
+      );
+      await waitFor(() => expect(result.current.name.isLoading).toBe(false));
+      expect(result.current.name.name).toBeNull();
+
+      mockedService.getByAddress.mockResolvedValue({ name: 'Carol' } as never);
+      await act(async () => {
+        await result.current.book.updateAddress('c', {
+          address: '0x3333333333333333333333333333333333333333',
+        });
+      });
+      await waitFor(() => expect(result.current.name.name).toBe('Carol'));
+      expect(mockedService.update).toHaveBeenCalledWith('c', {
+        address: '0x3333333333333333333333333333333333333333',
+      });
     });
   });
 });

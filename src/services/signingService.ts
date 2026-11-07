@@ -12,6 +12,7 @@ import {
   base,
 } from 'viem/chains';
 import { signerVault } from './signerVault';
+import { customNetworkRegistry } from './customNetworks';
 import { createLogger } from '@/utils/logger';
 
 const logger = createLogger('Signing');
@@ -72,8 +73,12 @@ class SigningService {
     if (!isAuthorized())
       throw new Error('서명 승인이 만료되거나 취소되었습니다.');
 
-    const chain = CHAINS[chainId as keyof typeof CHAINS];
-    const rpcUrl = RPC_URLS[chainId];
+    // 사용자가 추가한 커스텀 네트워크도 등록된 RPC로 전송할 수 있다.
+    const chain =
+      CHAINS[chainId as keyof typeof CHAINS] ??
+      customNetworkRegistry.getChain(chainId);
+    const rpcUrl =
+      RPC_URLS[chainId] ?? customNetworkRegistry.get(chainId)?.rpcUrl;
 
     if (!chain || !rpcUrl) {
       throw new Error(`Unsupported chain: ${chainId}`);
@@ -127,7 +132,9 @@ class SigningService {
     if (!isAuthorized())
       throw new Error('서명 승인이 만료되거나 취소되었습니다.');
 
-    const chain = CHAINS[chainId as keyof typeof CHAINS];
+    const chain =
+      CHAINS[chainId as keyof typeof CHAINS] ??
+      customNetworkRegistry.getChain(chainId);
 
     if (!chain) {
       throw new Error(`Unsupported chain: ${chainId}`);
