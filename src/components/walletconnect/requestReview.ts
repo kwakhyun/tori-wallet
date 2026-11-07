@@ -118,7 +118,10 @@ export async function estimateUsdValue(
       coinService.getNativeTokenPrice(input.chainId),
       4000,
     );
-    if (!Number.isFinite(price) || price <= 0) return undefined;
+    // 가격을 모르면(null) 금액 미상으로 취급해 PIN 정책이 보수적으로 동작하게 한다.
+    if (price === null || !Number.isFinite(price) || price <= 0) {
+      return undefined;
+    }
     const value = Number(formatEther(wei)) * price;
     return Number.isFinite(value) ? value : undefined;
   } catch {
