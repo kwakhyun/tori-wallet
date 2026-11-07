@@ -139,3 +139,150 @@ it('does not round a maximum token balance or silently substitute gas on failure
     txService.estimateTokenTransfer(from, to, tokenAddress, '1', 6, 1),
   ).rejects.toThrow('토큰 전송');
 });
+
+describe('EIP-1559 fees and speed options', () => {
+  const estimateFeesPerGas = jest.fn();
+  beforeEach(() => {
+    estimateFeesPerGas.mockResolvedValue({
+      maxFeePerGas: 30_000_000_000n,
+      maxPriorityFeePerGas: 2_000_000_000n,
+    });
+    (chainClient.getClient as jest.Mock).mockReturnValue({
+      getBalance,
+      readContract,
+      estimateFeesPerGas,
+    });
+  });
+
+  it('uses EIP-1559 fee fields and freezes them in the plan', async () => {
+    const plan = await transferService.prepare({
+      from,
+      to,
+      amount: '1',
+      chainId: 1,
+    });
+    expect(plan.feeType).toBe('eip1559');
+    expect(plan.transaction.gasPrice).toBeUndefined();
+    expect(plan.transaction.maxFeePerGas).toBe('30000000000');
+    expect(plan.transaction.maxPriorityFeePerGas).toBe('2000000000');
+    // 50,000 × 120% 버퍼 = 60,000 gas × 최대 30 gwei
+    expect(plan.feeWei).toBe(60_000n * 30_000_000_000n);
+    expect(Object.isFrozen(plan)).toBe(true);
+    expect(Object.isFrozen(plan.transaction)).toBe(true);
+    expect(chainClient.getGasPrice).not.toHaveBeenCalled();
+  });
+
+  it('applies slow/normal/fast multipliers to the priority fee and base headroom', async () => {
+    const [slow, normal, fast] = await Promise.all(
+      (['slow', 'normal', 'fast'] as const).map(feeSpeed =>
+        transferService.prepare({
+          from,
+          to,
+          amount: '1',
+          chainId: 1,
+          feeSpeed,
+        }),
+      ),
+    );
+    expect(slow.transaction.maxPriorityFeePerGas).toBe('1600000000');
+    expect(slow.transaction.maxFeePerGas).toBe('29600000000');
+    expect(normal.transaction.maxPriorityFeePerGas).toBe('2000000000');
+    expect(fast.transaction.maxPriorityFeePerGas).toBe('3000000000');
+    // (30 − 2) × 125% + 3 = 38 gwei
+    expect(fast.transaction.maxFeePerGas).toBe('38000000000');
+    expect(fast.feeSpeed).toBe('fast');
+    expect(fast.feeWei > normal.feeWei && normal.feeWei > slow.feeWei).toBe(
+      true,
+    );
+  });
+
+  it('falls back to legacy gasPrice when the chain has no EIP-1559 fees', async () => {
+    estimateFeesPerGas.mockRejectedValue(new Error('Eip1559FeesNotSupported'));
+    const plan = await transferService.prepare({
+      from,
+      to,
+      amount: '1',
+      chainId: 1,
+      feeSpeed: 'fast',
+    });
+    expect(plan.feeType).toBe('legacy');
+    expect(plan.transaction.maxFeePerGas).toBeUndefined();
+    expect(plan.transaction.gasPrice).toBe('1250000000'); // 1 gwei × 125%
+  });
+
+  it('sends the whole native balance minus the max fee with bigint precision', async () => {
+    getBalance.mockResolvedValue(1_000_000_000_000_000_001n);
+    const plan = await transferService.prepare({
+      from,
+      to,
+      amount: '',
+      chainId: 1,
+      sendMax: true,
+    });
+    const fee = 60_000n * 30_000_000_000n;
+    expect(plan.units).toBe(1_000_000_000_000_000_001n - fee);
+    expect(plan.transaction.value).toBe(plan.units.toString());
+    expect(BigInt(plan.transaction.value!) + plan.feeWei).toBe(
+      1_000_000_000_000_000_001n,
+    );
+    getBalance.mockResolvedValue(fee);
+    await expect(
+      transferService.prepare({
+        from,
+        to,
+        amount: '',
+        chainId: 1,
+        sendMax: true,
+      }),
+    ).rejects.toThrow('수수료를 제외하면');
+  });
+
+  it('detects tampering with a reviewed plan before signing', async () => {
+    const plan = await transferService.prepare({
+      from,
+      to,
+      amount: '1',
+      chainId: 1,
+      ensName: 'friend.eth',
+    });
+    expect(plan.ensName).toBe('friend.eth');
+    expect(() => transferService.assertPlanIntact(plan)).not.toThrow();
+    expect(() =>
+      transferService.assertPlanIntact({
+        ...plan,
+        transaction: { ...plan.transaction, to: tokenAddress },
+      }),
+    ).toThrow('변경되어 차단');
+    expect(() =>
+      transferService.assertPlanIntact({
+        ...plan,
+        transaction: { ...plan.transaction, maxFeePerGas: '1' },
+      }),
+    ).toThrow('변경되어 차단');
+  });
+});
+
+describe('recipient kind (contract warning)', () => {
+  const getCode = jest.fn();
+  beforeEach(() => {
+    (chainClient.getClient as jest.Mock).mockReturnValue({ getCode });
+  });
+
+  it.each([
+    [undefined, 'eoa'],
+    ['0x', 'eoa'],
+    ['0x6080604052', 'contract'],
+    // EIP-7702 위임 계정은 개인 계정이다.
+    [`0xef0100${'ab'.repeat(20)}`, 'eoa'],
+  ])('classifies code %p as %s', async (code, kind) => {
+    getCode.mockResolvedValue(code);
+    await expect(transferService.getRecipientKind(to, 1)).resolves.toBe(kind);
+  });
+
+  it('returns unknown when the RPC fails', async () => {
+    getCode.mockRejectedValue(new Error('offline'));
+    await expect(transferService.getRecipientKind(to, 1)).resolves.toBe(
+      'unknown',
+    );
+  });
+});

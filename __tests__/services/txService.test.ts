@@ -2,7 +2,11 @@
  * 트랜잭션 서비스 테스트
  */
 
-import { txService } from '../../src/services/txService';
+import {
+  txService,
+  applyFeeSpeed,
+  getAddressFormatIssue,
+} from '../../src/services/txService';
 import { parseEther } from 'viem';
 
 // chainClient 모킹
@@ -438,5 +442,122 @@ describe('TxService - Error Handling', () => {
       expect(result.maxAmount).toBe('0');
       expect(result.fee).toBeDefined();
     });
+
+    it('reserves the fee with bigint math and estimates with 1 wei', async () => {
+      const { chainClient } = require('../../src/services/chainClient');
+      chainClient.getBalance.mockResolvedValueOnce({
+        wei: 1_000_000_000_000_000_001n,
+        formatted: '1.000000000000000001',
+      });
+      chainClient.estimateGas.mockClear();
+
+      const result = await txService.calculateMaxSendable(
+        '0x1234567890123456789012345678901234567890' as `0x${string}`,
+        '0x1234567890123456789012345678901234567890' as `0x${string}`,
+        1,
+      );
+
+      // 21,000 × 120% × 20 gwei
+      const fee = 25_200n * 20_000_000_000n;
+      expect(result.maxWei).toBe(1_000_000_000_000_000_001n - fee);
+      expect(chainClient.estimateGas).toHaveBeenCalledWith(
+        expect.objectContaining({ value: 1n }),
+        expect.anything(),
+      );
+    });
+  });
+});
+
+describe('TxService - strict address validation', () => {
+  const checksummed = '0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed';
+
+  it('accepts checksummed and all-lowercase addresses', () => {
+    expect(txService.validateAddress(checksummed)).toBe(true);
+    expect(txService.validateAddress(checksummed.toLowerCase())).toBe(true);
+    expect(getAddressFormatIssue(checksummed)).toBeNull();
+  });
+
+  it('distinguishes a bad checksum from an invalid format', () => {
+    const badChecksum = checksummed.replace('aAeb', 'AAeb');
+    expect(txService.validateAddress(badChecksum)).toBe(false);
+    expect(getAddressFormatIssue(badChecksum)).toBe('checksum');
+    expect(getAddressFormatIssue('invalid-address')).toBe('invalid');
+    expect(getAddressFormatIssue('0x1234')).toBe('invalid');
+    expect(getAddressFormatIssue('  ')).toBe('empty');
+  });
+});
+
+describe('TxService - fee speeds', () => {
+  it('scales EIP-1559 priority fee and base headroom per speed', () => {
+    const base = {
+      type: 'eip1559' as const,
+      maxFeePerGas: 30n,
+      maxPriorityFeePerGas: 10n,
+    };
+    expect(applyFeeSpeed(base, 'slow')).toEqual({
+      type: 'eip1559',
+      maxFeePerGas: 28n,
+      maxPriorityFeePerGas: 8n,
+    });
+    expect(applyFeeSpeed(base, 'normal')).toEqual(base);
+    expect(applyFeeSpeed(base, 'fast')).toEqual({
+      type: 'eip1559',
+      maxFeePerGas: 40n,
+      maxPriorityFeePerGas: 15n,
+    });
+  });
+
+  it('scales legacy gas price per speed', () => {
+    const base = { type: 'legacy' as const, gasPrice: 100n };
+    expect(applyFeeSpeed(base, 'slow')).toEqual({
+      type: 'legacy',
+      gasPrice: 90n,
+    });
+    expect(applyFeeSpeed(base, 'fast')).toEqual({
+      type: 'legacy',
+      gasPrice: 125n,
+    });
+  });
+
+  it('uses estimateFeesPerGas when available and falls back to gasPrice', async () => {
+    const { chainClient } = require('../../src/services/chainClient');
+    const estimateFeesPerGas = jest.fn().mockResolvedValue({
+      maxFeePerGas: 30n,
+      maxPriorityFeePerGas: 10n,
+    });
+    chainClient.getClient.mockReturnValueOnce({ estimateFeesPerGas });
+    await expect(txService.getFeeData(1, 'fast')).resolves.toEqual({
+      type: 'eip1559',
+      maxFeePerGas: 40n,
+      maxPriorityFeePerGas: 15n,
+    });
+
+    chainClient.getClient.mockReturnValueOnce({
+      estimateFeesPerGas: jest.fn().mockRejectedValue(new Error('no 1559')),
+    });
+    await expect(txService.getFeeData(1, 'normal')).resolves.toEqual({
+      type: 'legacy',
+      gasPrice: 20_000_000_000n,
+    });
+  });
+
+  it('reports the max fee and EIP-1559 fields in estimates', async () => {
+    const { chainClient } = require('../../src/services/chainClient');
+    chainClient.getClient.mockReturnValueOnce({
+      estimateFeesPerGas: jest.fn().mockResolvedValue({
+        maxFeePerGas: 30n,
+        maxPriorityFeePerGas: 10n,
+      }),
+    });
+    const estimate = await txService.estimateTransaction({
+      from: '0x1234567890123456789012345678901234567890',
+      to: '0x0987654321098765432109876543210987654321',
+      value: '1',
+      chainId: 1,
+    });
+    expect(estimate.feeType).toBe('eip1559');
+    expect(estimate.maxFeePerGas).toBe(30n);
+    expect(estimate.maxPriorityFeePerGas).toBe(10n);
+    expect(estimate.estimatedFeeWei).toBe(estimate.gasLimit * 30n);
   });
 });

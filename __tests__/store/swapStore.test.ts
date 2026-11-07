@@ -2,7 +2,17 @@
  * 스왑 스토어 테스트
  */
 
-import { useSwapStore } from '../../src/store/swapStore';
+import { useSwapStore, resolveSlippage } from '../../src/store/swapStore';
+
+const historyItem = (chainId: number, txHash: string) => ({
+  timestamp: Date.now(),
+  chainId,
+  sellToken: { symbol: 'ETH', address: '0x0', amount: '1.0' },
+  buyToken: { symbol: 'USDC', address: '0x1', amount: '2000' },
+  txHash,
+  status: 'success' as const,
+  rate: '2000',
+});
 
 // Zustand store를 테스트하기 위한 설정
 const initialState = useSwapStore.getState();
@@ -95,6 +105,18 @@ describe('SwapStore', () => {
 
       const { history } = useSwapStore.getState();
       expect(history).toHaveLength(0);
+    });
+
+    it('clears only the given network history', () => {
+      const { addHistoryItem, clearHistoryForChain } = useSwapStore.getState();
+      addHistoryItem(historyItem(1, '0xmainnet'));
+      addHistoryItem(historyItem(137, '0xpolygon'));
+      addHistoryItem(historyItem(1, '0xmainnet2'));
+
+      clearHistoryForChain(1);
+
+      const { history } = useSwapStore.getState();
+      expect(history.map(item => item.txHash)).toEqual(['0xpolygon']);
     });
 
     it('should get history by chain', () => {
@@ -228,13 +250,72 @@ describe('SwapStore', () => {
       expect(settings.defaultSlippage).toBe(1.5);
     });
 
-    it('should update tx deadline', () => {
+    it('only keeps settings the 0x flow honors', () => {
       const { updateSettings } = useSwapStore.getState();
 
-      updateSettings({ txDeadlineMinutes: 30 });
+      updateSettings({
+        defaultSlippage: 1,
+        txDeadlineMinutes: 30,
+        expertMode: true,
+      } as any);
 
-      const { settings } = useSwapStore.getState();
-      expect(settings.txDeadlineMinutes).toBe(30);
+      expect(useSwapStore.getState().settings).toEqual({
+        defaultSlippage: 1,
+        autoSlippage: true,
+      });
+    });
+
+    it('rejects out-of-range slippage values', () => {
+      const { updateSettings } = useSwapStore.getState();
+      updateSettings({ defaultSlippage: 80 });
+      expect(useSwapStore.getState().settings.defaultSlippage).toBe(0.5);
+      updateSettings({ defaultSlippage: Number.NaN });
+      expect(useSwapStore.getState().settings.defaultSlippage).toBe(0.5);
+    });
+
+    it('migrates persisted v0 settings by dropping unsupported options', () => {
+      const migrate = (useSwapStore as any).persist.getOptions().migrate;
+      const migrated = migrate(
+        {
+          history: [],
+          settings: {
+            defaultSlippage: 1,
+            autoSlippage: false,
+            txDeadlineMinutes: 20,
+            gasPreference: 'high',
+            expertMode: true,
+          },
+        },
+        0,
+      );
+      expect(migrated.settings).toEqual({
+        defaultSlippage: 1,
+        autoSlippage: false,
+      });
+    });
+
+    it('resolves the slippage used for quotes from settings', () => {
+      expect(
+        resolveSlippage(
+          { autoSlippage: false, defaultSlippage: 3 },
+          'ETH',
+          'USDC',
+        ),
+      ).toBe(3);
+      expect(
+        resolveSlippage(
+          { autoSlippage: true, defaultSlippage: 3 },
+          'ETH',
+          'USDC',
+        ),
+      ).toBe(0.5);
+      expect(
+        resolveSlippage(
+          { autoSlippage: true, defaultSlippage: 3 },
+          'USDC',
+          'usdt',
+        ),
+      ).toBe(0.1);
     });
 
     it('should toggle auto slippage', () => {
@@ -251,12 +332,12 @@ describe('SwapStore', () => {
     it('should reset settings to defaults', () => {
       const { updateSettings, resetSettings } = useSwapStore.getState();
 
-      updateSettings({ defaultSlippage: 5, expertMode: true });
+      updateSettings({ defaultSlippage: 5, autoSlippage: false });
       resetSettings();
 
       const { settings } = useSwapStore.getState();
       expect(settings.defaultSlippage).toBe(0.5);
-      expect(settings.expertMode).toBe(false);
+      expect(settings.autoSlippage).toBe(true);
     });
   });
 

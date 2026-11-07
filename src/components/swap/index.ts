@@ -3,4 +3,5 @@
  */
 
 export { SwapReviewModal } from './SwapReviewModal';
+export type { ApprovalRequirement } from './SwapReviewModal';
 export { SwapSettingsModal } from './SwapSettingsModal';

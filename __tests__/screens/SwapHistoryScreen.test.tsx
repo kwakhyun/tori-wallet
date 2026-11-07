@@ -4,7 +4,13 @@
  */
 
 import React from 'react';
-import { render, screen, cleanup } from '@testing-library/react-native';
+import {
+  render,
+  screen,
+  cleanup,
+  fireEvent,
+} from '@testing-library/react-native';
+import { Alert } from 'react-native';
 import { ThemeProvider } from 'styled-components/native';
 import SwapHistoryScreen from '../../src/screens/Swap/SwapHistoryScreen';
 import { theme } from '../../src/styles/theme';
@@ -21,9 +27,11 @@ jest.mock('@react-navigation/native', () => ({
   useNavigation: () => ({
     navigate: mockNavigate,
     goBack: mockGoBack,
+    canGoBack: () => true,
   }),
 }));
 
+const mockClearHistoryForChain = jest.fn();
 const mockClearHistory = jest.fn();
 
 // Swap store mock with history
@@ -77,6 +85,7 @@ jest.mock('../../src/store/swapStore', () => ({
   useSwapStore: () => ({
     history: mockSwapHistory,
     clearHistory: mockClearHistory,
+    clearHistoryForChain: mockClearHistoryForChain,
   }),
 }));
 
@@ -140,5 +149,45 @@ describe('SwapHistoryScreen', () => {
   it('should display status text for failed swaps', () => {
     renderWithTheme(<SwapHistoryScreen />);
     expect(screen.getByText('실패')).toBeTruthy();
+  });
+
+  it('asks for confirmation and clears only the active network', () => {
+    const alertSpy = jest.spyOn(Alert, 'alert').mockImplementation();
+    renderWithTheme(<SwapHistoryScreen />);
+
+    fireEvent.press(screen.getByTestId('swap-history-clear'));
+    expect(mockClearHistoryForChain).not.toHaveBeenCalled();
+    expect(alertSpy).toHaveBeenCalledWith(
+      '스왑 내역 삭제',
+      expect.stringContaining('Ethereum'),
+      expect.any(Array),
+    );
+
+    const buttons = alertSpy.mock.calls[0][2] as {
+      text: string;
+      onPress?: () => void;
+    }[];
+    buttons.find(button => button.text === '취소')?.onPress?.();
+    expect(mockClearHistoryForChain).not.toHaveBeenCalled();
+
+    buttons.find(button => button.text === '삭제')?.onPress?.();
+    expect(mockClearHistoryForChain).toHaveBeenCalledWith(1);
+    expect(mockClearHistory).not.toHaveBeenCalled();
+    alertSpy.mockRestore();
+  });
+
+  it('opens the transaction detail for a history item', () => {
+    renderWithTheme(<SwapHistoryScreen />);
+    fireEvent.press(screen.getByTestId('swap-history-item-1'));
+    expect(mockNavigate).toHaveBeenCalledWith('TransactionDetail', {
+      txHash: '0x123',
+      chainId: 1,
+    });
+  });
+
+  it('has a labelled back button', () => {
+    renderWithTheme(<SwapHistoryScreen />);
+    fireEvent.press(screen.getByLabelText('뒤로 가기'));
+    expect(mockGoBack).toHaveBeenCalled();
   });
 });

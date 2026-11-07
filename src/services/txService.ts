@@ -3,7 +3,82 @@
  */
 
 import { chainClient, ChainError } from './chainClient';
-import { parseEther, formatEther, parseUnits } from 'viem';
+import { parseEther, formatEther, parseUnits, isAddress } from 'viem';
+
+const HEX_ADDRESS = /^0x[a-fA-F0-9]{40}$/;
+
+/**
+ * 주소 입력의 형식 문제
+ *  - invalid: 0x + 40자리 16진수가 아님
+ *  - checksum: 형식은 맞지만 대소문자(EIP-55 체크섬)가 틀림
+ */
+export type AddressFormatIssue = 'empty' | 'invalid' | 'checksum';
+
+export function getAddressFormatIssue(
+  input: string,
+): AddressFormatIssue | null {
+  const value = input.trim();
+  if (!value) return 'empty';
+  if (!HEX_ADDRESS.test(value)) return 'invalid';
+  // viem 기본(strict) 검사: 대소문자가 섞인 주소는 체크섬까지 확인한다.
+  if (!isAddress(value)) return 'checksum';
+  return null;
+}
+
+/** 수수료 속도 */
+export type FeeSpeed = 'slow' | 'normal' | 'fast';
+export const FEE_SPEEDS: FeeSpeed[] = ['slow', 'normal', 'fast'];
+export const FEE_SPEED_LABELS: Record<FeeSpeed, string> = {
+  slow: '느림',
+  normal: '보통',
+  fast: '빠름',
+};
+
+// 정수 백분율 배율 (bigint 연산으로 반올림 오차 없이 계산)
+const PRIORITY_FEE_PERCENT: Record<FeeSpeed, bigint> = {
+  slow: 80n,
+  normal: 100n,
+  fast: 150n,
+};
+const BASE_FEE_HEADROOM_PERCENT: Record<FeeSpeed, bigint> = {
+  slow: 100n,
+  normal: 100n,
+  fast: 125n,
+};
+const LEGACY_GAS_PRICE_PERCENT: Record<FeeSpeed, bigint> = {
+  slow: 90n,
+  normal: 100n,
+  fast: 125n,
+};
+
+export type FeeData =
+  | { type: 'eip1559'; maxFeePerGas: bigint; maxPriorityFeePerGas: bigint }
+  | { type: 'legacy'; gasPrice: bigint };
+
+/**
+ * 네트워크 기본 수수료(보통)에 속도별 배율을 적용한다.
+ * EIP-1559: 우선 수수료와 기본 수수료 여유분(maxFee − priority)을 각각 조정한다.
+ */
+export function applyFeeSpeed(base: FeeData, speed: FeeSpeed): FeeData {
+  if (base.type === 'legacy') {
+    return {
+      type: 'legacy',
+      gasPrice: (base.gasPrice * LEGACY_GAS_PRICE_PERCENT[speed]) / 100n,
+    };
+  }
+  const priority = base.maxPriorityFeePerGas;
+  const headroom =
+    base.maxFeePerGas > priority ? base.maxFeePerGas - priority : 0n;
+  const maxPriorityFeePerGas = (priority * PRIORITY_FEE_PERCENT[speed]) / 100n;
+  const maxFeePerGas =
+    (headroom * BASE_FEE_HEADROOM_PERCENT[speed]) / 100n + maxPriorityFeePerGas;
+  return { type: 'eip1559', maxFeePerGas, maxPriorityFeePerGas };
+}
+
+/** 가스 단위당 최대 지불 가격 */
+export function maxPricePerGas(fee: FeeData): bigint {
+  return fee.type === 'legacy' ? fee.gasPrice : fee.maxFeePerGas;
+}
 
 export function parseTransferAmount(amount: string, decimals = 18): bigint {
   if (
@@ -42,11 +117,38 @@ export interface TransactionRequest {
 
 export interface TransactionEstimate {
   gasLimit: bigint;
+  /** 레거시: gasPrice, EIP-1559: maxFeePerGas (가스당 최대 가격) */
   gasPrice: bigint;
+  feeType: FeeData['type'];
   maxFeePerGas?: bigint;
   maxPriorityFeePerGas?: bigint;
+  /** gasLimit × 가스당 최대 가격 (최대 수수료) */
   estimatedFee: string;
   estimatedFeeWei: bigint;
+  speed: FeeSpeed;
+}
+
+function buildEstimate(
+  gasLimit: bigint,
+  fee: FeeData,
+  speed: FeeSpeed,
+): TransactionEstimate {
+  const pricePerGas = maxPricePerGas(fee);
+  const estimatedFeeWei = gasLimit * pricePerGas;
+  return {
+    gasLimit,
+    gasPrice: pricePerGas,
+    feeType: fee.type,
+    ...(fee.type === 'eip1559'
+      ? {
+          maxFeePerGas: fee.maxFeePerGas,
+          maxPriorityFeePerGas: fee.maxPriorityFeePerGas,
+        }
+      : {}),
+    estimatedFee: formatEther(estimatedFeeWei),
+    estimatedFeeWei,
+    speed,
+  };
 }
 
 export interface TransactionRecord {
@@ -69,7 +171,38 @@ class TransactionService {
    * 주소 유효성 검증
    */
   validateAddress(address: string): boolean {
-    return /^0x[a-fA-F0-9]{40}$/.test(address);
+    return getAddressFormatIssue(address) === null;
+  }
+
+  /**
+   * 네트워크 수수료 조회 (EIP-1559 지원 시 estimateFeesPerGas, 아니면 gasPrice)
+   */
+  async getFeeData(
+    chainId: number,
+    speed: FeeSpeed = 'normal',
+    rpcUrl?: string,
+  ): Promise<FeeData> {
+    try {
+      const client = chainClient.getClient(chainId, rpcUrl);
+      const fees = await client.estimateFeesPerGas();
+      if (
+        typeof fees?.maxFeePerGas === 'bigint' &&
+        typeof fees?.maxPriorityFeePerGas === 'bigint'
+      ) {
+        return applyFeeSpeed(
+          {
+            type: 'eip1559',
+            maxFeePerGas: fees.maxFeePerGas,
+            maxPriorityFeePerGas: fees.maxPriorityFeePerGas,
+          },
+          speed,
+        );
+      }
+    } catch {
+      // EIP-1559 미지원 체인 또는 조회 실패 → 레거시 gasPrice
+    }
+    const gasPrice = await chainClient.getGasPrice({ chainId, rpcUrl });
+    return applyFeeSpeed({ type: 'legacy', gasPrice }, speed);
   }
 
   /**
@@ -121,11 +254,12 @@ class TransactionService {
    */
   async estimateTransaction(
     request: TransactionRequest,
+    speed: FeeSpeed = 'normal',
   ): Promise<TransactionEstimate> {
     try {
       const valueWei = parseEther(request.value);
 
-      const [gasLimit, gasPrice] = await Promise.all([
+      const [gasLimit, fee] = await Promise.all([
         chainClient.estimateGas(
           {
             from: request.from,
@@ -135,22 +269,12 @@ class TransactionService {
           },
           { chainId: request.chainId, rpcUrl: request.rpcUrl },
         ),
-        chainClient.getGasPrice({
-          chainId: request.chainId,
-          rpcUrl: request.rpcUrl,
-        }),
+        this.getFeeData(request.chainId, speed, request.rpcUrl),
       ]);
 
       // 가스 버퍼 추가 (20%)
       const adjustedGasLimit = (gasLimit * 120n) / 100n;
-      const estimatedFeeWei = adjustedGasLimit * gasPrice;
-
-      return {
-        gasLimit: adjustedGasLimit,
-        gasPrice,
-        estimatedFee: formatEther(estimatedFeeWei),
-        estimatedFeeWei,
-      };
+      return buildEstimate(adjustedGasLimit, fee, speed);
     } catch (error) {
       if (error instanceof ChainError && error.code === 'INSUFFICIENT_FUNDS') {
         throw new Error(
@@ -171,30 +295,35 @@ class TransactionService {
     to: `0x${string}`,
     chainId: number,
     rpcUrl?: string,
-  ): Promise<{ maxAmount: string; fee: string }> {
+    speed: FeeSpeed = 'normal',
+  ): Promise<{ maxAmount: string; fee: string; maxWei: bigint }> {
     const { wei: balance } = await chainClient.getBalance(from, {
       chainId,
       rpcUrl,
     });
 
-    // 최소 금액으로 가스 추정
-    const estimate = await this.estimateTransaction({
-      from,
-      to,
-      value: '0.0001',
-      chainId,
-      rpcUrl,
-    });
+    // 1 wei로 가스를 추정한다 (잔액이 아주 적어도 추정이 실패하지 않도록).
+    const estimate = await this.estimateTransaction(
+      {
+        from,
+        to,
+        value: formatEther(1n),
+        chainId,
+        rpcUrl,
+      },
+      speed,
+    );
 
     const maxWei = balance - estimate.estimatedFeeWei;
 
     if (maxWei <= 0n) {
-      return { maxAmount: '0', fee: estimate.estimatedFee };
+      return { maxAmount: '0', fee: estimate.estimatedFee, maxWei: 0n };
     }
 
     return {
       maxAmount: formatEther(maxWei),
       fee: estimate.estimatedFee,
+      maxWei,
     };
   }
 
@@ -282,12 +411,13 @@ class TransactionService {
     decimals: number,
     chainId: number,
     rpcUrl?: string,
+    speed: FeeSpeed = 'normal',
   ): Promise<TransactionEstimate> {
     try {
       const tokenAmount = parseTransferAmount(amount, decimals);
       const data = this.encodeERC20Transfer(to, tokenAmount);
 
-      const [gasLimit, gasPrice] = await Promise.all([
+      const [gasLimit, fee] = await Promise.all([
         chainClient.estimateGas(
           {
             from,
@@ -296,19 +426,12 @@ class TransactionService {
           },
           { chainId, rpcUrl },
         ),
-        chainClient.getGasPrice({ chainId, rpcUrl }),
+        this.getFeeData(chainId, speed, rpcUrl),
       ]);
 
       // 가스 버퍼 추가 (30% - 토큰 전송은 더 많이)
       const adjustedGasLimit = (gasLimit * 130n) / 100n;
-      const estimatedFeeWei = adjustedGasLimit * gasPrice;
-
-      return {
-        gasLimit: adjustedGasLimit,
-        gasPrice,
-        estimatedFee: formatEther(estimatedFeeWei),
-        estimatedFeeWei,
-      };
+      return buildEstimate(adjustedGasLimit, fee, speed);
     } catch {
       throw new Error(
         '토큰 전송을 확인할 수 없습니다. 금액, 잔액과 네트워크를 확인해주세요.',
