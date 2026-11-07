@@ -2,18 +2,29 @@
  * 잠금 해제 PIN 입력 화면
  *
  * 콜드 스타트에서는 일반 라우트로, 자동 잠금 후에는 RootNavigator의 잠금 오버레이
- * (Modal) 안에서 렌더링된다. 두 경우 모두 동작해야 하므로 라우트 파라미터나
- * 네비게이션에 의존하지 않고, 오버레이 위에 보이지 않는 토스트 대신 화면 안에
- * 오류를 표시한다.
+ * (iOS FullWindowOverlay, Android Modal) 안에서 렌더링된다. 두 경우 모두 동작해야
+ * 하므로 라우트 파라미터나 네비게이션에 의존하지 않고, 잠긴 동안 표시되지 않는 토스트
+ * 대신 화면 안에 오류를 표시한다.
  */
 
-import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import React, {
+  useCallback,
+  useContext,
+  useEffect,
+  useRef,
+  useState,
+} from 'react';
+import {
+  SafeAreaView,
+  useSafeAreaInsets,
+} from 'react-native-safe-area-context';
 import styled from 'styled-components/native';
 import { useShallow } from 'zustand/react/shallow';
 import {
   ActivityIndicator,
   AppState,
+  BackHandler,
+  Platform,
   ScrollView,
   StatusBar,
   StyleSheet,
@@ -36,6 +47,10 @@ import { PinPad } from '@/components/common/PinPad';
 import { showToast } from '@/store/toastStore';
 import { errorFeedback } from '@/utils/haptics';
 import { ForgotPinPanel } from './ForgotPinPanel';
+import {
+  UnlockBackHandlerContext,
+  type UnlockBackHandler,
+} from './unlockBackHandler';
 
 const PIN_LENGTH = 6;
 export const WRONG_PIN_MESSAGE = 'PIN이 올바르지 않습니다.';
@@ -43,6 +58,36 @@ export const WRONG_PIN_MESSAGE = 'PIN이 올바르지 않습니다.';
 const styles = StyleSheet.create({
   scrollContent: { flexGrow: 1, justifyContent: 'center' },
 });
+
+/**
+ * iOS 잠금 오버레이는 FullWindowOverlay(앱 창에 직접 추가되는 뷰) 안에 있어 네이티브
+ * SafeAreaView가 SafeAreaProvider를 찾지 못한다. 루트 Provider의 inset(React 컨텍스트)을
+ * 패딩으로 적용한다. 콜드 스타트 라우트도 전체 화면이라 같은 값이다.
+ * Android 오버레이 Modal은 별도 창이므로 네이티브 SafeAreaView가 그 창의 inset을 쓴다.
+ */
+function UnlockContainer({
+  children,
+}: {
+  children: React.ReactNode;
+}): React.JSX.Element {
+  const insets = useSafeAreaInsets();
+  if (Platform.OS === 'ios') {
+    return (
+      <InsetContainer
+        testID="unlock-screen"
+        style={{
+          paddingTop: insets.top,
+          paddingBottom: insets.bottom,
+          paddingLeft: insets.left,
+          paddingRight: insets.right,
+        }}
+      >
+        {children}
+      </InsetContainer>
+    );
+  }
+  return <SafeContainer testID="unlock-screen">{children}</SafeContainer>;
+}
 
 function UnlockScreen(): React.JSX.Element {
   const { theme, isDarkMode } = useTheme();
@@ -64,6 +109,8 @@ function UnlockScreen(): React.JSX.Element {
   const { refresh: refreshLockout, lockUntil } = lockout;
   const mounted = useRef(true);
   const showForgotPinRef = useRef(false);
+  const resettingRef = useRef(false);
+  const overlayBackHandler = useContext(UnlockBackHandlerContext);
 
   useEffect(() => {
     mounted.current = true;
@@ -188,6 +235,32 @@ function UnlockScreen(): React.JSX.Element {
     refreshLockout();
   }, [refreshLockout]);
 
+  const handleResettingChange = useCallback((resetting: boolean) => {
+    resettingRef.current = resetting;
+  }, []);
+
+  // Android 뒤로 가기: PIN 분실 안내에서는 PIN 입력으로 돌아간다 (초기화 중에는 무시).
+  // 뒤로 가기를 항상 소비해 콜드 스타트에서 앱이 닫히거나 오버레이 아래 화면이
+  // pop되지 않게 한다.
+  useEffect(() => {
+    if (!showForgotPin) return;
+    const handleBack: UnlockBackHandler = () => {
+      if (!resettingRef.current) closeForgotPin();
+      return true;
+    };
+    const subscription = BackHandler.addEventListener(
+      'hardwareBackPress',
+      handleBack,
+    );
+    if (overlayBackHandler) overlayBackHandler.current = handleBack;
+    return () => {
+      subscription.remove();
+      if (overlayBackHandler?.current === handleBack) {
+        overlayBackHandler.current = null;
+      }
+    };
+  }, [closeForgotPin, overlayBackHandler, showForgotPin]);
+
   const handleReset = useCallback(async () => {
     cancel();
     try {
@@ -263,15 +336,19 @@ function UnlockScreen(): React.JSX.Element {
 
   if (showForgotPin) {
     return (
-      <Container testID="unlock-screen">
+      <UnlockContainer>
         <StatusBar barStyle={isDarkMode ? 'light-content' : 'dark-content'} />
-        <ForgotPinPanel onCancel={closeForgotPin} onReset={handleReset} />
-      </Container>
+        <ForgotPinPanel
+          onCancel={closeForgotPin}
+          onReset={handleReset}
+          onResettingChange={handleResettingChange}
+        />
+      </UnlockContainer>
     );
   }
 
   return (
-    <Container testID="unlock-screen">
+    <UnlockContainer>
       <StatusBar barStyle={isDarkMode ? 'light-content' : 'dark-content'} />
       <ScrollView
         contentContainerStyle={styles.scrollContent}
@@ -332,11 +409,16 @@ function UnlockScreen(): React.JSX.Element {
           </LinkButton>
         </Content>
       </ScrollView>
-    </Container>
+    </UnlockContainer>
   );
 }
 
-const Container = styled(SafeAreaView)`
+const SafeContainer = styled(SafeAreaView)`
+  flex: 1;
+  background-color: ${({ theme }) => theme.colors.background};
+`;
+
+const InsetContainer = styled.View`
   flex: 1;
   background-color: ${({ theme }) => theme.colors.background};
 `;

@@ -27,6 +27,8 @@ interface ForgotPinPanelProps {
   onCancel: () => void;
   /** 지갑 초기화. 실패하면 reject 한다. */
   onReset: () => Promise<void>;
+  /** 초기화 진행 상태가 바뀔 때 (초기화 중에는 뒤로 가기로 닫지 않는다) */
+  onResettingChange?: (resetting: boolean) => void;
 }
 
 const styles = StyleSheet.create({
@@ -37,6 +39,7 @@ const styles = StyleSheet.create({
 export function ForgotPinPanel({
   onCancel,
   onReset,
+  onResettingChange,
 }: ForgotPinPanelProps): React.JSX.Element {
   const { theme } = useTheme();
   const [confirmText, setConfirmText] = useState('');
@@ -50,6 +53,10 @@ export function ForgotPinPanel({
       mounted.current = false;
     };
   }, []);
+
+  useEffect(() => {
+    onResettingChange?.(isResetting);
+  }, [isResetting, onResettingChange]);
 
   const canReset = confirmText.trim() === RESET_CONFIRM_WORD && !isResetting;
 

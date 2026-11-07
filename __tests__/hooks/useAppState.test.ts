@@ -9,12 +9,25 @@ import { AppState } from 'react-native';
 const mockLock = jest.fn();
 const mockUpdateLastActiveTime = jest.fn();
 
-jest.mock('../../src/store/walletStore', () => ({
-  useWalletStore: () => ({
-    hasWallet: true,
-    isLocked: false,
+const mockWalletState = { hasWallet: true, isLocked: false };
+jest.mock('../../src/store/walletStore', () => {
+  const useWalletStore = () => ({
+    ...mockWalletState,
     lock: mockLock,
-  }),
+  });
+  useWalletStore.getState = () => ({ ...mockWalletState, lock: mockLock });
+  return { useWalletStore };
+});
+
+const mockSigner = { unlocked: false };
+const mockSignerLock = jest.fn(() => {
+  mockSigner.unlocked = false;
+});
+jest.mock('../../src/services/signerVault', () => ({
+  signerVault: {
+    isUnlocked: () => mockSigner.unlocked,
+    lock: () => mockSignerLock(),
+  },
 }));
 
 let mockAutoLockTimeout = '1min';
@@ -57,6 +70,12 @@ jest.mock('react-native', () => ({
 
 // useAppState 훅 import
 import { useAppState } from '../../src/hooks/useAppState';
+
+beforeEach(() => {
+  mockWalletState.hasWallet = true;
+  mockWalletState.isLocked = false;
+  mockSigner.unlocked = false;
+});
 
 describe('useAppState', () => {
   beforeEach(() => {
@@ -189,5 +208,70 @@ describe('useAppState - Immediate Lock', () => {
 
   it('should be defined', () => {
     expect(useAppState).toBeDefined();
+  });
+});
+
+// 심층 방어: 잠긴 동안 열린 서명 세션 폐기
+describe('useAppState - 잠긴 동안 남은 서명 세션', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    appStateCallback = null;
+    jest.useFakeTimers();
+  });
+  afterEach(() => jest.useRealTimers());
+
+  it('discards a signer session that is open while the wallet is locked', () => {
+    mockWalletState.isLocked = true;
+    renderHook(() => useAppState());
+    expect(mockSignerLock).not.toHaveBeenCalled();
+
+    // 예: 잠금 오버레이 아래에서 PIN 확인 모달이 세션을 연 경우
+    mockSigner.unlocked = true;
+    act(() => {
+      jest.advanceTimersByTime(5_000);
+    });
+    expect(mockSignerLock).toHaveBeenCalledTimes(1);
+    expect(mockSigner.unlocked).toBe(false);
+  });
+
+  it('discards it on return to the foreground using the current store state', () => {
+    mockWalletState.isLocked = true;
+    renderHook(() => useAppState());
+    mockSigner.unlocked = true;
+    act(() => {
+      appStateCallback!('background');
+    });
+    act(() => {
+      appStateCallback!('active');
+    });
+    expect(mockSignerLock).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the session of an unlocked wallet', () => {
+    mockWalletState.isLocked = false;
+    mockSigner.unlocked = true;
+    renderHook(() => useAppState());
+    act(() => {
+      appStateCallback!('background');
+    });
+    act(() => {
+      appStateCallback!('active');
+    });
+    act(() => {
+      jest.advanceTimersByTime(20_000);
+    });
+    expect(mockSignerLock).not.toHaveBeenCalled();
+    expect(mockSigner.unlocked).toBe(true);
+  });
+
+  it('does not act during onboarding (no wallet yet)', () => {
+    mockWalletState.hasWallet = false;
+    mockWalletState.isLocked = true;
+    mockSigner.unlocked = true;
+    renderHook(() => useAppState());
+    act(() => {
+      jest.advanceTimersByTime(20_000);
+    });
+    expect(mockSignerLock).not.toHaveBeenCalled();
   });
 });

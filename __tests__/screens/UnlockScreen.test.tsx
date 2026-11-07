@@ -14,7 +14,11 @@ import {
 import UnlockScreen from '../../src/screens/Auth/UnlockScreen';
 import { ThemeProvider } from 'styled-components/native';
 import { lightTheme } from '../../src/styles/theme';
-import { Alert, AppState, AppStateStatus } from 'react-native';
+import { Alert, AppState, AppStateStatus, BackHandler } from 'react-native';
+import {
+  UnlockBackHandlerContext,
+  type UnlockBackHandlerRef,
+} from '../../src/screens/Auth/unlockBackHandler';
 import {
   PinLockedError,
   pinAttemptService,
@@ -425,6 +429,100 @@ describe('UnlockScreen', () => {
       );
       fireEvent.press(view.getByTestId('forgot-pin-cancel'));
       expect(view.getByTestId('unlock-key-1')).toBeTruthy();
+    });
+  });
+
+  describe('하드웨어 뒤로 가기 (Android)', () => {
+    let backHandlers: Array<() => boolean | null | undefined>;
+
+    beforeEach(() => {
+      backHandlers = [];
+      jest
+        .spyOn(BackHandler, 'addEventListener')
+        .mockImplementation((_event, handler) => {
+          backHandlers.push(handler);
+          return {
+            remove: () => {
+              backHandlers = backHandlers.filter(item => item !== handler);
+            },
+          };
+        });
+    });
+
+    afterEach(() => {
+      (BackHandler.addEventListener as jest.Mock).mockRestore();
+    });
+
+    const pressBack = () => {
+      let handled = false;
+      act(() => {
+        // BackHandler는 마지막에 등록된 처리기부터 호출한다.
+        for (const handler of [...backHandlers].reverse()) {
+          if (handler()) {
+            handled = true;
+            break;
+          }
+        }
+      });
+      return handled;
+    };
+
+    it('returns from the forgot-PIN panel to PIN entry and consumes the press', () => {
+      const view = renderWithTheme(<UnlockScreen />);
+      // PIN 입력 화면에서는 가로채지 않는다 (콜드 스타트 기본 동작 유지).
+      expect(backHandlers).toHaveLength(0);
+
+      fireEvent.press(view.getByTestId('unlock-forgot-pin'));
+      expect(view.getByTestId('forgot-pin-panel')).toBeTruthy();
+
+      expect(pressBack()).toBe(true);
+      expect(view.queryByTestId('forgot-pin-panel')).toBeNull();
+      expect(view.getByTestId('unlock-key-1')).toBeTruthy();
+      expect(backHandlers).toHaveLength(0);
+    });
+
+    it('ignores back while the wallet reset is running', async () => {
+      let finishReset!: () => void;
+      mockWalletReset.mockReturnValue(
+        new Promise<void>(resolve => {
+          finishReset = resolve;
+        }),
+      );
+      const view = renderWithTheme(<UnlockScreen />);
+      fireEvent.press(view.getByTestId('unlock-forgot-pin'));
+      fireEvent.changeText(
+        view.getByTestId('forgot-pin-confirm-input'),
+        '초기화',
+      );
+      fireEvent.press(view.getByTestId('forgot-pin-reset'));
+
+      expect(pressBack()).toBe(true);
+      expect(view.getByTestId('forgot-pin-panel')).toBeTruthy();
+
+      await act(async () => {
+        finishReset();
+      });
+    });
+
+    it('handles the lock overlay Modal back press through the overlay context', () => {
+      const overlayBack: UnlockBackHandlerRef = { current: null };
+      const view = renderWithTheme(
+        <UnlockBackHandlerContext.Provider value={overlayBack}>
+          <UnlockScreen />
+        </UnlockBackHandlerContext.Provider>,
+      );
+      expect(overlayBack.current).toBeNull();
+
+      fireEvent.press(view.getByTestId('unlock-forgot-pin'));
+      expect(overlayBack.current).toEqual(expect.any(Function));
+
+      let handled: boolean | undefined;
+      act(() => {
+        handled = overlayBack.current?.();
+      });
+      expect(handled).toBe(true);
+      expect(view.queryByTestId('forgot-pin-panel')).toBeNull();
+      expect(overlayBack.current).toBeNull();
     });
   });
 

@@ -9,8 +9,29 @@ import { useWalletStore } from '@/store/walletStore';
 import { useSecurityStore, AUTO_LOCK_OPTIONS } from '@/store/securityStore';
 import { createLogger } from '@/utils/logger';
 import { onboardingVault } from '@/services/onboardingVault';
+import { signerVault } from '@/services/signerVault';
 
 const logger = createLogger('AppState');
+
+/** 잠긴 동안 남아 있는 서명 세션을 확인하는 주기 */
+const STRAY_SESSION_CHECK_MS = 5_000;
+
+/**
+ * 심층 방어: 지갑이 잠겨 있는데 서명 세션이 열려 있으면 폐기한다.
+ * 잠금은 항상 signerVault.lock()과 함께 일어나므로 정상 흐름에서는 세션이 없다.
+ * 잠금 화면의 인증은 세션 시작과 unlock()을 같은 작업 안에서 연달아 실행하므로
+ * 이 확인(타이머/앱 상태 이벤트)이 그 사이에 끼어들지 않는다. 렌더링 시점의 값이 아닌
+ * 스토어의 현재 값을 읽는다.
+ */
+export function discardStraySignerSession(): boolean {
+  const { hasWallet, isLocked } = useWalletStore.getState();
+  if (!hasWallet || isLocked === false || !signerVault.isUnlocked()) {
+    return false;
+  }
+  signerVault.lock();
+  logger.warn('Discarded a signer session that was open while locked');
+  return true;
+}
 
 export function useAppState() {
   const appState = useRef<AppStateStatus>(AppState.currentState);
@@ -65,6 +86,7 @@ export function useAppState() {
         (previousState === 'background' || previousState === 'inactive')
       ) {
         logger.info('App came to foreground');
+        discardStraySignerSession();
 
         if (hasWallet && !isLocked && backgroundTime.current) {
           const timeInBackground = Date.now() - backgroundTime.current;
@@ -111,6 +133,17 @@ export function useAppState() {
 
     return () => clearInterval(interval);
   }, [autoLockTimeout, hasWallet, isLocked, lock, shouldAutoLock]);
+
+  // 잠긴 동안: 어떤 경로로든 열린 서명 세션을 주기적으로 폐기한다.
+  useEffect(() => {
+    if (!hasWallet || !isLocked) return;
+    discardStraySignerSession();
+    const interval = setInterval(
+      discardStraySignerSession,
+      STRAY_SESSION_CHECK_MS,
+    );
+    return () => clearInterval(interval);
+  }, [hasWallet, isLocked]);
 
   // 사용자 활동 시 호출할 함수
   const trackUserActivity = useCallback(() => {
