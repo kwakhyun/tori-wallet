@@ -302,3 +302,9 @@ console.warn = (...args) => {
 
 // Global test timeout
 jest.setTimeout(30000);
+
+// react-native-safe-area-context: 공식 jest 목 (Provider 없이도 기본 inset 제공)
+jest.mock(
+  'react-native-safe-area-context',
+  () => require('react-native-safe-area-context/jest/mock').default,
+);

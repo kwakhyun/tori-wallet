@@ -3,6 +3,7 @@
  */
 
 import React, { useState, useCallback, useEffect, useMemo } from 'react';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { useShallow } from 'zustand/react/shallow';
 import {
   StatusBar,
@@ -873,7 +874,7 @@ const Container = styled.View`
   background-color: ${({ theme }) => theme.colors.background};
 `;
 
-const SafeContainer = styled.SafeAreaView`
+const SafeContainer = styled(SafeAreaView)`
   flex: 1;
 `;
 
@@ -1196,7 +1197,7 @@ const DisclaimerText = styled.Text`
 `;
 
 // Modal Styles
-const ModalContainer = styled.SafeAreaView`
+const ModalContainer = styled(SafeAreaView)`
   flex: 1;
   background-color: ${({ theme }) => theme.colors.background};
 `;

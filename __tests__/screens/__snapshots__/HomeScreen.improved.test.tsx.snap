@@ -4,7 +4,7 @@ exports[`HomeScreen - Snapshot should match snapshot 1`] = `
 <RNCSafeAreaView
   edges={
     {
-      "bottom": "additive",
+      "bottom": "off",
       "left": "additive",
       "right": "additive",
       "top": "additive",
@@ -1385,7 +1385,7 @@ exports[`HomeScreen - Snapshot should match snapshot in loading state 1`] = `
 <RNCSafeAreaView
   edges={
     {
-      "bottom": "additive",
+      "bottom": "off",
       "left": "additive",
       "right": "additive",
       "top": "additive",

@@ -118,15 +118,24 @@ describe('BuyService', () => {
   });
 
   describe('openBuyUrl', () => {
-    it('should open URL when can open', async () => {
-      (Linking.canOpenURL as jest.Mock).mockResolvedValue(true);
+    it('should open URL directly without canOpenURL (Android 11+ visibility)', async () => {
       (Linking.openURL as jest.Mock).mockResolvedValue(undefined);
 
       await openBuyUrl('moonpay', 'ETH');
 
-      expect(Linking.canOpenURL).toHaveBeenCalled();
+      expect(Linking.canOpenURL).not.toHaveBeenCalled();
       expect(Linking.openURL).toHaveBeenCalledWith(
         expect.stringContaining('moonpay'),
+      );
+    });
+
+    it('should request the L2 asset code for the active chain', async () => {
+      (Linking.openURL as jest.Mock).mockResolvedValue(undefined);
+
+      await openBuyUrl('moonpay', 'ETH', undefined, 42161);
+
+      expect(Linking.openURL).toHaveBeenCalledWith(
+        expect.stringContaining('currencyCode=eth_arbitrum'),
       );
     });
 
@@ -142,8 +151,10 @@ describe('BuyService', () => {
       );
     });
 
-    it('should show alert when cannot open URL', async () => {
-      (Linking.canOpenURL as jest.Mock).mockResolvedValue(false);
+    it('should show alert when opening the URL fails', async () => {
+      (Linking.openURL as jest.Mock).mockRejectedValue(
+        new Error('No activity'),
+      );
 
       await openBuyUrl('moonpay', 'ETH');
 
@@ -154,7 +165,7 @@ describe('BuyService', () => {
     });
 
     it('should show alert on error', async () => {
-      (Linking.canOpenURL as jest.Mock).mockRejectedValue(
+      (Linking.openURL as jest.Mock).mockRejectedValue(
         new Error('Network error'),
       );
 
@@ -173,7 +184,7 @@ describe('BuyService', () => {
 
       expect(Alert.alert).toHaveBeenCalledWith(
         'ETH 구매',
-        '구매할 서비스를 선택하세요',
+        expect.stringContaining('외부 결제 서비스'),
         expect.arrayContaining([
           expect.objectContaining({ text: 'MoonPay' }),
           expect.objectContaining({ text: 'Banxa' }),
@@ -194,6 +205,15 @@ describe('BuyService', () => {
       cancelButton.onPress();
 
       expect(onCancel).toHaveBeenCalled();
+    });
+
+    it('should explain that testnets cannot be bought', () => {
+      showBuyProviderAlert('ETH', undefined, undefined, 11155111);
+
+      expect(Alert.alert).toHaveBeenCalledWith(
+        '테스트넷에서는 구매할 수 없습니다',
+        expect.any(String),
+      );
     });
 
     it('should pass wallet address to provider', () => {
@@ -218,7 +238,9 @@ describe('BuyService', () => {
 
       await moonpayButton.onPress();
 
-      expect(Linking.canOpenURL).toHaveBeenCalled();
+      expect(Linking.openURL).toHaveBeenCalledWith(
+        expect.stringContaining('moonpay'),
+      );
     });
 
     it('should call openBuyUrl with banxa when Banxa is pressed', async () => {
@@ -236,7 +258,9 @@ describe('BuyService', () => {
 
       await banxaButton.onPress();
 
-      expect(Linking.canOpenURL).toHaveBeenCalled();
+      expect(Linking.openURL).toHaveBeenCalledWith(
+        expect.stringContaining('banxa'),
+      );
     });
   });
 

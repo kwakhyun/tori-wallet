@@ -3,11 +3,11 @@
  */
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import styled from 'styled-components/native';
 import { useShallow } from 'zustand/react/shallow';
 import { useTheme } from '@/hooks/useTheme';
 import {
-  SafeAreaView,
   StatusBar,
   FlatList,
   RefreshControl,
@@ -117,8 +117,7 @@ function PortfolioScreen(): React.JSX.Element {
       );
 
       const alloc = portfolioAnalyticsService.calculateAllocation(tokens);
-      const perfData =
-        portfolioAnalyticsService.calculatePerformance(tokens);
+      const perfData = portfolioAnalyticsService.calculatePerformance(tokens);
       const days = timeRange === '7d' ? 7 : timeRange === '30d' ? 30 : 90;
 
       // 서로 의존하지 않는 저장소 조회는 병렬 실행
@@ -156,38 +155,41 @@ function PortfolioScreen(): React.JSX.Element {
     };
   }, [loadAnalytics]);
 
-  const renderToken = useCallback(({ item }: { item: Token }) => (
-    <TokenItem>
-      {item.logoUrl ? (
-        <TokenLogo source={{ uri: item.logoUrl }} />
-      ) : (
-        <TokenLogoPlaceholder>
-          <TokenLogoText>{item.symbol.charAt(0)}</TokenLogoText>
-        </TokenLogoPlaceholder>
-      )}
+  const renderToken = useCallback(
+    ({ item }: { item: Token }) => (
+      <TokenItem>
+        {item.logoUrl ? (
+          <TokenLogo source={{ uri: item.logoUrl }} />
+        ) : (
+          <TokenLogoPlaceholder>
+            <TokenLogoText>{item.symbol.charAt(0)}</TokenLogoText>
+          </TokenLogoPlaceholder>
+        )}
 
-      <TokenInfo>
-        <TokenRow>
-          <TokenName>{item.name}</TokenName>
-          <TokenBalance>
-            {item.balance} {item.symbol}
-          </TokenBalance>
-        </TokenRow>
+        <TokenInfo>
+          <TokenRow>
+            <TokenName>{item.name}</TokenName>
+            <TokenBalance>
+              {item.balance} {item.symbol}
+            </TokenBalance>
+          </TokenRow>
 
-        <TokenRow>
-          <PriceRow>
-            <TokenSymbol>{formatUSD(item.price)}</TokenSymbol>
-            {item.priceChange24h !== 0 && (
-              <TokenPriceChange $positive={item.priceChange24h > 0}>
-                {formatChange(item.priceChange24h)}
-              </TokenPriceChange>
-            )}
-          </PriceRow>
-          <TokenValue>{formatUSD(item.value)}</TokenValue>
-        </TokenRow>
-      </TokenInfo>
-    </TokenItem>
-  ), []);
+          <TokenRow>
+            <PriceRow>
+              <TokenSymbol>{formatUSD(item.price)}</TokenSymbol>
+              {item.priceChange24h !== 0 && (
+                <TokenPriceChange $positive={item.priceChange24h > 0}>
+                  {formatChange(item.priceChange24h)}
+                </TokenPriceChange>
+              )}
+            </PriceRow>
+            <TokenValue>{formatUSD(item.value)}</TokenValue>
+          </TokenRow>
+        </TokenInfo>
+      </TokenItem>
+    ),
+    [],
+  );
 
   const renderOverview = () => (
     <ScrollView showsVerticalScrollIndicator={false}>
@@ -394,7 +396,9 @@ function PortfolioScreen(): React.JSX.Element {
 }
 
 // Styled Components
-const Container = styled(SafeAreaView)`
+const Container = styled(SafeAreaView).attrs({
+  edges: ['top', 'left', 'right'],
+})`
   flex: 1;
   background-color: ${({ theme }) => theme.colors.background};
 `;

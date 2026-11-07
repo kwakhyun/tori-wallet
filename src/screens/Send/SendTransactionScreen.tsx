@@ -3,11 +3,11 @@
  */
 
 import React, { useState, useCallback, useEffect, useRef } from 'react';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import styled from 'styled-components/native';
 import { useShallow } from 'zustand/react/shallow';
 import { useTheme } from '@/hooks/useTheme';
 import {
-  SafeAreaView,
   StatusBar,
   ScrollView,
   Alert,
@@ -31,6 +31,7 @@ import { transferService, TransferPlan } from '@/services/transferService';
 import { transactionTracker } from '@/services/transactionTracker';
 import { transactionCacheService } from '@/realm/services';
 import { QRScanner } from '@/components/common';
+import { recipientOf, type ScanResult } from '@/utils/paymentUri';
 import PinConfirmModal from '@/components/common/PinConfirmModal';
 import AddressBookScreen from '@/screens/Settings/AddressBookScreen';
 
@@ -157,8 +158,9 @@ function SendTransactionScreen(): React.JSX.Element {
   }, []);
 
   // QR 코드 스캔 결과 처리
-  const handleQRScan = useCallback((address: string) => {
-    if (txService.validateAddress(address)) {
+  const handleQRScan = useCallback((result: ScanResult) => {
+    const address = recipientOf(result);
+    if (address && txService.validateAddress(address)) {
       setToAddress(address);
     } else {
       Alert.alert('오류', '유효하지 않은 지갑 주소입니다.');

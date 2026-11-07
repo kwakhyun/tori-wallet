@@ -7,3 +7,4 @@ export { useBalance, useTokenBalance, useMultipleBalances } from './useBalance';
 export { useDebounce } from './useDebounce';
 export { useAppState } from './useAppState';
 export { useTheme, themeUtils } from './useTheme';
+export { useFiat } from './useFiat';

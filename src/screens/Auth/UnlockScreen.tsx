@@ -3,15 +3,11 @@
  */
 
 import React, { useState, useCallback, useEffect } from 'react';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import styled from 'styled-components/native';
 import { useShallow } from 'zustand/react/shallow';
 import { useTheme } from '@/hooks/useTheme';
-import {
-  SafeAreaView,
-  StatusBar,
-  Alert,
-  ActivityIndicator,
-} from 'react-native';
+import { StatusBar, Alert, ActivityIndicator } from 'react-native';
 import { useWalletStore } from '@/store/walletStore';
 import { walletService } from '@/services/walletService';
 import { useAuthentication } from '@/hooks/useAuthentication';

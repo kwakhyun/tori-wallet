@@ -3,10 +3,11 @@
  */
 
 import React, { useState, useCallback, useRef, useEffect } from 'react';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import styled from 'styled-components/native';
 import { useShallow } from 'zustand/react/shallow';
 import { useTheme } from '@/hooks/useTheme';
-import { SafeAreaView, StatusBar, Alert, Vibration } from 'react-native';
+import { StatusBar, Alert, Vibration } from 'react-native';
 import { CommonActions, useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import type { AuthStackParamList } from '@/navigation/AuthNavigator';

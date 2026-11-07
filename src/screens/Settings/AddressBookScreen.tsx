@@ -3,11 +3,11 @@
  */
 
 import React, { useState, useCallback, useEffect } from 'react';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import styled from 'styled-components/native';
 import { useShallow } from 'zustand/react/shallow';
 import { useTheme } from '@/hooks/useTheme';
 import {
-  SafeAreaView,
   StatusBar,
   FlatList,
   Alert,
@@ -44,13 +44,12 @@ export function AddressBookScreen({
   const { favorites } = useFavoriteAddresses();
 
   // 최근 주소는 여전히 Zustand에서 관리 (간단한 리스트이므로)
-  const { recentAddresses, addressBook: legacyAddressBook } =
-    useSecurityStore(
-      useShallow(state => ({
-        recentAddresses: state.recentAddresses,
-        addressBook: state.addressBook,
-      })),
-    );
+  const { recentAddresses, addressBook: legacyAddressBook } = useSecurityStore(
+    useShallow(state => ({
+      recentAddresses: state.recentAddresses,
+      addressBook: state.addressBook,
+    })),
+  );
 
   // 레거시 데이터 마이그레이션 (최초 1회)
   const [hasMigrated, setHasMigrated] = useState(false);

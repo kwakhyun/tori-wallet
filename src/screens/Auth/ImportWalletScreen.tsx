@@ -3,10 +3,10 @@
  */
 
 import React, { useState, useCallback, useRef, useMemo } from 'react';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import styled from 'styled-components/native';
 import { useTheme } from '@/hooks/useTheme';
 import {
-  SafeAreaView,
   StatusBar,
   ScrollView,
   Alert,

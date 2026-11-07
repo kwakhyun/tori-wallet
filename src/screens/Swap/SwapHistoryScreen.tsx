@@ -3,6 +3,7 @@
  */
 
 import React, { useCallback, useMemo } from 'react';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { FlatList, StyleSheet } from 'react-native';
 import styled, { useTheme } from 'styled-components/native';
 import { useNavigation } from '@react-navigation/native';
@@ -180,7 +181,7 @@ function SwapHistoryScreen(): React.JSX.Element {
 }
 
 // Styled Components
-const Container = styled.SafeAreaView`
+const Container = styled(SafeAreaView)`
   flex: 1;
   background-color: ${({ theme }) => theme.colors.background};
 `;

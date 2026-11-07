@@ -40,7 +40,10 @@ jest.mock('../../src/screens/Auth/ImportWalletScreen', () => () => null);
 jest.mock('../../src/screens/Auth/BackupMnemonicScreen', () => () => null);
 jest.mock('../../src/screens/Auth/VerifyMnemonicScreen', () => () => null);
 jest.mock('../../src/screens/Auth/SetPinScreen', () => () => null);
-jest.mock('../../src/screens/Auth/UnlockScreen', () => () => null);
+jest.mock('../../src/screens/Auth/UnlockScreen', () => {
+  const { Text } = require('react-native');
+  return () => <Text testID="unlock-screen-mock">unlock</Text>;
+});
 jest.mock('../../src/screens/Home/HomeScreen', () => () => null);
 jest.mock('../../src/screens/Explore/ExploreScreen', () => () => null);
 jest.mock('../../src/screens/Portfolio/PortfolioScreen', () => () => null);
@@ -155,5 +158,38 @@ describe('RootNavigator', () => {
 
   it('should be a valid component', () => {
     expect(typeof RootNavigator).toBe('function');
+  });
+
+  it('covers the main stack with a lock overlay after an auto-lock instead of unmounting it', () => {
+    mockWalletStore.hasWallet = true;
+    mockWalletStore.isLocked = false;
+
+    const view = render(
+      <Wrapper>
+        <RootNavigator />
+      </Wrapper>,
+    );
+    expect(view.queryByTestId('lock-overlay')).toBeNull();
+
+    mockWalletStore.isLocked = true;
+    view.rerender(
+      <Wrapper>
+        <RootNavigator />
+      </Wrapper>,
+    );
+    expect(view.getByTestId('lock-overlay')).toBeTruthy();
+    expect(view.getByTestId('unlock-screen-mock')).toBeTruthy();
+  });
+
+  it('shows the plain unlock screen (no overlay) on a cold start', () => {
+    mockWalletStore.hasWallet = true;
+    mockWalletStore.isLocked = true;
+
+    const view = render(
+      <Wrapper>
+        <RootNavigator />
+      </Wrapper>,
+    );
+    expect(view.queryByTestId('lock-overlay')).toBeNull();
   });
 });

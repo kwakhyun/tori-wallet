@@ -5,10 +5,10 @@
 
 /* eslint-disable react-native/no-inline-styles */
 import React, { useState, useCallback, useEffect } from 'react';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import styled from 'styled-components/native';
 import { useTheme } from '@/hooks/useTheme';
 import {
-  SafeAreaView,
   StatusBar,
   ScrollView,
   RefreshControl,

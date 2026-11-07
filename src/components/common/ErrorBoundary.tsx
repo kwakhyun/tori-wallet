@@ -3,13 +3,8 @@
  */
 
 import React, { Component, ErrorInfo, ReactNode } from 'react';
-import {
-  View,
-  Text,
-  TouchableOpacity,
-  StyleSheet,
-  SafeAreaView,
-} from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { palette } from '@/styles/theme';
 import { captureException, addErrorBreadcrumb } from '@/utils/errorReporter';
 
@@ -84,8 +79,8 @@ class ErrorBoundary extends Component<Props, State> {
               문제가 발생했습니다
             </Text>
             <Text style={styles.message} testID="error-boundary-message">
-              예상치 못한 오류가 발생했습니다.{'\n'}
-              앱을 다시 시작해 주세요.
+              예상치 못한 오류로 화면을 표시하지 못했습니다.{'\n'}
+              지갑과 자산은 안전하게 보관되어 있습니다.
             </Text>
 
             {__DEV__ && this.state.error && (
@@ -106,13 +101,16 @@ class ErrorBoundary extends Component<Props, State> {
               style={styles.button}
               onPress={this.handleReset}
               testID="error-boundary-retry-button"
+              accessibilityRole="button"
+              accessibilityLabel="다시 시도"
             >
               <Text style={styles.buttonText}>다시 시도</Text>
             </TouchableOpacity>
 
             <Text style={styles.hint}>
-              문제가 계속되면 앱을 삭제 후 다시 설치해 주세요.{'\n'}
-              지갑 복구 구문을 백업했는지 확인하세요.
+              문제가 계속되면 앱을 완전히 종료한 뒤 다시 실행해 주세요.{'\n'}
+              복구 구문을 백업했는지 확인하기 전에는 앱을 삭제하지 마세요.{'\n'}
+              앱을 삭제하면 이 기기에 저장된 지갑이 함께 삭제됩니다.
             </Text>
           </View>
         </SafeAreaView>

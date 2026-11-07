@@ -116,3 +116,30 @@ export function formatPercentage(value: number): string {
   const sign = value >= 0 ? '+' : '';
   return `${sign}${value.toFixed(2)}%`;
 }
+
+/**
+ * 화면 표시용 암호화폐 수량 포맷 (모든 화면에서 같은 규칙 사용)
+ *  - 0 → "0"
+ *  - 0 < x < 0.000001 → "< 0.000001"
+ *  - x < 1 → 최대 6자리 소수
+ *  - x >= 1 → 최대 4자리 소수, 천 단위 구분
+ * 숫자로 해석할 수 없으면 null 대신 '—'를 반환한다.
+ */
+export function formatDisplayAmount(
+  value: number | string | null | undefined,
+): string {
+  if (value === null || value === undefined || value === '') return '—';
+  if (typeof value === 'string' && value.trim().startsWith('<')) {
+    return value.trim();
+  }
+  const num = typeof value === 'string' ? Number(value) : value;
+  if (!Number.isFinite(num)) return '—';
+  if (num === 0) return '0';
+  const abs = Math.abs(num);
+  if (abs < 0.000001) return num < 0 ? '> -0.000001' : '< 0.000001';
+  const maximumFractionDigits = abs < 1 ? 6 : 4;
+  return new Intl.NumberFormat('en-US', {
+    minimumFractionDigits: 0,
+    maximumFractionDigits,
+  }).format(num);
+}

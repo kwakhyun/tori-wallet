@@ -3,11 +3,11 @@
  */
 
 import React, { useCallback, useState, useEffect, useRef } from 'react';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import styled, { ThemeProvider } from 'styled-components/native';
 import { useShallow } from 'zustand/react/shallow';
 import { useTheme } from '@/hooks/useTheme';
 import {
-  SafeAreaView,
   StatusBar,
   Alert,
   ScrollView,
@@ -1066,7 +1066,9 @@ function SettingsScreen(): React.JSX.Element {
   );
 }
 
-const Container = styled(SafeAreaView)`
+const Container = styled(SafeAreaView).attrs({
+  edges: ['top', 'left', 'right'],
+})`
   flex: 1;
   background-color: ${({ theme }) => theme.colors.background};
 `;

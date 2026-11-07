@@ -158,6 +158,29 @@ const darkColors = {
     string,
   ],
   gradientSuccess: [palette.green[500], palette.green[400]] as [string, string],
+
+  // Foreground on filled surfaces (WCAG AA 대비 확보용)
+  onPrimary: palette.white,
+  onSecondary: palette.gray[900],
+  onError: palette.white,
+
+  // Selected / subtle states
+  primarySubtle: 'rgba(99, 102, 241, 0.18)',
+  errorSubtle: 'rgba(239, 68, 68, 0.15)',
+  warningSubtle: 'rgba(245, 158, 11, 0.15)',
+  successSubtle: 'rgba(16, 185, 129, 0.15)',
+
+  // Disabled
+  disabledBackground: '#3F3F5A',
+  disabledText: palette.gray[400],
+
+  // QR 코드는 스캐너 호환을 위해 테마와 무관하게 고대비 고정
+  qrBackground: palette.white,
+  qrForeground: palette.black,
+
+  // Charts
+  chartGrid: '#3F3F5A',
+  chartLabel: palette.gray[400],
 };
 
 // ============================================
@@ -227,12 +250,38 @@ const lightColors = {
     string,
   ],
   gradientSuccess: [palette.green[500], palette.green[400]] as [string, string],
+
+  // Foreground on filled surfaces (WCAG AA 대비 확보용)
+  onPrimary: palette.white,
+  onSecondary: palette.gray[900],
+  onError: palette.white,
+
+  // Selected / subtle states
+  primarySubtle: palette.indigo[50],
+  errorSubtle: palette.red[50],
+  warningSubtle: palette.yellow[50],
+  successSubtle: palette.green[50],
+
+  // Disabled
+  disabledBackground: palette.gray[200],
+  disabledText: palette.gray[500],
+
+  // QR 코드는 스캐너 호환을 위해 테마와 무관하게 고대비 고정
+  qrBackground: palette.white,
+  qrForeground: palette.black,
+
+  // Charts
+  chartGrid: palette.gray[200],
+  chartLabel: palette.gray[600],
 };
 
 // ============================================
 // 공통 테마 속성
 // ============================================
 const sharedTheme = {
+  // 최소 터치 영역 (Apple HIG 44pt / Material 48dp)
+  touchTarget: 44,
+
   spacing: {
     xs: 4,
     sm: 8,

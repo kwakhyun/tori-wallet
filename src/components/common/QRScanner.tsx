@@ -1,16 +1,15 @@
 /**
  * QR 코드 스캔 컴포넌트
+ *
+ * 스캔 결과를 parseScannedCode로 해석해 전달한다. EIP-681 토큰 요청의
+ * 수신자/수량/체인을 보존하고, 허용되지 않는 QR은 스캐너를 닫지 않고
+ * 화면 안에서 안내한 뒤 다시 스캔할 수 있게 한다.
  */
 
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import styled from 'styled-components/native';
-import {
-  Modal,
-  Alert,
-  Linking,
-  Platform,
-  ActivityIndicator,
-} from 'react-native';
+import { Modal, Linking, ActivityIndicator } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
   Camera,
   useCameraDevice,
@@ -18,89 +17,104 @@ import {
   useCodeScanner,
 } from 'react-native-vision-camera';
 import { palette } from '@/styles/theme';
+import { errorFeedback, successFeedback } from '@/utils/haptics';
+import {
+  parseScannedCode,
+  isAcceptedForMode,
+  type ScanMode,
+  type ScanResult,
+} from '@/utils/paymentUri';
 
 interface Props {
   visible: boolean;
   onClose: () => void;
-  onScan: (data: string) => void;
+  onScan: (result: ScanResult) => void;
   title?: string;
+  /** 'address': 주소/결제 요청, 'walletconnect': wc: URI, 'any': 모두 */
+  mode?: ScanMode;
+  hint?: string;
 }
+
+const MODE_ERROR: Record<ScanMode, string> = {
+  address: '지갑 주소나 결제 요청 QR이 아닙니다.',
+  walletconnect:
+    'WalletConnect 연결 QR이 아닙니다. dApp의 연결 QR을 스캔해주세요.',
+  any: '인식할 수 없는 QR 코드입니다.',
+};
+
+const MODE_HINT: Record<ScanMode, string> = {
+  address: '지갑 주소 또는 결제 요청 QR 코드를 스캔하세요',
+  walletconnect: 'dApp 화면의 WalletConnect QR 코드를 스캔하세요',
+  any: 'QR 코드를 스캔하세요',
+};
+
+type PermissionState = 'unknown' | 'requesting' | 'denied';
 
 export function QRScanner({
   visible,
   onClose,
   onScan,
   title = 'QR 코드 스캔',
+  mode = 'address',
+  hint,
 }: Props) {
   const device = useCameraDevice('back');
   const { hasPermission, requestPermission } = useCameraPermission();
+  const insets = useSafeAreaInsets();
   const [isActive, setIsActive] = useState(false);
-  const [hasScanned, setHasScanned] = useState(false);
+  const [torch, setTorch] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [permissionState, setPermissionState] =
+    useState<PermissionState>('unknown');
+  const handledRef = useRef(false);
+  const lastRejectedRef = useRef<string | null>(null);
 
-  // 권한 요청
+  const askPermission = useCallback(async () => {
+    setPermissionState('requesting');
+    const granted = await requestPermission();
+    // 사용자가 영구 거부한 경우 requestPermission은 즉시 false를 반환한다.
+    setPermissionState(granted ? 'unknown' : 'denied');
+  }, [requestPermission]);
+
   useEffect(() => {
-    if (visible && !hasPermission) {
-      requestPermission().then(granted => {
-        if (!granted) {
-          Alert.alert(
-            '카메라 권한 필요',
-            'QR 코드를 스캔하려면 카메라 권한이 필요합니다. 설정에서 권한을 허용해주세요.',
-            [
-              { text: '취소', onPress: onClose, style: 'cancel' },
-              {
-                text: '설정으로 이동',
-                onPress: () => {
-                  Linking.openSettings();
-                  onClose();
-                },
-              },
-            ],
-          );
-        }
-      });
+    if (visible && !hasPermission && permissionState === 'unknown') {
+      askPermission();
     }
-  }, [visible, hasPermission, requestPermission, onClose]);
+  }, [visible, hasPermission, permissionState, askPermission]);
 
-  // 모달 열림/닫힘에 따라 카메라 활성화
   useEffect(() => {
     if (visible && hasPermission) {
       setIsActive(true);
-      setHasScanned(false);
+      handledRef.current = false;
+      lastRejectedRef.current = null;
+      setError(null);
     } else {
       setIsActive(false);
+      setTorch(false);
     }
+    if (!visible) setPermissionState('unknown');
   }, [visible, hasPermission]);
 
-  // QR 코드 스캔 핸들러
   const codeScanner = useCodeScanner({
     codeTypes: ['qr'],
     onCodeScanned: codes => {
-      if (hasScanned) return;
+      if (handledRef.current) return;
+      const value = codes.find(code => code.type === 'qr')?.value;
+      if (!value || value === lastRejectedRef.current) return;
 
-      const qrCode = codes.find(code => code.type === 'qr');
-      if (qrCode?.value) {
-        setHasScanned(true);
-
-        // 이더리움 주소 추출 (EIP-681 형식 지원)
-        let address = qrCode.value;
-
-        // ethereum:0x... 형식 파싱
-        if (address.startsWith('ethereum:')) {
-          const match = address.match(/ethereum:(0x[a-fA-F0-9]{40})/);
-          if (match) {
-            address = match[1];
-          }
-        }
-
-        // 0x로 시작하는 주소만 추출
-        const addressMatch = address.match(/0x[a-fA-F0-9]{40}/);
-        if (addressMatch) {
-          address = addressMatch[0];
-        }
-
-        onScan(address);
-        onClose();
+      const result = parseScannedCode(value);
+      if (!isAcceptedForMode(result, mode)) {
+        lastRejectedRef.current = value;
+        errorFeedback();
+        setError(result.kind === 'invalid' ? result.reason : MODE_ERROR[mode]);
+        return;
       }
+
+      handledRef.current = true;
+      successFeedback();
+      setIsActive(false);
+      onScan(result);
+      onClose();
     },
   });
 
@@ -111,6 +125,30 @@ export function QRScanner({
 
   if (!visible) return null;
 
+  const renderPermission = () => (
+    <PermissionContainer testID="qr-scanner-permission-container">
+      <PermissionIcon importantForAccessibility="no">📷</PermissionIcon>
+      <PermissionText>
+        {permissionState === 'denied'
+          ? '카메라 권한이 거부되어 있습니다.\n설정에서 카메라 접근을 허용해주세요.'
+          : 'QR 코드를 스캔하려면 카메라 권한이 필요합니다.'}
+      </PermissionText>
+      <PermissionButton
+        onPress={() =>
+          permissionState === 'denied'
+            ? Linking.openSettings()
+            : askPermission()
+        }
+        accessibilityRole="button"
+        testID="qr-scanner-permission-button"
+      >
+        <PermissionButtonText>
+          {permissionState === 'denied' ? '설정 열기' : '권한 요청'}
+        </PermissionButtonText>
+      </PermissionButton>
+    </PermissionContainer>
+  );
+
   return (
     <Modal
       visible={visible}
@@ -119,26 +157,39 @@ export function QRScanner({
       onRequestClose={handleClose}
     >
       <Container testID="qr-scanner-container">
-        <Header>
-          <CloseButton onPress={handleClose} testID="qr-scanner-close">
-            <CloseButtonText>✕</CloseButtonText>
+        <Header style={{ paddingTop: insets.top + 8 }}>
+          <CloseButton
+            onPress={handleClose}
+            testID="qr-scanner-close"
+            accessibilityRole="button"
+            accessibilityLabel="스캐너 닫기"
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+          >
+            <CloseButtonText importantForAccessibility="no">✕</CloseButtonText>
           </CloseButton>
-          <HeaderTitle testID="qr-scanner-title">{title}</HeaderTitle>
-          <Placeholder />
+          <HeaderTitle testID="qr-scanner-title" accessibilityRole="header">
+            {title}
+          </HeaderTitle>
+          {hasPermission && device?.hasTorch ? (
+            <CloseButton
+              onPress={() => setTorch(value => !value)}
+              accessibilityRole="switch"
+              accessibilityLabel="손전등"
+              accessibilityState={{ checked: torch }}
+              testID="qr-scanner-torch"
+            >
+              <CloseButtonText importantForAccessibility="no">
+                {torch ? '🔦' : '💡'}
+              </CloseButtonText>
+            </CloseButton>
+          ) : (
+            <Placeholder />
+          )}
         </Header>
 
         <CameraContainer testID="qr-scanner-camera-container">
           {!hasPermission ? (
-            <PermissionContainer testID="qr-scanner-permission-container">
-              <PermissionIcon>📷</PermissionIcon>
-              <PermissionText>카메라 권한을 허용해주세요</PermissionText>
-              <PermissionButton
-                onPress={requestPermission}
-                testID="qr-scanner-permission-button"
-              >
-                <PermissionButtonText>권한 요청</PermissionButtonText>
-              </PermissionButton>
-            </PermissionContainer>
+            renderPermission()
           ) : !device ? (
             <LoadingContainer testID="qr-scanner-loading">
               <ActivityIndicator size="large" color={palette.indigo[500]} />
@@ -150,12 +201,13 @@ export function QRScanner({
                 device={device}
                 isActive={isActive}
                 codeScanner={codeScanner}
+                torch={torch ? 'on' : 'off'}
               />
-              <ScanOverlay>
+              <ScanOverlay pointerEvents="box-none">
                 <OverlayTop />
                 <MiddleRow>
                   <OverlaySide />
-                  <ScanFrame>
+                  <ScanFrame $error={!!error}>
                     <CornerTL />
                     <CornerTR />
                     <CornerBL />
@@ -164,15 +216,37 @@ export function QRScanner({
                   <OverlaySide />
                 </MiddleRow>
                 <OverlayBottom>
-                  <ScanHintText>QR 코드를 프레임 안에 맞춰주세요</ScanHintText>
+                  {error ? (
+                    <ErrorBox
+                      accessibilityRole="alert"
+                      accessibilityLiveRegion="assertive"
+                      testID="qr-scanner-error"
+                    >
+                      <ErrorText>{error}</ErrorText>
+                      <RetryLink
+                        onPress={() => {
+                          setError(null);
+                          lastRejectedRef.current = null;
+                        }}
+                        accessibilityRole="button"
+                        testID="qr-scanner-retry"
+                      >
+                        <RetryLinkText>다시 스캔</RetryLinkText>
+                      </RetryLink>
+                    </ErrorBox>
+                  ) : (
+                    <ScanHintText>
+                      QR 코드를 프레임 안에 맞춰주세요
+                    </ScanHintText>
+                  )}
                 </OverlayBottom>
               </ScanOverlay>
             </>
           )}
         </CameraContainer>
 
-        <Footer>
-          <FooterText>지갑 주소가 포함된 QR 코드를 스캔하세요</FooterText>
+        <Footer style={{ paddingBottom: insets.bottom + 16 }}>
+          <FooterText>{hint ?? MODE_HINT[mode]}</FooterText>
         </Footer>
       </Container>
     </Modal>
@@ -188,15 +262,14 @@ const Header = styled.View`
   flex-direction: row;
   align-items: center;
   justify-content: space-between;
-  padding: ${({ theme }) => theme.spacing.lg}px;
-  padding-top: ${Platform.OS === 'ios' ? 60 : 16}px;
+  padding: ${({ theme }) => theme.spacing.md}px;
   background-color: rgba(0, 0, 0, 0.8);
 `;
 
 const CloseButton = styled.TouchableOpacity`
-  width: 40px;
-  height: 40px;
-  border-radius: 20px;
+  width: 44px;
+  height: 44px;
+  border-radius: 22px;
   background-color: rgba(255, 255, 255, 0.2);
   align-items: center;
   justify-content: center;
@@ -293,10 +366,12 @@ const OverlaySide = styled.View`
   background-color: rgba(0, 0, 0, 0.6);
 `;
 
-const ScanFrame = styled.View`
+const ScanFrame = styled.View<{ $error?: boolean }>`
   width: 250px;
   height: 250px;
   position: relative;
+  border-width: ${({ $error }) => ($error ? 2 : 0)}px;
+  border-color: ${palette.red[500]};
 `;
 
 const CornerBase = styled.View`
@@ -343,6 +418,36 @@ const OverlayBottom = styled.View`
   background-color: rgba(0, 0, 0, 0.6);
   align-items: center;
   padding-top: 24px;
+  padding-horizontal: 24px;
+`;
+
+const ErrorBox = styled.View`
+  align-items: center;
+  padding: 12px 16px;
+  border-radius: 12px;
+  background-color: rgba(239, 68, 68, 0.9);
+`;
+
+const ErrorText = styled.Text`
+  color: ${palette.white};
+  font-size: 14px;
+  font-weight: 600;
+  text-align: center;
+  line-height: 20px;
+`;
+
+const RetryLink = styled.TouchableOpacity`
+  margin-top: 8px;
+  min-height: 36px;
+  padding: 8px 16px;
+  justify-content: center;
+`;
+
+const RetryLinkText = styled.Text`
+  color: ${palette.white};
+  font-size: 14px;
+  font-weight: 700;
+  text-decoration-line: underline;
 `;
 
 const ScanHintText = styled.Text`
@@ -352,7 +457,6 @@ const ScanHintText = styled.Text`
 
 const Footer = styled.View`
   padding: ${({ theme }) => theme.spacing.lg}px;
-  padding-bottom: ${Platform.OS === 'ios' ? 40 : 24}px;
   background-color: rgba(0, 0, 0, 0.8);
   align-items: center;
 `;

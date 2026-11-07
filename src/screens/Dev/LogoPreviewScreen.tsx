@@ -5,6 +5,7 @@
 
 /* eslint-disable react-native/no-inline-styles */
 import React from 'react';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { ScrollView, StyleSheet } from 'react-native';
 import styled from 'styled-components/native';
 import {
@@ -126,7 +127,7 @@ const styles = StyleSheet.create({
   },
 });
 
-const Container = styled.SafeAreaView`
+const Container = styled(SafeAreaView)`
   flex: 1;
   background-color: ${({ theme }) => theme.colors.background};
 `;

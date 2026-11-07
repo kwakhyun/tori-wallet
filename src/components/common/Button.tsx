@@ -43,14 +43,20 @@ export function Button({
       {loading ? (
         <ActivityIndicator
           color={
-            variant === 'primary' || variant === 'secondary'
-              ? '#FFFFFF'
+            variant === 'primary'
+              ? theme.colors.onPrimary
+              : variant === 'secondary'
+              ? theme.colors.onSecondary
               : theme.colors.primary
           }
           size="small"
         />
       ) : (
-        <ButtonText $variant={variant} $size={size}>
+        <ButtonText
+          $variant={variant}
+          $size={size}
+          $disabled={disabled || loading}
+        >
           {title}
         </ButtonText>
       )}
@@ -112,26 +118,37 @@ const StyledButton = styled.TouchableOpacity<{
     }
   }}
 
-  ${({ disabled }) =>
+  ${({ disabled, $variant, theme }) =>
     disabled &&
-    `
+    ($variant === 'primary' || $variant === 'secondary'
+      ? `
+    background-color: ${theme.colors.disabledBackground};
+  `
+      : `
     opacity: 0.5;
-  `}
+  `)}
 `;
 
-const ButtonText = styled.Text<{ $variant: string; $size: string }>`
+const ButtonText = styled.Text<{
+  $variant: string;
+  $size: string;
+  $disabled?: boolean;
+}>`
   font-weight: 600;
 
-  ${({ $variant, theme }) => {
+  ${({ $variant, theme, $disabled }) => {
+    if ($disabled && ($variant === 'primary' || $variant === 'secondary')) {
+      return `color: ${theme.colors.disabledText};`;
+    }
     switch ($variant) {
       case 'outline':
       case 'text':
         return `color: ${theme.colors.primary};`;
       case 'secondary':
-        return `color: #FFFFFF;`;
+        // 시안 배경 위 흰 글씨는 대비가 1.8:1이라 어두운 글씨를 사용
+        return `color: ${theme.colors.onSecondary};`;
       default:
-        // primary 버튼은 항상 흰색 텍스트
-        return `color: #FFFFFF;`;
+        return `color: ${theme.colors.onPrimary};`;
     }
   }}
 

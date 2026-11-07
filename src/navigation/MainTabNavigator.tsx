@@ -5,6 +5,7 @@
 import React from 'react';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { useTheme } from 'styled-components/native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import HomeScreen from '@/screens/Home/HomeScreen';
 import ExploreScreen from '@/screens/Explore/ExploreScreen';
@@ -75,6 +76,9 @@ const renderSettingsIcon = ({
 
 function MainTabNavigator(): React.JSX.Element {
   const theme = useTheme();
+  const insets = useSafeAreaInsets();
+  // 홈 인디케이터/제스처 바 높이를 반영한다 (고정 높이 85는 기기마다 겹치거나 남음)
+  const bottomPadding = Math.max(insets.bottom, 8);
 
   return (
     <Tab.Navigator
@@ -84,17 +88,18 @@ function MainTabNavigator(): React.JSX.Element {
           backgroundColor: theme.colors.backgroundSecondary,
           borderTopColor: theme.colors.border,
           borderTopWidth: 1,
-          paddingTop: 10,
-          paddingBottom: 10,
-          height: 85,
+          paddingTop: 8,
+          paddingBottom: bottomPadding,
+          height: 56 + bottomPadding,
         },
         tabBarActiveTintColor: theme.colors.primary,
         tabBarInactiveTintColor: theme.colors.textSecondary,
         tabBarLabelStyle: {
           fontSize: 11,
           fontWeight: '500',
-          marginTop: 4,
+          marginTop: 2,
         },
+        tabBarAllowFontScaling: true,
       }}
     >
       <Tab.Screen

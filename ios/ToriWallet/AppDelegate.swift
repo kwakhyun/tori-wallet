@@ -42,11 +42,24 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     let window = UIWindow(windowScene: windowScene)
     self.window = window
 
+    // Scene 기반 생명주기에서는 실행 URL이 launchOptions가 아니라 connectionOptions로 전달된다.
+    // Linking.getInitialURL()이 딥링크를 받을 수 있도록 launchOptions에 합친다.
+    var launchOptions = (UIApplication.shared.delegate as? AppDelegate)?.launchOptions ?? [:]
+    if let url = connectionOptions.urlContexts.first?.url {
+      launchOptions[.url] = url
+    }
+
     factory.startReactNative(
       withModuleName: "ToriWallet",
       in: window,
-      launchOptions: (UIApplication.shared.delegate as? AppDelegate)?.launchOptions
+      launchOptions: launchOptions
     )
+  }
+
+  // 앱 실행 중 열린 딥링크(wc:, toriwallet://)를 React Native Linking으로 전달한다.
+  func scene(_ scene: UIScene, openURLContexts URLContexts: Set<UIOpenURLContext>) {
+    guard let url = URLContexts.first?.url else { return }
+    _ = RCTLinkingManager.application(UIApplication.shared, open: url, options: [:])
   }
 
   func sceneWillResignActive(_ scene: UIScene) {

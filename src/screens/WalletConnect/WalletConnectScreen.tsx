@@ -3,11 +3,11 @@
  */
 
 import React, { useState, useCallback, useEffect, useRef } from 'react';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import styled from 'styled-components/native';
 import { useShallow } from 'zustand/react/shallow';
 import { useTheme } from '@/hooks/useTheme';
 import {
-  SafeAreaView,
   StatusBar,
   ScrollView,
   Alert,

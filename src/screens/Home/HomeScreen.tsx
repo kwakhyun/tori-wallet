@@ -325,7 +325,9 @@ function HomeScreen(): React.JSX.Element {
   );
 }
 
-const Container = styled(SafeAreaView)`
+const Container = styled(SafeAreaView).attrs({
+  edges: ['top', 'left', 'right'],
+})`
   flex: 1;
   background-color: ${({ theme }) => theme.colors.background};
 `;
