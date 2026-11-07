@@ -1,36 +1,87 @@
 /**
- * 주소록 관리 화면
+ * 주소록 화면
+ *
+ * 두 가지로 쓰인다.
+ *  1) 라우트 'AddressBook' — 주소 관리(추가/편집/삭제/즐겨찾기). params.mode === 'select'면
+ *     선택한 주소를 송금 화면(recipient)으로 돌려준다.
+ *  2) 임베드 피커 — 송금 화면이 모달 안에 넣고 selectionMode, onSelectAddress, onClose를 넘긴다.
+ *
+ * onSelectAddress(address, name): name은 주소록에 저장된 이름이다. 저장되지 않은 최근
+ * 주소는 name 없이(undefined) 전달해 송금 화면이 저장된 이름처럼 보여 주지 않게 한다.
  */
 
-import React, { useState, useCallback, useEffect } from 'react';
-import { SafeAreaView } from 'react-native-safe-area-context';
-import styled from 'styled-components/native';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import {
+  ActivityIndicator,
+  Alert,
+  Clipboard,
+  FlatList,
+  StatusBar,
+} from 'react-native';
+import styled, { useTheme as useStyledTheme } from 'styled-components/native';
 import { useShallow } from 'zustand/react/shallow';
+import { useNavigation, useRoute } from '@react-navigation/native';
+import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import { isAddress } from 'viem';
+import { Screen } from '@/components/common/Screen';
+import { ScreenHeader } from '@/components/common/ScreenHeader';
+import { IconButton } from '@/components/common/IconButton';
+import { Input } from '@/components/common/Input';
+import { Button } from '@/components/common/Button';
+import { EmptyState } from '@/components/common/StateViews';
+import { QRScanner } from '@/components/common/QRScanner';
 import { useTheme } from '@/hooks/useTheme';
 import {
-  StatusBar,
-  FlatList,
-  Alert,
-  Modal,
-  TouchableOpacity,
-  ActivityIndicator,
-} from 'react-native';
-import { useAddressBook, useFavoriteAddresses } from '@/realm/hooks';
-import { useSecurityStore } from '@/store/securityStore';
+  useAddressBook,
+  useAddressSearch,
+  useFavoriteAddresses,
+} from '@/realm/hooks';
 import type { AddressBookEntry } from '@/realm/schemas';
-import { isAddress } from 'viem';
+import { useSecurityStore } from '@/store/securityStore';
+import { showToast } from '@/store/toastStore';
+import { recipientOf, type ScanResult } from '@/utils/paymentUri';
+import { shortenAddress } from '@/utils/address';
+import type { RootStackParamList } from '@/navigation/RootNavigator';
+import { ButtonStack, SheetModal } from './components/SettingsUI';
 
-interface Props {
-  onSelectAddress?: (address: `0x${string}`, name: string) => void;
+export interface AddressBookScreenProps {
+  /** 선택 모드 (송금 화면 피커). 항목을 누르면 onSelectAddress를 호출한다. */
   selectionMode?: boolean;
+  /**
+   * name: 주소록에 저장된 이름. 저장되지 않은 최근 주소는 undefined.
+   * (메서드 표기: 기존 `(address, name: string) => void` 핸들러도 받을 수 있게 한다)
+   */
+  onSelectAddress?(address: `0x${string}`, name?: string): void;
+  /** 임베드(모달)로 쓸 때 헤더 닫기 버튼 동작 */
+  onClose?: () => void;
 }
 
+type Tab = 'addressBook' | 'favorites' | 'recent';
+type RecentItem = { address: `0x${string}`; lastUsed: number };
+
+const TABS: { key: Tab; label: string }[] = [
+  { key: 'addressBook', label: '주소록' },
+  { key: 'favorites', label: '즐겨찾기' },
+  { key: 'recent', label: '최근' },
+];
+
+const NAME_MAX_LENGTH = 30;
+
 export function AddressBookScreen({
+  selectionMode: selectionModeProp,
   onSelectAddress,
-  selectionMode = false,
-}: Props) {
+  onClose,
+}: AddressBookScreenProps): React.JSX.Element {
   const { isDarkMode } = useTheme();
-  // Realm 훅 사용
+  const theme = useStyledTheme();
+  const navigation =
+    useNavigation<NativeStackNavigationProp<RootStackParamList>>();
+  const route = useRoute();
+  const routeMode = (
+    route?.params as { mode?: 'manage' | 'select' } | undefined
+  )?.mode;
+  const selectionMode = selectionModeProp ?? routeMode === 'select';
+
   const {
     addresses: addressBook,
     isLoading,
@@ -39,621 +90,659 @@ export function AddressBookScreen({
     deleteAddress,
     toggleFavorite,
   } = useAddressBook();
-
-  // 즐겨찾기 목록
   const { favorites } = useFavoriteAddresses();
-
-  // 최근 주소는 여전히 Zustand에서 관리 (간단한 리스트이므로)
-  const { recentAddresses, addressBook: legacyAddressBook } = useSecurityStore(
+  const { recentAddresses, legacyAddressBook } = useSecurityStore(
     useShallow(state => ({
       recentAddresses: state.recentAddresses,
-      addressBook: state.addressBook,
+      legacyAddressBook: state.addressBook,
     })),
   );
 
-  // 레거시 데이터 마이그레이션 (최초 1회)
+  // 레거시(Zustand) 주소록 → Realm 마이그레이션 (최초 1회)
   const [hasMigrated, setHasMigrated] = useState(false);
-
   useEffect(() => {
-    const migrateFromZustand = async () => {
-      if (hasMigrated || legacyAddressBook.length === 0) return;
-
-      // 기존 Zustand 주소록에서 Realm으로 마이그레이션
+    if (
+      hasMigrated ||
+      isLoading ||
+      addressBook.length > 0 ||
+      !legacyAddressBook ||
+      legacyAddressBook.length === 0
+    )
+      return;
+    setHasMigrated(true);
+    (async () => {
       for (const entry of legacyAddressBook) {
         try {
-          // 이미 Realm에 있는지 확인 (중복 방지)
-          const exists = addressBook.find(
-            a => a.address.toLowerCase() === entry.address.toLowerCase(),
-          );
-          if (!exists) {
-            await addAddress({
-              address: entry.address,
-              name: entry.name,
-              chainId: entry.chainId ?? 1,
-              notes: entry.memo,
-            });
-          }
+          await addAddress({
+            address: entry.address,
+            name: entry.name,
+            chainId: entry.chainId ?? 1,
+            notes: entry.memo,
+          });
         } catch {
-          // 중복 등 오류 무시
+          // 중복 등은 무시
         }
       }
-      setHasMigrated(true);
-    };
-
-    if (
-      !isLoading &&
-      addressBook.length === 0 &&
-      legacyAddressBook.length > 0
-    ) {
-      migrateFromZustand();
-    }
+    })();
   }, [isLoading, addressBook, legacyAddressBook, addAddress, hasMigrated]);
 
-  const [showModal, setShowModal] = useState(false);
+  const [activeTab, setActiveTab] = useState<Tab>('addressBook');
+  const [query, setQuery] = useState('');
+  const { results: searchResults, isSearching } = useAddressSearch(query);
+  const searching = query.trim().length > 0;
+
+  // 편집 폼
+  const [showForm, setShowForm] = useState(false);
   const [editingEntry, setEditingEntry] = useState<AddressBookEntry | null>(
     null,
   );
   const [name, setName] = useState('');
   const [address, setAddress] = useState('');
   const [memo, setMemo] = useState('');
-  const [activeTab, setActiveTab] = useState<
-    'addressBook' | 'favorites' | 'recent'
-  >('addressBook');
+  const [formErrors, setFormErrors] = useState<{
+    name?: string;
+    address?: string;
+  }>({});
   const [isSaving, setIsSaving] = useState(false);
+  const [showScanner, setShowScanner] = useState(false);
 
-  const handleOpenAddModal = useCallback(() => {
+  const savedNameOf = useCallback(
+    (value: string) =>
+      addressBook.find(a => a.address.toLowerCase() === value.toLowerCase())
+        ?.name,
+    [addressBook],
+  );
+
+  const openAdd = useCallback(() => {
     setEditingEntry(null);
     setName('');
     setAddress('');
     setMemo('');
-    setShowModal(true);
+    setFormErrors({});
+    setShowForm(true);
   }, []);
 
-  const handleOpenEditModal = useCallback((entry: AddressBookEntry) => {
+  const openEdit = useCallback((entry: AddressBookEntry) => {
     setEditingEntry(entry);
     setName(entry.name);
     setAddress(entry.address);
     setMemo(entry.notes || '');
-    setShowModal(true);
+    setFormErrors({});
+    setShowForm(true);
+  }, []);
+
+  const closeForm = useCallback(() => {
+    setShowForm(false);
+    setShowScanner(false);
   }, []);
 
   const handleSave = useCallback(async () => {
-    if (!name.trim()) {
-      Alert.alert('오류', '이름을 입력해주세요.');
-      return;
+    if (isSaving) return;
+    const trimmedName = name.trim();
+    const trimmedAddress = address.trim();
+    const errors: { name?: string; address?: string } = {};
+    if (!trimmedName) errors.name = '이름을 입력해주세요.';
+    if (!isAddress(trimmedAddress)) {
+      errors.address =
+        '올바른 이더리움 주소(0x로 시작하는 40자리)를 입력해주세요.';
+    } else {
+      const duplicate = addressBook.find(
+        a =>
+          a.address.toLowerCase() === trimmedAddress.toLowerCase() &&
+          a.id !== editingEntry?.id,
+      );
+      if (duplicate)
+        errors.address = `이미 "${duplicate.name}"(으)로 저장된 주소입니다.`;
     }
-
-    if (!isAddress(address)) {
-      Alert.alert('오류', '유효한 이더리움 주소를 입력해주세요.');
-      return;
-    }
-
-    // 중복 주소 체크 (편집 시 자기 자신 제외)
-    const existing = addressBook.find(
-      a => a.address.toLowerCase() === address.toLowerCase(),
-    );
-    if (existing && (!editingEntry || existing.id !== editingEntry.id)) {
-      Alert.alert('오류', '이미 등록된 주소입니다.');
-      return;
-    }
+    setFormErrors(errors);
+    if (errors.name || errors.address) return;
 
     setIsSaving(true);
     try {
       if (editingEntry) {
         await updateAddress(editingEntry.id, {
-          name: name.trim(),
-          notes: memo.trim() || undefined,
+          name: trimmedName,
+          address: trimmedAddress,
+          // 빈 문자열로 보내야 기존 메모가 지워진다.
+          notes: memo.trim(),
         });
-        Alert.alert('완료', '주소가 수정되었습니다.');
+        showToast('주소를 수정했습니다.', 'success');
       } else {
         await addAddress({
-          address: address as `0x${string}`,
-          name: name.trim(),
+          address: trimmedAddress,
+          name: trimmedName,
           chainId: 1,
           notes: memo.trim() || undefined,
         });
-        Alert.alert('완료', '주소가 추가되었습니다.');
+        showToast('주소를 추가했습니다.', 'success');
       }
-      setShowModal(false);
-    } catch {
-      Alert.alert('오류', '저장에 실패했습니다.');
+      setShowForm(false);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '';
+      if (/already exists/i.test(message)) {
+        setFormErrors({ address: '이미 주소록에 있는 주소입니다.' });
+      } else {
+        Alert.alert(
+          '저장 실패',
+          '주소를 저장하지 못했습니다. 다시 시도해주세요.',
+        );
+      }
     } finally {
       setIsSaving(false);
     }
   }, [
-    name,
     address,
-    memo,
-    editingEntry,
-    addressBook,
     addAddress,
+    addressBook,
+    editingEntry,
+    isSaving,
+    memo,
+    name,
     updateAddress,
   ]);
 
   const handleDelete = useCallback(
     (entry: AddressBookEntry) => {
-      Alert.alert(
-        '주소 삭제',
-        `"${entry.name}"을(를) 주소록에서 삭제하시겠습니까?`,
-        [
-          { text: '취소', style: 'cancel' },
-          {
-            text: '삭제',
-            style: 'destructive',
-            onPress: async () => {
+      Alert.alert('주소 삭제', `"${entry.name}"을(를) 주소록에서 삭제할까요?`, [
+        { text: '취소', style: 'cancel' },
+        {
+          text: '삭제',
+          style: 'destructive',
+          onPress: async () => {
+            try {
               await deleteAddress(entry.id);
-            },
+              showToast('주소를 삭제했습니다.', 'success');
+            } catch {
+              Alert.alert('삭제 실패', '주소를 삭제하지 못했습니다.');
+            }
           },
-        ],
-      );
+        },
+      ]);
     },
     [deleteAddress],
   );
 
   const handleToggleFavorite = useCallback(
     async (entry: AddressBookEntry) => {
-      await toggleFavorite(entry.id);
+      try {
+        await toggleFavorite(entry.id);
+      } catch {
+        showToast('즐겨찾기를 변경하지 못했습니다.', 'error');
+      }
     },
     [toggleFavorite],
   );
 
-  const handleSelectEntry = useCallback(
-    (entry: AddressBookEntry | { address: `0x${string}` }) => {
-      if (selectionMode && onSelectAddress) {
-        const entryName = 'name' in entry ? entry.name : '최근 주소';
-        onSelectAddress(entry.address as `0x${string}`, entryName);
+  const select = useCallback(
+    (value: string, savedName?: string) => {
+      const target = value as `0x${string}`;
+      if (onSelectAddress) {
+        onSelectAddress(target, savedName);
+        return;
+      }
+      if (selectionMode) {
+        navigation.popTo(
+          'SendTransaction',
+          { recipient: target },
+          { merge: true },
+        );
       }
     },
-    [selectionMode, onSelectAddress],
+    [navigation, onSelectAddress, selectionMode],
   );
 
-  const truncateAddress = (addr: string) => {
-    return `${addr.slice(0, 10)}...${addr.slice(-8)}`;
-  };
+  const handlePaste = useCallback(async () => {
+    try {
+      const text = (await Clipboard.getString())?.trim();
+      if (text && isAddress(text)) {
+        setAddress(text);
+        setFormErrors(previous => ({ ...previous, address: undefined }));
+      } else {
+        setFormErrors(previous => ({
+          ...previous,
+          address: '클립보드에 올바른 지갑 주소가 없습니다.',
+        }));
+      }
+    } catch {
+      showToast('클립보드를 읽을 수 없습니다.', 'error');
+    }
+  }, []);
 
-  const formatDate = (timestamp: number | Date) => {
-    const date = timestamp instanceof Date ? timestamp : new Date(timestamp);
-    return date.toLocaleDateString('ko-KR', {
-      month: 'short',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
-    });
-  };
+  const handleScan = useCallback((result: ScanResult) => {
+    const scanned = recipientOf(result);
+    setShowScanner(false);
+    if (scanned && isAddress(scanned)) {
+      setAddress(scanned);
+      setFormErrors(previous => ({ ...previous, address: undefined }));
+    } else {
+      setFormErrors(previous => ({
+        ...previous,
+        address: '지갑 주소가 담긴 QR 코드가 아닙니다.',
+      }));
+    }
+  }, []);
 
-  const renderAddressItem = useCallback(
+  const entryData = useMemo(() => {
+    if (activeTab === 'favorites') {
+      return searching ? searchResults.filter(e => e.isFavorite) : favorites;
+    }
+    return searching ? searchResults : addressBook;
+  }, [activeTab, addressBook, favorites, searchResults, searching]);
+
+  const recentData = useMemo(() => {
+    const list: RecentItem[] = recentAddresses ?? [];
+    const q = query.trim().toLowerCase();
+    if (!q) return list;
+    return list.filter(
+      item =>
+        item.address.toLowerCase().includes(q) ||
+        (savedNameOf(item.address) ?? '').toLowerCase().includes(q),
+    );
+  }, [query, recentAddresses, savedNameOf]);
+
+  const renderEntry = useCallback(
     ({ item }: { item: AddressBookEntry }) => (
-      <AddressItem
-        onPress={() => handleSelectEntry(item)}
-        onLongPress={() => !selectionMode && handleOpenEditModal(item)}
-        activeOpacity={0.7}
-      >
-        <AddressInfo>
-          <NameRow>
-            <AddressName>{item.name}</AddressName>
-            {item.isFavorite && <FavoriteIcon>★</FavoriteIcon>}
-          </NameRow>
-          <AddressText>{truncateAddress(item.address)}</AddressText>
-          {item.notes && <MemoText>{item.notes}</MemoText>}
-        </AddressInfo>
-        {!selectionMode && (
-          <ActionButtons>
-            <ActionButton onPress={() => handleToggleFavorite(item)}>
-              <ActionButtonText>{item.isFavorite ? '★' : '☆'}</ActionButtonText>
-            </ActionButton>
-            <ActionButton onPress={() => handleOpenEditModal(item)}>
-              <ActionButtonText>편집</ActionButtonText>
-            </ActionButton>
-            <ActionButton onPress={() => handleDelete(item)}>
-              <ActionButtonText $danger>삭제</ActionButtonText>
-            </ActionButton>
-          </ActionButtons>
+      <Row>
+        <RowMain
+          onPress={() =>
+            selectionMode ? select(item.address, item.name) : openEdit(item)
+          }
+          accessibilityRole="button"
+          accessibilityLabel={`${item.name}, ${shortenAddress(item.address)}${
+            item.isFavorite ? ', 즐겨찾기' : ''
+          }`}
+          accessibilityHint={
+            selectionMode
+              ? '이 주소를 받는 주소로 선택합니다'
+              : '주소를 편집합니다'
+          }
+          testID={`address-entry-${item.id}`}
+        >
+          <NameLine>
+            <EntryName numberOfLines={1}>{item.name}</EntryName>
+            {item.isFavorite ? (
+              <Star importantForAccessibility="no">★</Star>
+            ) : null}
+          </NameLine>
+          <EntryAddress>{shortenAddress(item.address, 10, 8)}</EntryAddress>
+          {item.notes ? (
+            <EntryMemo numberOfLines={1}>{item.notes}</EntryMemo>
+          ) : null}
+        </RowMain>
+        {selectionMode ? (
+          <Chevron importantForAccessibility="no">›</Chevron>
+        ) : (
+          <>
+            <IconButton
+              icon={item.isFavorite ? '★' : '☆'}
+              accessibilityLabel={
+                item.isFavorite
+                  ? `${item.name} 즐겨찾기 해제`
+                  : `${item.name} 즐겨찾기 추가`
+              }
+              accessibilityState={{ selected: item.isFavorite }}
+              onPress={() => handleToggleFavorite(item)}
+              testID={`address-favorite-${item.id}`}
+            />
+            <IconButton
+              icon="🗑️"
+              accessibilityLabel={`${item.name} 삭제`}
+              onPress={() => handleDelete(item)}
+              testID={`address-delete-${item.id}`}
+            />
+          </>
         )}
-        {selectionMode && <SelectArrow>›</SelectArrow>}
-      </AddressItem>
+      </Row>
     ),
-    [
-      handleSelectEntry,
-      handleOpenEditModal,
-      handleDelete,
-      handleToggleFavorite,
-      selectionMode,
-    ],
+    [handleDelete, handleToggleFavorite, openEdit, select, selectionMode],
   );
 
-  const renderRecentItem = useCallback(
-    ({ item }: { item: { address: `0x${string}`; lastUsed: number } }) => {
-      const savedEntry = addressBook.find(
-        a => a.address.toLowerCase() === item.address.toLowerCase(),
-      );
+  const renderRecent = useCallback(
+    ({ item }: { item: RecentItem }) => {
+      const savedName = savedNameOf(item.address);
       return (
-        <AddressItem
-          onPress={() => handleSelectEntry(item)}
-          activeOpacity={0.7}
-        >
-          <AddressInfo>
-            {savedEntry && <AddressName>{savedEntry.name}</AddressName>}
-            <AddressText>{truncateAddress(item.address)}</AddressText>
-            <MemoText>{formatDate(item.lastUsed)}</MemoText>
-          </AddressInfo>
-          {selectionMode && <SelectArrow>›</SelectArrow>}
-        </AddressItem>
+        <Row>
+          <RowMain
+            onPress={() =>
+              selectionMode ? select(item.address, savedName) : undefined
+            }
+            disabled={!selectionMode}
+            accessibilityRole={selectionMode ? 'button' : 'text'}
+            accessibilityLabel={`${
+              savedName ? `${savedName}, ` : ''
+            }${shortenAddress(item.address)}`}
+            testID={`recent-entry-${item.address}`}
+          >
+            {savedName ? (
+              <EntryName numberOfLines={1}>{savedName}</EntryName>
+            ) : null}
+            <EntryAddress>{shortenAddress(item.address, 10, 8)}</EntryAddress>
+            <EntryMemo>{formatDate(item.lastUsed)}</EntryMemo>
+          </RowMain>
+          {selectionMode ? (
+            <Chevron importantForAccessibility="no">›</Chevron>
+          ) : null}
+        </Row>
       );
     },
-    [handleSelectEntry, addressBook, selectionMode],
+    [savedNameOf, select, selectionMode],
   );
 
-  // 현재 탭에 따른 데이터
-  const currentData = activeTab === 'favorites' ? favorites : addressBook;
-
-  // FlatList 스타일
-  const listContentStyle = { paddingBottom: 20 };
+  const showRecent = activeTab === 'recent';
 
   return (
-    <Container>
+    <Screen testID="address-book-screen">
       <StatusBar barStyle={isDarkMode ? 'light-content' : 'dark-content'} />
-      <Content>
-        <Header>
-          <Title>주소록</Title>
-          {!selectionMode && (
-            <AddButton onPress={handleOpenAddModal}>
-              <AddButtonText>+ 추가</AddButtonText>
-            </AddButton>
-          )}
-        </Header>
-
-        {/* 탭 전환 */}
-        <TabContainer>
-          <Tab
-            $active={activeTab === 'addressBook'}
-            onPress={() => setActiveTab('addressBook')}
-          >
-            <TabText $active={activeTab === 'addressBook'}>주소록</TabText>
-          </Tab>
-          <Tab
-            $active={activeTab === 'favorites'}
-            onPress={() => setActiveTab('favorites')}
-          >
-            <TabText $active={activeTab === 'favorites'}>즐겨찾기</TabText>
-          </Tab>
-          <Tab
-            $active={activeTab === 'recent'}
-            onPress={() => setActiveTab('recent')}
-          >
-            <TabText $active={activeTab === 'recent'}>최근</TabText>
-          </Tab>
-        </TabContainer>
-
-        {isLoading ? (
-          <LoadingIndicator>
-            <ActivityIndicator size="large" color="#007AFF" />
-          </LoadingIndicator>
-        ) : activeTab === 'recent' ? (
-          recentAddresses.length > 0 ? (
-            <FlatList
-              data={recentAddresses}
-              keyExtractor={item => `${item.address}-${item.lastUsed}`}
-              renderItem={renderRecentItem}
-              showsVerticalScrollIndicator={false}
-              contentContainerStyle={listContentStyle}
+      <ScreenHeader
+        title={selectionMode ? '주소 선택' : '주소록'}
+        // 임베드 피커에 onClose가 없으면 뒤로 가기가 바깥 화면(송금)을 닫으므로 숨긴다.
+        leftIcon={onClose ? 'close' : onSelectAddress ? null : 'back'}
+        onBack={onClose}
+        testID="address-book-header"
+        right={
+          selectionMode ? null : (
+            <IconButton
+              icon="＋"
+              accessibilityLabel="주소 추가"
+              onPress={openAdd}
+              testID="address-book-add"
             />
-          ) : (
-            <EmptyState>
-              <EmptyIcon>🕐</EmptyIcon>
-              <EmptyText>최근 사용한 주소가 없습니다</EmptyText>
-              <EmptySubText>송금 시 자동으로 기록됩니다</EmptySubText>
-            </EmptyState>
           )
-        ) : currentData && currentData.length > 0 ? (
+        }
+      />
+
+      <Content>
+        <Input
+          value={query}
+          onChangeText={setQuery}
+          placeholder="이름, 주소, 메모 검색"
+          autoCapitalize="none"
+          autoCorrect={false}
+          returnKeyType="search"
+          accessibilityLabel="주소록 검색"
+          testID="address-book-search"
+        />
+
+        <Tabs accessibilityRole="tablist">
+          {TABS.map(tab => (
+            <TabButton
+              key={tab.key}
+              $active={activeTab === tab.key}
+              onPress={() => setActiveTab(tab.key)}
+              accessibilityRole="tab"
+              accessibilityState={{ selected: activeTab === tab.key }}
+              accessibilityLabel={tab.label}
+              testID={`address-book-tab-${tab.key}`}
+            >
+              <TabText $active={activeTab === tab.key}>{tab.label}</TabText>
+            </TabButton>
+          ))}
+        </Tabs>
+
+        {isLoading || (searching && isSearching && !showRecent) ? (
+          <Loading>
+            <ActivityIndicator size="large" color={theme.colors.primary} />
+          </Loading>
+        ) : showRecent ? (
           <FlatList
-            data={currentData}
-            keyExtractor={item => item.id}
-            renderItem={renderAddressItem}
-            showsVerticalScrollIndicator={false}
-            contentContainerStyle={listContentStyle}
+            data={recentData}
+            keyExtractor={item => `${item.address}-${item.lastUsed}`}
+            renderItem={renderRecent}
+            keyboardShouldPersistTaps="handled"
+            contentContainerStyle={listStyle}
+            ListEmptyComponent={
+              <EmptyState
+                icon="🕐"
+                title={
+                  searching
+                    ? '검색 결과가 없습니다'
+                    : '최근 사용한 주소가 없습니다'
+                }
+                message={searching ? undefined : '송금하면 자동으로 기록됩니다'}
+                testID="address-book-empty"
+              />
+            }
           />
         ) : (
-          <EmptyState>
-            <EmptyIcon>📋</EmptyIcon>
-            <EmptyText>저장된 주소가 없습니다</EmptyText>
-            <EmptySubText>자주 사용하는 주소를 추가해보세요</EmptySubText>
-          </EmptyState>
+          <FlatList
+            data={entryData}
+            keyExtractor={item => item.id}
+            renderItem={renderEntry}
+            keyboardShouldPersistTaps="handled"
+            contentContainerStyle={listStyle}
+            ListEmptyComponent={
+              searching ? (
+                <EmptyState
+                  icon="🔍"
+                  title="검색 결과가 없습니다"
+                  testID="address-book-empty"
+                />
+              ) : activeTab === 'favorites' ? (
+                <EmptyState
+                  icon="☆"
+                  title="즐겨찾기한 주소가 없습니다"
+                  message="주소록에서 ☆를 눌러 추가하세요"
+                  testID="address-book-empty"
+                />
+              ) : (
+                <EmptyState
+                  icon="📇"
+                  title="저장된 주소가 없습니다"
+                  message="자주 보내는 주소를 저장해 두세요"
+                  actionLabel={selectionMode ? undefined : '주소 추가'}
+                  onAction={selectionMode ? undefined : openAdd}
+                  testID="address-book-empty"
+                />
+              )
+            }
+          />
         )}
       </Content>
 
-      {/* 주소 추가/편집 모달 */}
-      <Modal
-        visible={showModal}
-        animationType="slide"
-        presentationStyle="pageSheet"
-        onRequestClose={() => setShowModal(false)}
+      <SheetModal
+        visible={showForm}
+        title={editingEntry ? '주소 편집' : '주소 추가'}
+        onClose={closeForm}
+        testID="address-form-modal"
       >
-        <ModalContainer>
-          <ModalHeader>
-            <ModalTitle>{editingEntry ? '주소 편집' : '주소 추가'}</ModalTitle>
-            <CloseButton onPress={() => setShowModal(false)}>
-              <CloseButtonText>✕</CloseButtonText>
-            </CloseButton>
-          </ModalHeader>
-
-          <ModalContent>
-            <InputGroup>
-              <InputLabel>이름 *</InputLabel>
-              <TextInput
-                value={name}
-                onChangeText={setName}
-                placeholder="예: 친구 지갑"
-                placeholderTextColor="#666"
-                maxLength={30}
-              />
-            </InputGroup>
-
-            <InputGroup>
-              <InputLabel>주소 *</InputLabel>
-              <TextInput
-                value={address}
-                onChangeText={setAddress}
-                placeholder="0x..."
-                placeholderTextColor="#666"
-                autoCapitalize="none"
-                autoCorrect={false}
-              />
-            </InputGroup>
-
-            <InputGroup>
-              <InputLabel>메모 (선택)</InputLabel>
-              <TextInput
-                value={memo}
-                onChangeText={setMemo}
-                placeholder="메모를 입력하세요"
-                placeholderTextColor="#666"
-                multiline
-                maxLength={100}
-              />
-            </InputGroup>
-
-            <SaveButton onPress={handleSave} disabled={isSaving}>
-              <SaveButtonContent>
-                <SaveButtonText>
-                  {editingEntry ? '수정' : '추가'}
-                </SaveButtonText>
-                {isSaving && <LoadingSpinner size="small" color="#fff" />}
-              </SaveButtonContent>
-            </SaveButton>
-          </ModalContent>
-        </ModalContainer>
-      </Modal>
-    </Container>
+        <Field>
+          <Input
+            label="이름"
+            value={name}
+            onChangeText={text => {
+              setName(text);
+              setFormErrors(previous => ({ ...previous, name: undefined }));
+            }}
+            placeholder="예: 친구 지갑"
+            maxLength={NAME_MAX_LENGTH}
+            error={formErrors.name}
+            testID="address-form-name"
+          />
+        </Field>
+        <Field>
+          <Input
+            label="주소"
+            value={address}
+            onChangeText={text => {
+              setAddress(text);
+              setFormErrors(previous => ({ ...previous, address: undefined }));
+            }}
+            placeholder="0x..."
+            autoCapitalize="none"
+            autoCorrect={false}
+            error={formErrors.address}
+            testID="address-form-address"
+          />
+          <InlineActions>
+            <Button
+              title="붙여넣기"
+              variant="outline"
+              size="small"
+              onPress={handlePaste}
+              testID="address-form-paste"
+            />
+            <Button
+              title="QR 스캔"
+              variant="outline"
+              size="small"
+              onPress={() => setShowScanner(true)}
+              testID="address-form-scan"
+            />
+          </InlineActions>
+        </Field>
+        <Field>
+          <Input
+            label="메모 (선택)"
+            value={memo}
+            onChangeText={setMemo}
+            placeholder="메모를 입력하세요"
+            maxLength={100}
+            multiline
+            testID="address-form-memo"
+          />
+        </Field>
+        <ButtonStack>
+          <Button
+            title={editingEntry ? '저장' : '추가'}
+            onPress={handleSave}
+            loading={isSaving}
+            fullWidth
+            testID="address-form-save"
+          />
+          {editingEntry ? (
+            <Button
+              title="삭제"
+              variant="text"
+              onPress={() => {
+                const entry = editingEntry;
+                closeForm();
+                handleDelete(entry);
+              }}
+              testID="address-form-delete"
+            />
+          ) : null}
+        </ButtonStack>
+        <QRScanner
+          visible={showScanner}
+          onClose={() => setShowScanner(false)}
+          onScan={handleScan}
+          mode="address"
+          title="주소 QR 스캔"
+        />
+      </SheetModal>
+    </Screen>
   );
 }
 
-// Styled Components
-const Container = styled(SafeAreaView)`
-  flex: 1;
-  background-color: ${({ theme }) => theme.colors.background};
-`;
+function formatDate(timestamp: number | Date) {
+  const date = timestamp instanceof Date ? timestamp : new Date(timestamp);
+  return date.toLocaleDateString('ko-KR', {
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
+const listStyle = { paddingBottom: 24, flexGrow: 1 };
 
 const Content = styled.View`
   flex: 1;
-  padding: ${({ theme }) => theme.spacing.md}px;
+  padding: 0 ${({ theme }) => theme.spacing.md}px;
 `;
 
-const Header = styled.View`
+const Tabs = styled.View`
   flex-direction: row;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: ${({ theme }) => theme.spacing.md}px;
-`;
-
-const Title = styled.Text`
-  font-size: 28px;
-  font-weight: bold;
-  color: ${({ theme }) => theme.colors.textPrimary};
-`;
-
-const AddButton = styled(TouchableOpacity)`
-  background-color: ${({ theme }) => theme.colors.primary};
-  padding: ${({ theme }) => theme.spacing.sm}px
-    ${({ theme }) => theme.spacing.md}px;
-  border-radius: ${({ theme }) => theme.borderRadius.md}px;
-`;
-
-const AddButtonText = styled.Text`
-  color: #fff;
-  font-weight: 600;
-`;
-
-const TabContainer = styled.View`
-  flex-direction: row;
-  margin-bottom: ${({ theme }) => theme.spacing.md}px;
-  background-color: ${({ theme }) => theme.colors.backgroundSecondary};
-  border-radius: ${({ theme }) => theme.borderRadius.md}px;
+  margin: ${({ theme }) => theme.spacing.md}px 0;
   padding: 4px;
+  border-radius: ${({ theme }) => theme.borderRadius.md}px;
+  background-color: ${({ theme }) => theme.colors.surface};
 `;
 
-const Tab = styled(TouchableOpacity)<{ $active: boolean }>`
+const TabButton = styled.TouchableOpacity<{ $active: boolean }>`
   flex: 1;
-  padding: ${({ theme }) => theme.spacing.sm}px;
-  border-radius: ${({ theme }) => theme.borderRadius.sm}px;
+  min-height: 44px;
   align-items: center;
-  background-color: ${({ $active, theme }) =>
+  justify-content: center;
+  border-radius: ${({ theme }) => theme.borderRadius.sm}px;
+  background-color: ${({ theme, $active }) =>
     $active ? theme.colors.primary : 'transparent'};
 `;
 
 const TabText = styled.Text<{ $active: boolean }>`
-  color: ${({ $active, theme }) =>
-    $active ? '#fff' : theme.colors.textSecondary};
-  font-weight: 600;
+  color: ${({ theme, $active }) =>
+    $active ? theme.colors.onPrimary : theme.colors.textSecondary};
+  font-size: 14px;
+  font-weight: ${({ $active }) => ($active ? '600' : '400')};
 `;
 
-const AddressItem = styled(TouchableOpacity)`
-  background-color: ${({ theme }) => theme.colors.surface};
-  border-radius: ${({ theme }) => theme.borderRadius.md}px;
-  padding: ${({ theme }) => theme.spacing.md}px;
+const Loading = styled.View`
+  flex: 1;
+  align-items: center;
+  justify-content: center;
+`;
+
+const Row = styled.View`
+  flex-direction: row;
+  align-items: center;
   margin-bottom: ${({ theme }) => theme.spacing.sm}px;
-  flex-direction: row;
-  justify-content: space-between;
-  align-items: center;
-`;
-
-const AddressInfo = styled.View`
-  flex: 1;
-`;
-
-const NameRow = styled.View`
-  flex-direction: row;
-  align-items: center;
-  margin-bottom: 4px;
-`;
-
-const AddressName = styled.Text`
-  font-size: 16px;
-  font-weight: 600;
-  color: ${({ theme }) => theme.colors.textPrimary};
-`;
-
-const FavoriteIcon = styled.Text`
-  font-size: 16px;
-  color: ${({ theme }) => theme.colors.primary};
-  margin-left: 4px;
-`;
-
-const AddressText = styled.Text`
-  font-size: 14px;
-  color: ${({ theme }) => theme.colors.textSecondary};
-  font-family: monospace;
-`;
-
-const MemoText = styled.Text`
-  font-size: 12px;
-  color: ${({ theme }) => theme.colors.textMuted};
-  margin-top: 4px;
-`;
-
-const ActionButtons = styled.View`
-  flex-direction: row;
-  gap: 8px;
-`;
-
-const ActionButton = styled(TouchableOpacity)`
-  padding: ${({ theme }) => theme.spacing.xs}px
-    ${({ theme }) => theme.spacing.sm}px;
-`;
-
-const ActionButtonText = styled.Text<{ $danger?: boolean }>`
-  color: ${({ $danger, theme }) =>
-    $danger ? theme.colors.error : theme.colors.primary};
-  font-size: 14px;
-`;
-
-const SelectArrow = styled.Text`
-  font-size: 24px;
-  color: ${({ theme }) => theme.colors.textSecondary};
-`;
-
-const EmptyState = styled.View`
-  flex: 1;
-  justify-content: center;
-  align-items: center;
-`;
-
-const EmptyIcon = styled.Text`
-  font-size: 48px;
-  margin-bottom: ${({ theme }) => theme.spacing.md}px;
-`;
-
-const EmptyText = styled.Text`
-  font-size: 18px;
-  color: ${({ theme }) => theme.colors.textPrimary};
-  margin-bottom: ${({ theme }) => theme.spacing.xs}px;
-`;
-
-const EmptySubText = styled.Text`
-  font-size: 14px;
-  color: ${({ theme }) => theme.colors.textSecondary};
-`;
-
-// Modal Styles
-const ModalContainer = styled.View`
-  flex: 1;
-  background-color: ${({ theme }) => theme.colors.background};
-`;
-
-const ModalHeader = styled.View`
-  flex-direction: row;
-  justify-content: space-between;
-  align-items: center;
-  padding: ${({ theme }) => theme.spacing.md}px;
-  border-bottom-width: 1px;
-  border-bottom-color: ${({ theme }) => theme.colors.border};
-`;
-
-const ModalTitle = styled.Text`
-  font-size: 20px;
-  font-weight: bold;
-  color: ${({ theme }) => theme.colors.textPrimary};
-`;
-
-const CloseButton = styled(TouchableOpacity)`
-  padding: ${({ theme }) => theme.spacing.sm}px;
-`;
-
-const CloseButtonText = styled.Text`
-  font-size: 20px;
-  color: ${({ theme }) => theme.colors.textSecondary};
-`;
-
-const ModalContent = styled.View`
-  padding: ${({ theme }) => theme.spacing.lg}px;
-`;
-
-const InputGroup = styled.View`
-  margin-bottom: ${({ theme }) => theme.spacing.md}px;
-`;
-
-const InputLabel = styled.Text`
-  font-size: 14px;
-  color: ${({ theme }) => theme.colors.textSecondary};
-  margin-bottom: ${({ theme }) => theme.spacing.xs}px;
-`;
-
-const TextInput = styled.TextInput`
+  padding-right: ${({ theme }) => theme.spacing.xs}px;
+  border-radius: ${({ theme }) => theme.borderRadius.md}px;
   background-color: ${({ theme }) => theme.colors.surface};
-  border-radius: ${({ theme }) => theme.borderRadius.md}px;
-  padding: ${({ theme }) => theme.spacing.md}px;
-  color: ${({ theme }) => theme.colors.textPrimary};
-  font-size: 16px;
-  border-width: 1px;
-  border-color: ${({ theme }) => theme.colors.border};
 `;
 
-const SaveButton = styled(TouchableOpacity)`
-  background-color: ${({ theme }) => theme.colors.primary};
-  padding: ${({ theme }) => theme.spacing.md}px;
-  border-radius: ${({ theme }) => theme.borderRadius.md}px;
-  align-items: center;
-  margin-top: ${({ theme }) => theme.spacing.lg}px;
+const RowMain = styled.TouchableOpacity`
+  flex: 1;
+  min-height: 56px;
+  justify-content: center;
+  padding: 10px ${({ theme }) => theme.spacing.md}px;
 `;
 
-const SaveButtonContent = styled.View`
+const NameLine = styled.View`
   flex-direction: row;
   align-items: center;
 `;
 
-const SaveButtonText = styled.Text`
-  color: #fff;
+const EntryName = styled.Text`
+  color: ${({ theme }) => theme.colors.textPrimary};
   font-size: 16px;
   font-weight: 600;
+  flex-shrink: 1;
 `;
 
-const LoadingSpinner = styled(ActivityIndicator)`
-  margin-left: 8px;
+const Star = styled.Text`
+  color: ${({ theme }) => theme.colors.warning};
+  font-size: 14px;
+  margin-left: ${({ theme }) => theme.spacing.xs}px;
 `;
 
-const LoadingIndicator = styled.View`
-  flex: 1;
-  justify-content: center;
-  align-items: center;
+const EntryAddress = styled.Text`
+  color: ${({ theme }) => theme.colors.textSecondary};
+  font-size: 13px;
+  font-family: monospace;
+  margin-top: 2px;
+`;
+
+const EntryMemo = styled.Text`
+  color: ${({ theme }) => theme.colors.textSecondary};
+  font-size: 12px;
+  margin-top: 2px;
+`;
+
+const Chevron = styled.Text`
+  color: ${({ theme }) => theme.colors.textSecondary};
+  font-size: 22px;
+  padding: 0 ${({ theme }) => theme.spacing.sm}px;
+`;
+
+const Field = styled.View`
+  margin-bottom: ${({ theme }) => theme.spacing.md}px;
+`;
+
+const InlineActions = styled.View`
+  flex-direction: row;
+  gap: ${({ theme }) => theme.spacing.sm}px;
+  margin-top: ${({ theme }) => theme.spacing.sm}px;
 `;
 
 export default AddressBookScreen;
