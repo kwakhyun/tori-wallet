@@ -1,17 +1,32 @@
 /**
- * 니모닉 검증 화면 (백업 확인)
+ * 복구 구문 확인 화면 (백업 검증)
  */
 
-import React, { useState, useMemo, useCallback, useEffect } from 'react';
+import React, {
+  useState,
+  useMemo,
+  useCallback,
+  useEffect,
+  useRef,
+} from 'react';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import styled from 'styled-components/native';
-import { useTheme } from '@/hooks/useTheme';
-import { StatusBar, ScrollView, Alert, StyleSheet } from 'react-native';
+import {
+  Keyboard,
+  Platform,
+  ScrollView,
+  StatusBar,
+  StyleSheet,
+  TextInput,
+} from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import type { AuthStackParamList } from '@/navigation/AuthNavigator';
+import { useTheme } from '@/hooks/useTheme';
 import { walletService } from '@/services/walletService';
 import { onboardingVault } from '@/services/onboardingVault';
+import { ScreenHeader } from '@/components/common/ScreenHeader';
+import { errorFeedback } from '@/utils/haptics';
 
 type NavigationProp = NativeStackNavigationProp<
   AuthStackParamList,
@@ -21,8 +36,27 @@ const styles = StyleSheet.create({
   scrollContent: { flexGrow: 1 },
 });
 
+const VERIFY_WORD_COUNT = 3;
+
+/** 서로 다른 단어 위치를 최대 count개 무작위로 골라 오름차순으로 반환한다. */
+export function pickVerificationIndices(
+  wordCount: number,
+  count: number = VERIFY_WORD_COUNT,
+  random: () => number = Math.random,
+): number[] {
+  const total = Math.max(0, Math.floor(wordCount));
+  const pool = Array.from({ length: total }, (_, index) => index);
+  // Fisher–Yates 부분 셔플: 단어 수가 count보다 적어도 무한 루프에 빠지지 않는다.
+  const picks = Math.min(count, total);
+  for (let i = 0; i < picks; i += 1) {
+    const j = i + Math.floor(random() * (total - i));
+    [pool[i], pool[j]] = [pool[j], pool[i]];
+  }
+  return pool.slice(0, picks).sort((a, b) => a - b);
+}
+
 function VerifyMnemonicScreen(): React.JSX.Element {
-  const { isDarkMode } = useTheme();
+  const { theme, isDarkMode } = useTheme();
   const navigation = useNavigation<NavigationProp>();
   const mnemonic = onboardingVault.getSnapshot()?.mnemonic || '';
 
@@ -30,22 +64,25 @@ function VerifyMnemonicScreen(): React.JSX.Element {
     if (!mnemonic) navigation.navigate('Welcome');
   }, [mnemonic, navigation]);
 
-  const words = useMemo(() => mnemonic.split(' '), [mnemonic]);
+  const words = useMemo(
+    () => (mnemonic ? mnemonic.split(' ') : []),
+    [mnemonic],
+  );
 
-  // 랜덤으로 3개 단어 선택 (검증용)
-  const verificationIndices = useMemo(() => {
-    const indices: number[] = [];
-    while (indices.length < 3) {
-      const idx = Math.floor(Math.random() * words.length);
-      if (!indices.includes(idx)) {
-        indices.push(idx);
-      }
-    }
-    return indices.sort((a, b) => a - b);
-  }, [words.length]);
+  // 무작위로 단어 3개 선택 (검증용)
+  const verificationIndices = useMemo(
+    () => pickVerificationIndices(words.length),
+    [words.length],
+  );
 
-  const [inputs, setInputs] = useState<string[]>(['', '', '']);
-  const [errors, setErrors] = useState<boolean[]>([false, false, false]);
+  const [inputs, setInputs] = useState<string[]>(() =>
+    Array(VERIFY_WORD_COUNT).fill(''),
+  );
+  const [errors, setErrors] = useState<boolean[]>(() =>
+    Array(VERIFY_WORD_COUNT).fill(false),
+  );
+  const [summaryError, setSummaryError] = useState<string | null>(null);
+  const inputRefs = useRef<(TextInput | null)[]>([]);
 
   const handleInputChange = useCallback((index: number, value: string) => {
     setInputs(prev => {
@@ -58,69 +95,102 @@ function VerifyMnemonicScreen(): React.JSX.Element {
       newErrors[index] = false;
       return newErrors;
     });
+    setSummaryError(null);
   }, []);
 
+  const isComplete =
+    verificationIndices.length > 0 &&
+    verificationIndices.every((_, inputIdx) => inputs[inputIdx]?.length > 0);
+
   const handleVerify = useCallback(() => {
+    if (!isComplete) return;
     const newErrors = verificationIndices.map(
       (wordIdx, inputIdx) => inputs[inputIdx] !== words[wordIdx],
     );
 
-    if (newErrors.some(e => e)) {
+    if (newErrors.some(Boolean)) {
       setErrors(newErrors);
-      Alert.alert(
-        '오류',
-        '입력한 단어가 올바르지 않습니다. 다시 확인해주세요.',
-      );
+      setSummaryError('입력한 단어가 올바르지 않습니다. 다시 확인해주세요.');
+      errorFeedback();
+      const firstWrong = newErrors.findIndex(Boolean);
+      inputRefs.current[firstWrong]?.focus();
       return;
     }
 
+    Keyboard.dismiss();
     // 검증 성공 - 지갑 주소 생성하고 PIN 설정으로 이동
     const account = walletService.deriveAccount(mnemonic, 0);
     onboardingVault.setWalletAddress(account.address);
     navigation.navigate('SetPin');
-  }, [inputs, verificationIndices, words, mnemonic, navigation]);
-
-  const isComplete = inputs.every(input => input.length > 0);
+  }, [inputs, isComplete, verificationIndices, words, mnemonic, navigation]);
 
   return (
     <Container>
       <StatusBar barStyle={isDarkMode ? 'light-content' : 'dark-content'} />
-      <ScrollView contentContainerStyle={styles.scrollContent}>
+      <ScreenHeader
+        onBack={() => navigation.goBack()}
+        backTestID="verify-back"
+      />
+      <ScrollView
+        contentContainerStyle={styles.scrollContent}
+        keyboardShouldPersistTaps="handled"
+        automaticallyAdjustKeyboardInsets={Platform.OS === 'ios'}
+        keyboardDismissMode={Platform.OS === 'ios' ? 'on-drag' : undefined}
+      >
         <Content>
-          <Header>
-            <BackButton onPress={() => navigation.goBack()}>
-              <BackButtonText>←</BackButtonText>
-            </BackButton>
-          </Header>
-
-          <Title>복구 구문 확인</Title>
+          <Title accessibilityRole="header">복구 구문 확인</Title>
           <Description>
             백업이 올바르게 되었는지 확인합니다.{'\n'}
             아래 빈칸에 해당하는 단어를 입력해주세요.
           </Description>
 
           <VerificationContainer>
-            {verificationIndices.map((wordIdx, inputIdx) => (
-              <InputRow key={wordIdx}>
-                <WordNumber>{wordIdx + 1}번째 단어</WordNumber>
-                <WordInput
-                  value={inputs[inputIdx]}
-                  onChangeText={text => handleInputChange(inputIdx, text)}
-                  placeholder="단어를 입력하세요"
-                  placeholderTextColor="#71717A"
-                  autoCapitalize="none"
-                  autoCorrect={false}
-                  $hasError={errors[inputIdx]}
-                />
-                {errors[inputIdx] && (
-                  <ErrorText>올바른 단어를 입력해주세요</ErrorText>
-                )}
-              </InputRow>
-            ))}
+            {verificationIndices.map((wordIdx, inputIdx) => {
+              const isLast = inputIdx === verificationIndices.length - 1;
+              return (
+                <InputRow key={wordIdx}>
+                  <WordNumber nativeID={`verify-label-${inputIdx}`}>
+                    {wordIdx + 1}번째 단어
+                  </WordNumber>
+                  <WordInput
+                    ref={(ref: TextInput | null) => {
+                      inputRefs.current[inputIdx] = ref;
+                    }}
+                    testID={`verify-word-${inputIdx}`}
+                    value={inputs[inputIdx]}
+                    onChangeText={text => handleInputChange(inputIdx, text)}
+                    placeholder="단어를 입력하세요"
+                    placeholderTextColor={theme.colors.textTertiary}
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    spellCheck={false}
+                    autoComplete="off"
+                    importantForAutofill="no"
+                    returnKeyType={isLast ? 'done' : 'next'}
+                    submitBehavior={isLast ? 'blurAndSubmit' : 'submit'}
+                    onSubmitEditing={() => {
+                      if (isLast) handleVerify();
+                      else inputRefs.current[inputIdx + 1]?.focus();
+                    }}
+                    accessibilityLabel={`${wordIdx + 1}번째 단어 입력`}
+                    $hasError={errors[inputIdx]}
+                  />
+                  {errors[inputIdx] && (
+                    <ErrorText>올바른 단어를 입력해주세요</ErrorText>
+                  )}
+                </InputRow>
+              );
+            })}
           </VerificationContainer>
 
+          {summaryError ? (
+            <SummaryError accessibilityRole="alert" testID="verify-error">
+              {summaryError}
+            </SummaryError>
+          ) : null}
+
           <HintBox>
-            <HintIcon>💡</HintIcon>
+            <HintIcon importantForAccessibility="no">💡</HintIcon>
             <HintText>
               힌트: 이전 화면에서 적어둔 복구 구문을 확인하세요.
             </HintText>
@@ -128,8 +198,15 @@ function VerifyMnemonicScreen(): React.JSX.Element {
 
           <Spacer />
 
-          <VerifyButton onPress={handleVerify} disabled={!isComplete}>
-            <VerifyButtonText>확인</VerifyButtonText>
+          <VerifyButton
+            testID="verify-confirm"
+            onPress={handleVerify}
+            disabled={!isComplete}
+            $enabled={isComplete}
+            accessibilityRole="button"
+            accessibilityState={{ disabled: !isComplete }}
+          >
+            <VerifyButtonText $enabled={isComplete}>확인</VerifyButtonText>
           </VerifyButton>
         </Content>
       </ScrollView>
@@ -144,22 +221,8 @@ const Container = styled(SafeAreaView)`
 
 const Content = styled.View`
   flex: 1;
-  padding: ${({ theme }) => theme.spacing.lg}px;
-`;
-
-const Header = styled.View`
-  flex-direction: row;
-  align-items: center;
-  margin-bottom: ${({ theme }) => theme.spacing.lg}px;
-`;
-
-const BackButton = styled.TouchableOpacity`
-  padding: ${({ theme }) => theme.spacing.sm}px;
-`;
-
-const BackButtonText = styled.Text`
-  color: ${({ theme }) => theme.colors.textPrimary};
-  font-size: 24px;
+  padding: 0 ${({ theme }) => theme.spacing.lg}px
+    ${({ theme }) => theme.spacing.lg}px;
 `;
 
 const Title = styled.Text`
@@ -177,7 +240,7 @@ const Description = styled.Text`
 `;
 
 const VerificationContainer = styled.View`
-  margin-bottom: ${({ theme }) => theme.spacing.lg}px;
+  margin-bottom: ${({ theme }) => theme.spacing.md}px;
 `;
 
 const InputRow = styled.View`
@@ -191,9 +254,11 @@ const WordNumber = styled.Text`
 `;
 
 const WordInput = styled.TextInput<{ $hasError: boolean }>`
+  min-height: ${({ theme }) => theme.touchTarget + 4}px;
   background-color: ${({ theme }) => theme.colors.surface};
   border-radius: ${({ theme }) => theme.borderRadius.md}px;
-  padding: ${({ theme }) => theme.spacing.md}px;
+  padding: ${({ theme }) => theme.spacing.sm}px
+    ${({ theme }) => theme.spacing.md}px;
   color: ${({ theme }) => theme.colors.textPrimary};
   font-size: ${({ theme }) => theme.typography.body.fontSize}px;
   border-width: 1px;
@@ -205,6 +270,12 @@ const ErrorText = styled.Text`
   color: ${({ theme }) => theme.colors.error};
   font-size: ${({ theme }) => theme.typography.caption.fontSize}px;
   margin-top: ${({ theme }) => theme.spacing.xs}px;
+`;
+
+const SummaryError = styled.Text`
+  color: ${({ theme }) => theme.colors.error};
+  font-size: ${({ theme }) => theme.typography.bodySmall.fontSize}px;
+  margin-bottom: ${({ theme }) => theme.spacing.md}px;
 `;
 
 const HintBox = styled.View`
@@ -228,18 +299,22 @@ const HintText = styled.Text`
 
 const Spacer = styled.View`
   flex: 1;
+  min-height: ${({ theme }) => theme.spacing.lg}px;
 `;
 
-const VerifyButton = styled.TouchableOpacity<{ disabled: boolean }>`
-  background-color: ${({ theme, disabled }) =>
-    disabled ? theme.colors.border : theme.colors.primary};
+const VerifyButton = styled.TouchableOpacity<{ $enabled: boolean }>`
+  background-color: ${({ theme, $enabled }) =>
+    $enabled ? theme.colors.primary : theme.colors.disabledBackground};
   border-radius: ${({ theme }) => theme.borderRadius.md}px;
+  min-height: ${({ theme }) => theme.touchTarget + 8}px;
   padding: ${({ theme }) => theme.spacing.md}px;
   align-items: center;
+  justify-content: center;
 `;
 
-const VerifyButtonText = styled.Text`
-  color: ${({ theme }) => theme.colors.textPrimary};
+const VerifyButtonText = styled.Text<{ $enabled: boolean }>`
+  color: ${({ theme, $enabled }) =>
+    $enabled ? theme.colors.onPrimary : theme.colors.disabledText};
   font-size: ${({ theme }) => theme.typography.button.fontSize}px;
   font-weight: ${({ theme }) => theme.typography.button.fontWeight};
 `;

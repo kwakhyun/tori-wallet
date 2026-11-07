@@ -22,7 +22,7 @@ describe('Wallet lock and PIN authentication', () => {
       .toBeVisible()
       .withTimeout(PIN_DERIVATION_TIMEOUT);
     await device.enableSynchronization();
-    await element(by.text('OK')).tap();
+    // The wrong-PIN feedback is inline (no blocking alert to dismiss).
     await expect(element(by.id('home-screen'))).not.toBeVisible();
     await device.disableSynchronization();
     await enterUnlockPin(TEST_PIN);

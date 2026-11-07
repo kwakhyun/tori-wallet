@@ -1,28 +1,48 @@
 /**
- * 지갑 가져오기 화면 (니모닉 복원)
+ * 지갑 가져오기 화면 (복구 구문으로 복원)
+ *
+ * - BIP39 표준 길이(12/15/18/21/24 단어)를 모두 지원한다.
+ * - 단어마다 BIP39 영어 단어 목록과 대조해 틀린 위치를 바로 표시하고,
+ *   입력 중인 칸에는 자동 완성 후보를 보여준다.
+ * - 단어 목록에 없는 단어와 체크섬 실패를 구분해서 안내한다.
+ * - 클립보드에서 붙여넣은 뒤에는 클립보드를 비운다.
  */
 
 import React, { useState, useCallback, useRef, useMemo } from 'react';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import styled from 'styled-components/native';
-import { useTheme } from '@/hooks/useTheme';
 import {
-  StatusBar,
-  ScrollView,
-  Alert,
   ActivityIndicator,
+  Alert,
   Clipboard,
   Keyboard,
-  TextInput,
-  StyleSheet,
   Platform,
+  ScrollView,
+  StatusBar,
+  StyleSheet,
+  TextInput,
 } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import type { AuthStackParamList } from '@/navigation/AuthNavigator';
+import { useTheme } from '@/hooks/useTheme';
 import { walletService } from '@/services/walletService';
-import { createLogger } from '@/utils/logger';
+import {
+  findInvalidMnemonicWords,
+  isMnemonicWordPrefix,
+  isSupportedWordCount,
+  MNEMONIC_WORD_COUNTS,
+  type MnemonicWordCount,
+  normalizeMnemonicWord,
+  smallestWordCountFor,
+  splitMnemonicInput,
+  suggestMnemonicWords,
+} from '@/services/mnemonicWords';
 import { onboardingVault } from '@/services/onboardingVault';
+import { ScreenHeader } from '@/components/common/ScreenHeader';
+import { showToast } from '@/store/toastStore';
+import { errorFeedback } from '@/utils/haptics';
+import { createLogger } from '@/utils/logger';
 
 const logger = createLogger('ImportWallet');
 
@@ -31,14 +51,41 @@ type NavigationProp = NativeStackNavigationProp<
   'ImportWallet'
 >;
 
+type ImportErrorKind = 'unknown-word' | 'checksum' | 'failed';
+
+interface ImportError {
+  kind: ImportErrorKind;
+  message: string;
+}
+
+const MAX_WORD_COUNT = MNEMONIC_WORD_COUNTS[MNEMONIC_WORD_COUNTS.length - 1];
+const SUPPORTED_COUNTS_TEXT = MNEMONIC_WORD_COUNTS.join(', ');
+
+function resizeWords(words: readonly string[], count: number): string[] {
+  return Array.from({ length: count }, (_, index) => words[index] ?? '');
+}
+
+function formatWordPositions(indices: readonly number[]): string {
+  return indices.map(index => `${index + 1}번째`).join(', ');
+}
+
+export function describeUnknownWords(indices: readonly number[]): string {
+  return `${formatWordPositions(
+    indices,
+  )} 단어가 BIP39 단어 목록에 없습니다. 철자를 확인해주세요.`;
+}
+
+export const CHECKSUM_ERROR_MESSAGE =
+  '모든 단어가 단어 목록에 있지만 복구 구문 검증(체크섬)에 실패했습니다. 단어 순서가 맞는지, 빠지거나 바뀐 단어가 없는지 확인해주세요.';
+
 function ImportWalletScreen(): React.JSX.Element {
   const navigation = useNavigation<NavigationProp>();
   const { theme, isDarkMode } = useTheme();
-  const [wordCount, setWordCount] = useState<12 | 24>(12);
-  const [words, setWords] = useState<string[]>(Array(12).fill(''));
+  const [wordCount, setWordCount] = useState<MnemonicWordCount>(12);
+  const [words, setWords] = useState<string[]>(() => Array(12).fill(''));
+  const [focusedIndex, setFocusedIndex] = useState<number | null>(null);
+  const [importError, setImportError] = useState<ImportError | null>(null);
   const [isLoading, setIsLoading] = useState(false);
-  const [loadingProgress, setLoadingProgress] = useState(0);
-  const [loadingMessage, setLoadingMessage] = useState('');
   const inputRefs = useRef<(TextInput | null)[]>([]);
 
   const wordInputStyle = useMemo(
@@ -46,6 +93,7 @@ function ImportWalletScreen(): React.JSX.Element {
       StyleSheet.create({
         input: {
           flex: 1,
+          minHeight: theme.touchTarget,
           color: theme.colors.textPrimary,
           fontSize: theme.typography.body.fontSize,
           paddingVertical: theme.spacing.sm,
@@ -55,180 +103,308 @@ function ImportWalletScreen(): React.JSX.Element {
     [theme],
   );
 
-  // 단어 수 변경
-  const handleWordCountChange = useCallback((count: 12 | 24) => {
-    setWordCount(count);
-    setWords(Array(count).fill(''));
+  /** 칸이 포커스된 상태에서 단어 목록의 접두어라면 아직 입력 중인 것으로 본다. */
+  const invalidIndices = useMemo(
+    () =>
+      findInvalidMnemonicWords(words).filter(
+        index => index !== focusedIndex || !isMnemonicWordPrefix(words[index]),
+      ),
+    [words, focusedIndex],
+  );
+
+  const suggestions = useMemo(() => {
+    if (focusedIndex === null) return [];
+    const current = normalizeMnemonicWord(words[focusedIndex] ?? '');
+    if (!current) return [];
+    const candidates = suggestMnemonicWords(current, 4);
+    // 이미 완성된 유일한 단어라면 후보를 보여줄 필요가 없다.
+    if (candidates.length === 1 && candidates[0] === current) return [];
+    return candidates;
+  }, [focusedIndex, words]);
+
+  const focusField = useCallback((index: number) => {
+    inputRefs.current[index]?.focus();
   }, []);
 
-  // 개별 단어 변경
+  /** startIndex부터 여러 단어를 채운다. 지원 길이를 넘으면 단어 수를 늘린다. */
+  const applyWords = useCallback(
+    (startIndex: number, incoming: string[]) => {
+      const needed = startIndex + incoming.length;
+      let targetCount: MnemonicWordCount = wordCount;
+      if (startIndex === 0 && isSupportedWordCount(incoming.length)) {
+        targetCount = incoming.length;
+      } else if (needed > wordCount) {
+        targetCount = smallestWordCountFor(needed) ?? MAX_WORD_COUNT;
+      }
+
+      const base =
+        startIndex === 0 && isSupportedWordCount(incoming.length)
+          ? Array(targetCount).fill('')
+          : resizeWords(words, targetCount);
+      incoming.forEach((word, offset) => {
+        if (startIndex + offset < targetCount) {
+          base[startIndex + offset] = word;
+        }
+      });
+
+      setWordCount(targetCount);
+      setWords(base);
+      setImportError(null);
+
+      if (needed > MAX_WORD_COUNT) {
+        showToast(
+          `복구 구문은 최대 ${MAX_WORD_COUNT}개 단어입니다. 넘는 단어는 입력하지 않았습니다.`,
+          'warning',
+        );
+      } else if (targetCount !== wordCount) {
+        showToast(`${targetCount}단어 복구 구문으로 전환했습니다.`, 'info');
+      }
+
+      const nextEmpty = base.findIndex(word => word.length === 0);
+      if (nextEmpty >= 0) focusField(nextEmpty);
+      else Keyboard.dismiss();
+    },
+    [focusField, wordCount, words],
+  );
+
+  const handleWordCountChange = useCallback(
+    (count: MnemonicWordCount) => {
+      if (count === wordCount) return;
+      const apply = () => {
+        setWordCount(count);
+        setWords(previous => resizeWords(previous, count));
+        setImportError(null);
+      };
+      const wouldLose = words.slice(count).some(word => word.length > 0);
+      if (!wouldLose) {
+        apply();
+        return;
+      }
+      Alert.alert(
+        '단어 수 변경',
+        `${count + 1}~${wordCount}번째에 입력한 단어가 삭제됩니다. 계속할까요?`,
+        [
+          { text: '취소', style: 'cancel' },
+          { text: '변경', style: 'destructive', onPress: apply },
+        ],
+      );
+    },
+    [wordCount, words],
+  );
+
   const handleWordChange = useCallback(
     (index: number, text: string) => {
-      // 붙여넣기 감지: 공백, 쉼표, 줄바꿈 등으로 구분된 여러 단어가 있는지 확인
-      const separators = /[\s,\n\r\t]+/;
-      const pastedWords = text
-        .trim()
-        .split(separators)
-        .filter(w => w.length > 0);
+      const incoming = splitMnemonicInput(text);
 
-      if (pastedWords.length > 1) {
-        // 여러 단어가 붙여넣기됨 - 순서대로 채우기
-        const newWords = [...words];
-        pastedWords.forEach((word, i) => {
-          if (index + i < wordCount) {
-            newWords[index + i] = word.toLowerCase();
-          }
-        });
-        setWords(newWords);
+      // 공백, 쉼표, 줄바꿈으로 구분된 여러 단어 붙여넣기
+      if (incoming.length > 1) {
+        applyWords(index, incoming);
+        return;
+      }
 
-        // 마지막으로 채워진 칸 다음으로 포커스 이동
-        const nextIndex = Math.min(index + pastedWords.length, wordCount - 1);
-        inputRefs.current[nextIndex]?.focus();
-      } else {
-        // 단일 단어 입력
-        const newWords = [...words];
-        newWords[index] = text.toLowerCase().trim();
-        setWords(newWords);
+      const value = normalizeMnemonicWord(text);
+      setWords(previous => {
+        const next = [...previous];
+        next[index] = value;
+        return next;
+      });
+      setImportError(null);
 
-        // 단어 입력 후 자동으로 다음 칸으로 이동
-        if (text.endsWith(' ') && index < wordCount - 1) {
-          newWords[index] = text.trim().toLowerCase();
-          setWords(newWords);
-          inputRefs.current[index + 1]?.focus();
-        }
+      // 단어 뒤에 공백을 입력하면 다음 칸으로 이동
+      if (/\s$/.test(text) && value && index < wordCount - 1) {
+        focusField(index + 1);
       }
     },
-    [words, wordCount],
+    [applyWords, focusField, wordCount],
+  );
+
+  const handleSuggestion = useCallback(
+    (index: number, word: string) => {
+      setWords(previous => {
+        const next = [...previous];
+        next[index] = word;
+        return next;
+      });
+      setImportError(null);
+      if (index < wordCount - 1) focusField(index + 1);
+      else Keyboard.dismiss();
+    },
+    [focusField, wordCount],
   );
 
   // 전체 붙여넣기
   const handlePasteAll = useCallback(async () => {
+    let text = '';
     try {
-      const text = await Clipboard.getString();
-      Clipboard.setString('');
-      if (text) {
-        const separators = /[\s,\n\r\t]+/;
-        const pastedWords = text
-          .trim()
-          .toLowerCase()
-          .split(separators)
-          .filter(w => w.length > 0);
-
-        if (pastedWords.length === 12 || pastedWords.length === 24) {
-          setWordCount(pastedWords.length as 12 | 24);
-          setWords(pastedWords);
-        } else if (pastedWords.length > 0) {
-          // 단어 수가 맞지 않아도 현재 선택된 칸 수만큼 채우기
-          const newWords = Array(wordCount).fill('');
-          pastedWords.forEach((word, i) => {
-            if (i < wordCount) {
-              newWords[i] = word;
-            }
-          });
-          setWords(newWords);
-        }
-      }
+      text = await Clipboard.getString();
     } catch {
-      Alert.alert('오류', '클립보드에서 붙여넣기에 실패했습니다.');
+      showToast('클립보드에서 붙여넣기에 실패했습니다.', 'error');
+      return;
     }
-  }, [wordCount]);
+    // 복구 구문이 클립보드에 남아 다른 앱에 노출되지 않도록 바로 비운다.
+    Clipboard.setString('');
+    const incoming = splitMnemonicInput(text);
+    if (incoming.length === 0) {
+      showToast('클립보드가 비어 있습니다.', 'info');
+      return;
+    }
+    if (incoming.length > MAX_WORD_COUNT) {
+      showToast(
+        `붙여넣은 단어가 ${incoming.length}개입니다. 복구 구문은 ${SUPPORTED_COUNTS_TEXT}개 단어여야 합니다.`,
+        'error',
+      );
+      return;
+    }
+    if (!isSupportedWordCount(incoming.length)) {
+      const targetCount = smallestWordCountFor(incoming.length) ?? 12;
+      setWordCount(targetCount);
+      setWords(resizeWords(incoming, targetCount));
+      setImportError(null);
+      showToast(
+        `붙여넣은 단어가 ${incoming.length}개입니다. 복구 구문은 ${SUPPORTED_COUNTS_TEXT}개 단어여야 하니 빠진 단어를 확인해주세요.`,
+        'warning',
+      );
+      return;
+    }
+    applyWords(0, incoming);
+  }, [applyWords]);
 
   // 전체 지우기
   const handleClearAll = useCallback(() => {
     setWords(Array(wordCount).fill(''));
-    inputRefs.current[0]?.focus();
-  }, [wordCount]);
+    setImportError(null);
+    focusField(0);
+  }, [focusField, wordCount]);
 
   // 지갑 가져오기
   const handleImport = useCallback(async () => {
     Keyboard.dismiss();
+    setImportError(null);
 
-    const mnemonic = words.join(' ').trim();
+    const normalized = words.map(normalizeMnemonicWord);
+    const unknown = findInvalidMnemonicWords(normalized);
+    if (unknown.length > 0) {
+      errorFeedback();
+      setImportError({
+        kind: 'unknown-word',
+        message: describeUnknownWords(unknown),
+      });
+      return;
+    }
 
-    // 유효성 검사
+    const mnemonic = normalized.join(' ');
     if (!walletService.validateMnemonic(mnemonic)) {
-      Alert.alert(
-        '유효하지 않은 복구 구문',
-        '모든 단어를 올바르게 입력했는지 확인해주세요.',
-      );
+      errorFeedback();
+      setImportError({ kind: 'checksum', message: CHECKSUM_ERROR_MESSAGE });
       return;
     }
 
     setIsLoading(true);
-    setLoadingProgress(0);
-    setLoadingMessage('복구 구문 검증 중...');
-
     try {
-      // 애니메이션을 위한 부드러운 진행률 업데이트 함수
-      const smoothProgress = async (
-        start: number,
-        end: number,
-        duration: number,
-      ) => {
-        const steps = 10;
-        const stepDuration = duration / steps;
-        const stepSize = (end - start) / steps;
-
-        for (let i = 1; i <= steps; i++) {
-          await new Promise(resolve => setTimeout(resolve, stepDuration));
-          setLoadingProgress(start + stepSize * i);
-        }
-      };
-
-      // 단계 1: 복구 구문 검증 (0% -> 20%)
-      await smoothProgress(0, 20, 300);
-      setLoadingMessage('니모닉 유효성 확인...');
-
-      // 단계 2: 키 파생 준비 (20% -> 40%)
-      await smoothProgress(20, 40, 300);
-      setLoadingMessage('마스터 키 생성 중...');
-
-      // 단계 3: 계정 파생 - UI 블로킹 방지를 위해 setTimeout으로 감싸기
-      // 이 단계가 실제 작업이 진행되는 곳
-      await smoothProgress(40, 55, 200);
-      setLoadingMessage('지갑 주소 생성 중...');
-
-      // 실제 계정 파생 (동기 작업을 비동기로 래핑)
-      const account = await new Promise<
-        ReturnType<typeof walletService.deriveAccount>
-      >((resolve, reject) => {
-        // setTimeout으로 다음 틱에서 실행하여 UI 업데이트 허용
-        setTimeout(() => {
-          try {
-            const result = walletService.deriveAccount(mnemonic, 0);
-            resolve(result);
-          } catch (err) {
-            reject(err);
-          }
-        }, 50);
-      });
-
-      // 단계 4: 마무리 (55% -> 100%)
-      await smoothProgress(55, 100, 300);
-      setLoadingMessage('완료!');
-
-      await new Promise(resolve => setTimeout(resolve, 200));
-
-      onboardingVault.start(mnemonic, account.address);
+      // 키 파생은 동기 작업이므로 로딩 표시가 먼저 그려지도록 한 틱 양보한다.
+      await new Promise<void>(resolve => setTimeout(resolve, 0));
+      const account = walletService.deriveAccount(mnemonic, 0);
+      onboardingVault.start(mnemonic, account.address, 'import');
       setWords(Array(wordCount).fill(''));
       navigation.navigate('SetPin');
     } catch (error) {
       logger.error('Failed to import wallet:', error);
-      Alert.alert('오류', '지갑 가져오기에 실패했습니다. 다시 시도해주세요.');
+      setImportError({
+        kind: 'failed',
+        message: '지갑을 가져오지 못했습니다. 다시 시도해주세요.',
+      });
     } finally {
       setIsLoading(false);
-      setLoadingProgress(0);
-      setLoadingMessage('');
     }
   }, [words, wordCount, navigation]);
 
   // 입력 완료 여부
   const filledCount = words.filter(w => w.length > 0).length;
   const isComplete = filledCount === wordCount;
+  const canImport = isComplete && !isLoading;
+
+  const renderSuggestions = (index: number) => (
+    <SuggestionBar
+      key="suggestions"
+      testID={`import-suggestions-${index}`}
+      accessibilityLabel={`${index + 1}번째 단어 추천`}
+    >
+      {suggestions.map(suggestion => (
+        <SuggestionChip
+          key={suggestion}
+          testID={`import-suggestion-${suggestion}`}
+          onPress={() => handleSuggestion(index, suggestion)}
+          accessibilityRole="button"
+          accessibilityLabel={`${suggestion} 입력`}
+        >
+          <SuggestionText>{suggestion}</SuggestionText>
+        </SuggestionChip>
+      ))}
+    </SuggestionBar>
+  );
+
+  const renderWordCells = () => {
+    const cells: React.ReactNode[] = [];
+    words.forEach((word, index) => {
+      const invalid = invalidIndices.includes(index);
+      cells.push(
+        <WordInputContainer
+          key={`word-${index}`}
+          $invalid={invalid}
+          $focused={focusedIndex === index}
+        >
+          <WordNumber $invalid={invalid}>{index + 1}</WordNumber>
+          <TextInput
+            testID={`import-word-${index}`}
+            ref={(ref: TextInput | null) => {
+              inputRefs.current[index] = ref;
+            }}
+            value={word}
+            onChangeText={text => handleWordChange(index, text)}
+            onFocus={() => setFocusedIndex(index)}
+            onBlur={() =>
+              setFocusedIndex(current => (current === index ? null : current))
+            }
+            placeholder={`${index + 1}번째`}
+            placeholderTextColor={theme.colors.textTertiary}
+            autoCapitalize="none"
+            autoCorrect={false}
+            autoComplete="off"
+            importantForAutofill="no"
+            spellCheck={false}
+            returnKeyType={index < wordCount - 1 ? 'next' : 'done'}
+            submitBehavior={index < wordCount - 1 ? 'submit' : 'blurAndSubmit'}
+            onSubmitEditing={() => {
+              if (index < wordCount - 1) focusField(index + 1);
+              else Keyboard.dismiss();
+            }}
+            accessibilityLabel={`${index + 1}번째 단어${
+              invalid ? ', 단어 목록에 없는 단어' : ''
+            }`}
+            style={wordInputStyle.input}
+          />
+        </WordInputContainer>,
+      );
+      const isRowEnd = index % 2 === 1 || index === words.length - 1;
+      if (
+        isRowEnd &&
+        focusedIndex !== null &&
+        Math.floor(focusedIndex / 2) === Math.floor(index / 2) &&
+        suggestions.length > 0
+      ) {
+        cells.push(renderSuggestions(focusedIndex));
+      }
+    });
+    return cells;
+  };
 
   return (
     <Container>
       <StatusBar barStyle={isDarkMode ? 'light-content' : 'dark-content'} />
+      <ScreenHeader
+        onBack={() => navigation.goBack()}
+        backTestID="import-back"
+      />
       <ScrollView
         testID="import-wallet-scroll"
         keyboardShouldPersistTaps="handled"
@@ -236,73 +412,68 @@ function ImportWalletScreen(): React.JSX.Element {
         keyboardDismissMode={Platform.OS === 'ios' ? 'on-drag' : undefined}
       >
         <Content>
-          <Header>
-            <BackButton onPress={() => navigation.goBack()}>
-              <BackButtonText>←</BackButtonText>
-            </BackButton>
-          </Header>
-
-          <Title>지갑 가져오기</Title>
+          <Title accessibilityRole="header">지갑 가져오기</Title>
           <Description>
             기존 지갑의 복구 구문을 입력하여 지갑을 복구합니다.
           </Description>
 
-          {/* 단어 수 선택 탭 */}
-          <TabContainer>
-            <Tab
-              $active={wordCount === 12}
-              onPress={() => handleWordCountChange(12)}
-            >
-              <TabText $active={wordCount === 12}>12 단어</TabText>
-            </Tab>
-            <Tab
-              $active={wordCount === 24}
-              onPress={() => handleWordCountChange(24)}
-            >
-              <TabText $active={wordCount === 24}>24 단어</TabText>
-            </Tab>
+          {/* 단어 수 선택 */}
+          <SectionLabel nativeID="import-word-count-label">
+            단어 수
+          </SectionLabel>
+          <TabContainer accessibilityRole="radiogroup">
+            {MNEMONIC_WORD_COUNTS.map(count => (
+              <Tab
+                key={count}
+                testID={`import-word-count-${count}`}
+                $active={wordCount === count}
+                onPress={() => handleWordCountChange(count)}
+                accessibilityRole="radio"
+                accessibilityState={{ selected: wordCount === count }}
+                accessibilityLabel={`${count} 단어`}
+              >
+                <TabText
+                  $active={wordCount === count}
+                  numberOfLines={1}
+                  adjustsFontSizeToFit
+                >
+                  {`${count} 단어`}
+                </TabText>
+              </Tab>
+            ))}
           </TabContainer>
 
           {/* 액션 버튼 */}
           <ActionRow>
-            <ActionButton onPress={handlePasteAll}>
+            <ActionButton
+              testID="import-paste-all"
+              onPress={handlePasteAll}
+              accessibilityRole="button"
+              accessibilityLabel="클립보드의 복구 구문 전체 붙여넣기"
+            >
               <ActionButtonText>📋 전체 붙여넣기</ActionButtonText>
             </ActionButton>
-            <ActionButton onPress={handleClearAll}>
+            <ActionButton
+              testID="import-clear-all"
+              onPress={handleClearAll}
+              accessibilityRole="button"
+              accessibilityLabel="입력한 단어 모두 지우기"
+            >
               <ActionButtonText>✕ 전체 지우기</ActionButtonText>
             </ActionButton>
           </ActionRow>
 
           {/* 단어 입력 그리드 */}
-          <WordsGrid>
-            {words.map((word, index) => (
-              <WordInputContainer key={index}>
-                <WordNumber>{index + 1}</WordNumber>
-                <TextInput
-                  testID={`import-word-${index}`}
-                  ref={(ref: TextInput | null) => {
-                    inputRefs.current[index] = ref;
-                  }}
-                  value={word}
-                  onChangeText={text => handleWordChange(index, text)}
-                  placeholder={`${index + 1}번째`}
-                  placeholderTextColor="#52525B"
-                  autoCapitalize="none"
-                  autoCorrect={false}
-                  spellCheck={false}
-                  returnKeyType={index < wordCount - 1 ? 'next' : 'done'}
-                  onSubmitEditing={() => {
-                    if (index < wordCount - 1) {
-                      inputRefs.current[index + 1]?.focus();
-                    } else {
-                      Keyboard.dismiss();
-                    }
-                  }}
-                  style={wordInputStyle.input}
-                />
-              </WordInputContainer>
-            ))}
-          </WordsGrid>
+          <WordsGrid>{renderWordCells()}</WordsGrid>
+
+          {invalidIndices.length > 0 ? (
+            <InlineError
+              testID="import-invalid-words"
+              accessibilityRole="alert"
+            >
+              {describeUnknownWords(invalidIndices)}
+            </InlineError>
+          ) : null}
 
           {/* 진행 상태 */}
           <ProgressContainer>
@@ -316,46 +487,50 @@ function ImportWalletScreen(): React.JSX.Element {
             </ProgressBar>
           </ProgressContainer>
 
-          {/* 보안 경고 */}
-          <WarningBox>
-            <WarningIcon>🔒</WarningIcon>
-            <WarningText>
+          {importError ? (
+            <ErrorBox
+              testID={`import-error-${importError.kind}`}
+              accessibilityRole="alert"
+            >
+              <ErrorTitle>
+                {importError.kind === 'checksum'
+                  ? '유효하지 않은 복구 구문'
+                  : importError.kind === 'unknown-word'
+                  ? '단어를 확인해주세요'
+                  : '가져오기 실패'}
+              </ErrorTitle>
+              <ErrorMessage>{importError.message}</ErrorMessage>
+            </ErrorBox>
+          ) : null}
+
+          {/* 보안 안내 */}
+          <InfoBox>
+            <InfoIcon importantForAccessibility="no">🔒</InfoIcon>
+            <InfoText>
               복구 구문은 안전하게 암호화되어 기기에만 저장됩니다.
-            </WarningText>
-          </WarningBox>
+            </InfoText>
+          </InfoBox>
 
           {/* 가져오기 버튼 */}
           <ImportButton
             testID="import-wallet-confirm"
             onPress={handleImport}
-            disabled={!isComplete || isLoading}
+            disabled={!canImport}
+            $enabled={canImport}
+            accessibilityRole="button"
+            accessibilityLabel="지갑 가져오기"
+            accessibilityState={{ disabled: !canImport, busy: isLoading }}
           >
             {isLoading ? (
-              <ActivityIndicator color="#FFFFFF" />
+              <ActivityIndicator color={theme.colors.onPrimary} />
             ) : (
-              <ImportButtonText>지갑 가져오기</ImportButtonText>
+              <ImportButtonText $enabled={canImport}>
+                지갑 가져오기
+              </ImportButtonText>
             )}
           </ImportButton>
         </Content>
       </ScrollView>
-
-      {/* 전체 화면 로딩 오버레이 */}
-      {isLoading && (
-        <LoadingOverlay>
-          <LoadingContainer>
-            <LoadingPercentText>
-              {Math.floor(loadingProgress)}%
-            </LoadingPercentText>
-            <LoadingBarContainer>
-              <LoadingBarFill
-                style={{ width: `${Math.floor(loadingProgress)}%` }}
-              />
-            </LoadingBarContainer>
-            <LoadingText>{loadingMessage}</LoadingText>
-            <LoadingSubText>잠시만 기다려주세요</LoadingSubText>
-          </LoadingContainer>
-        </LoadingOverlay>
-      )}
     </Container>
   );
 }
@@ -367,22 +542,8 @@ const Container = styled(SafeAreaView)`
 
 const Content = styled.View`
   flex: 1;
-  padding: ${({ theme }) => theme.spacing.lg}px;
-`;
-
-const Header = styled.View`
-  flex-direction: row;
-  align-items: center;
-  margin-bottom: ${({ theme }) => theme.spacing.lg}px;
-`;
-
-const BackButton = styled.TouchableOpacity`
-  padding: ${({ theme }) => theme.spacing.sm}px;
-`;
-
-const BackButtonText = styled.Text`
-  color: ${({ theme }) => theme.colors.textPrimary};
-  font-size: 24px;
+  padding: ${({ theme }) => theme.spacing.sm}px
+    ${({ theme }) => theme.spacing.lg}px ${({ theme }) => theme.spacing.lg}px;
 `;
 
 const Title = styled.Text`
@@ -399,6 +560,12 @@ const Description = styled.Text`
   margin-bottom: ${({ theme }) => theme.spacing.lg}px;
 `;
 
+const SectionLabel = styled.Text`
+  color: ${({ theme }) => theme.colors.textSecondary};
+  font-size: ${({ theme }) => theme.typography.bodySmall.fontSize}px;
+  margin-bottom: ${({ theme }) => theme.spacing.xs}px;
+`;
+
 const TabContainer = styled.View`
   flex-direction: row;
   background-color: ${({ theme }) => theme.colors.surface};
@@ -409,60 +576,106 @@ const TabContainer = styled.View`
 
 const Tab = styled.TouchableOpacity<{ $active: boolean }>`
   flex: 1;
-  padding: ${({ theme }) => theme.spacing.sm}px;
+  min-height: ${({ theme }) => theme.touchTarget}px;
+  padding: 0 2px;
   border-radius: ${({ theme }) => theme.borderRadius.sm}px;
-  background-color: ${({ theme, $active }) =>
+  border-width: 1px;
+  border-color: ${({ theme, $active }) =>
     $active ? theme.colors.primary : 'transparent'};
+  background-color: ${({ theme, $active }) =>
+    $active ? theme.colors.primarySubtle : 'transparent'};
   align-items: center;
+  justify-content: center;
 `;
 
 const TabText = styled.Text<{ $active: boolean }>`
   color: ${({ theme, $active }) =>
-    $active ? '#FFFFFF' : theme.colors.textSecondary};
-  font-size: ${({ theme }) => theme.typography.body.fontSize}px;
-  font-weight: 600;
+    $active ? theme.colors.textPrimary : theme.colors.textSecondary};
+  font-size: ${({ theme }) => theme.typography.bodySmall.fontSize}px;
+  font-weight: ${({ $active }) => ($active ? 700 : 500)};
 `;
 
 const ActionRow = styled.View`
   flex-direction: row;
   justify-content: flex-end;
-  gap: ${({ theme }) => theme.spacing.md}px;
-  margin-bottom: ${({ theme }) => theme.spacing.md}px;
+  gap: ${({ theme }) => theme.spacing.sm}px;
+  margin-bottom: ${({ theme }) => theme.spacing.sm}px;
 `;
 
 const ActionButton = styled.TouchableOpacity`
-  padding: ${({ theme }) => theme.spacing.xs}px
-    ${({ theme }) => theme.spacing.sm}px;
+  min-height: ${({ theme }) => theme.touchTarget}px;
+  justify-content: center;
+  padding: 0 ${({ theme }) => theme.spacing.sm}px;
 `;
 
 const ActionButtonText = styled.Text`
   color: ${({ theme }) => theme.colors.primary};
   font-size: ${({ theme }) => theme.typography.bodySmall.fontSize}px;
-  font-weight: 500;
+  font-weight: 600;
 `;
 
 const WordsGrid = styled.View`
   flex-direction: row;
   flex-wrap: wrap;
   justify-content: space-between;
-  margin-bottom: ${({ theme }) => theme.spacing.lg}px;
+  margin-bottom: ${({ theme }) => theme.spacing.sm}px;
 `;
 
-const WordInputContainer = styled.View`
+const WordInputContainer = styled.View<{
+  $invalid: boolean;
+  $focused: boolean;
+}>`
   width: 48%;
   flex-direction: row;
   align-items: center;
   background-color: ${({ theme }) => theme.colors.surface};
   border-radius: ${({ theme }) => theme.borderRadius.sm}px;
-  border: 1px solid ${({ theme }) => theme.colors.border};
+  border-width: ${({ $invalid, $focused }) => ($invalid || $focused ? 2 : 1)}px;
+  border-color: ${({ theme, $invalid, $focused }) =>
+    $invalid
+      ? theme.colors.error
+      : $focused
+      ? theme.colors.primary
+      : theme.colors.border};
   margin-bottom: ${({ theme }) => theme.spacing.sm}px;
   padding-left: ${({ theme }) => theme.spacing.sm}px;
 `;
 
-const WordNumber = styled.Text`
-  color: ${({ theme }) => theme.colors.textTertiary};
+const WordNumber = styled.Text<{ $invalid: boolean }>`
+  color: ${({ theme, $invalid }) =>
+    $invalid ? theme.colors.error : theme.colors.textTertiary};
   font-size: ${({ theme }) => theme.typography.caption.fontSize}px;
   width: 24px;
+`;
+
+const SuggestionBar = styled.View`
+  width: 100%;
+  flex-direction: row;
+  flex-wrap: wrap;
+  gap: ${({ theme }) => theme.spacing.xs}px;
+  margin-bottom: ${({ theme }) => theme.spacing.sm}px;
+`;
+
+const SuggestionChip = styled.TouchableOpacity`
+  min-height: ${({ theme }) => theme.touchTarget}px;
+  justify-content: center;
+  padding: 0 ${({ theme }) => theme.spacing.md}px;
+  border-radius: ${({ theme }) => theme.borderRadius.full}px;
+  border: 1px solid ${({ theme }) => theme.colors.primary};
+  background-color: ${({ theme }) => theme.colors.primarySubtle};
+`;
+
+const SuggestionText = styled.Text`
+  color: ${({ theme }) => theme.colors.textPrimary};
+  font-size: ${({ theme }) => theme.typography.bodySmall.fontSize}px;
+  font-weight: 600;
+`;
+
+const InlineError = styled.Text`
+  color: ${({ theme }) => theme.colors.error};
+  font-size: ${({ theme }) => theme.typography.bodySmall.fontSize}px;
+  line-height: 20px;
+  margin-bottom: ${({ theme }) => theme.spacing.md}px;
 `;
 
 const ProgressContainer = styled.View`
@@ -488,93 +701,63 @@ const ProgressFill = styled.View`
   border-radius: 2px;
 `;
 
-const WarningBox = styled.View`
+const ErrorBox = styled.View`
+  background-color: ${({ theme }) => theme.colors.errorSubtle};
+  border: 1px solid ${({ theme }) => theme.colors.error};
+  border-radius: ${({ theme }) => theme.borderRadius.md}px;
+  padding: ${({ theme }) => theme.spacing.md}px;
+  margin-bottom: ${({ theme }) => theme.spacing.md}px;
+`;
+
+const ErrorTitle = styled.Text`
+  color: ${({ theme }) => theme.colors.textPrimary};
+  font-size: ${({ theme }) => theme.typography.bodySmall.fontSize}px;
+  font-weight: 700;
+  margin-bottom: ${({ theme }) => theme.spacing.xs}px;
+`;
+
+const ErrorMessage = styled.Text`
+  color: ${({ theme }) => theme.colors.textPrimary};
+  font-size: ${({ theme }) => theme.typography.bodySmall.fontSize}px;
+  line-height: 20px;
+`;
+
+const InfoBox = styled.View`
   flex-direction: row;
-  background-color: ${({ theme }) => theme.colors.primary}10;
+  background-color: ${({ theme }) => theme.colors.primarySubtle};
   border-radius: ${({ theme }) => theme.borderRadius.md}px;
   padding: ${({ theme }) => theme.spacing.md}px;
   margin-bottom: ${({ theme }) => theme.spacing.xl}px;
 `;
 
-const WarningIcon = styled.Text`
+const InfoIcon = styled.Text`
   font-size: 20px;
   margin-right: ${({ theme }) => theme.spacing.sm}px;
 `;
 
-const WarningText = styled.Text`
+const InfoText = styled.Text`
   flex: 1;
   color: ${({ theme }) => theme.colors.textSecondary};
   font-size: ${({ theme }) => theme.typography.bodySmall.fontSize}px;
   line-height: 20px;
 `;
 
-const ImportButton = styled.TouchableOpacity<{ disabled?: boolean }>`
-  background-color: ${({ theme, disabled }) =>
-    disabled ? theme.colors.border : theme.colors.primary};
+const ImportButton = styled.TouchableOpacity<{ $enabled: boolean }>`
+  background-color: ${({ theme, $enabled }) =>
+    $enabled ? theme.colors.primary : theme.colors.disabledBackground};
   border-radius: ${({ theme }) => theme.borderRadius.md}px;
+  min-height: ${({ theme }) => theme.touchTarget + 8}px;
   padding: ${({ theme }) => theme.spacing.md}px;
   align-items: center;
+  justify-content: center;
   margin-bottom: ${({ theme }) => theme.spacing.xl}px;
 `;
 
-const ImportButtonText = styled.Text`
-  color: #ffffff;
+const ImportButtonText = styled.Text<{ $enabled: boolean }>`
+  color: ${({ theme, $enabled }) =>
+    $enabled ? theme.colors.onPrimary : theme.colors.disabledText};
   font-size: ${({ theme }) => theme.typography.button.fontSize}px;
   font-weight: ${({ theme }) => theme.typography.button.fontWeight};
-`;
-
-const LoadingOverlay = styled.View`
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background-color: rgba(0, 0, 0, 0.7);
-  justify-content: center;
-  align-items: center;
-  z-index: 1000;
-`;
-
-const LoadingContainer = styled.View`
-  background-color: ${({ theme }) => theme.colors.surface};
-  padding: ${({ theme }) => theme.spacing.xl}px;
-  border-radius: ${({ theme }) => theme.borderRadius.lg}px;
-  align-items: center;
-  min-width: 250px;
-`;
-
-const LoadingPercentText = styled.Text`
-  color: ${({ theme }) => theme.colors.primary};
-  font-size: 48px;
-  font-weight: 700;
-  margin-bottom: ${({ theme }) => theme.spacing.md}px;
-`;
-
-const LoadingBarContainer = styled.View`
-  width: 100%;
-  height: 8px;
-  background-color: ${({ theme }) => theme.colors.border};
-  border-radius: 4px;
-  overflow: hidden;
-`;
-
-const LoadingBarFill = styled.View`
-  height: 100%;
-  background-color: ${({ theme }) => theme.colors.primary};
-  border-radius: 4px;
-`;
-
-const LoadingText = styled.Text`
-  color: ${({ theme }) => theme.colors.textPrimary};
-  font-size: ${({ theme }) => theme.typography.body.fontSize}px;
-  font-weight: 600;
-  margin-top: ${({ theme }) => theme.spacing.md}px;
-`;
-
-const LoadingSubText = styled.Text`
-  color: ${({ theme }) => theme.colors.textSecondary};
-  font-size: ${({ theme }) => theme.typography.bodySmall.fontSize}px;
-  margin-top: ${({ theme }) => theme.spacing.xs}px;
 `;
 
 export default ImportWalletScreen;

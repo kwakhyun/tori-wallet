@@ -1,19 +1,42 @@
 /**
- * 트랜잭션 전 PIN 확인 모달
+ * 트랜잭션/서명 전 PIN 확인 모달
+ *
+ * onConfirm은 서명 세션이 시작된 뒤(signerVault 잠금 해제)에만 호출된다.
+ * 생체인증이 설정되어 있으면 PIN 대신 생체인증으로도 승인할 수 있으며,
+ * 이 경우에도 같은 signerVault 세션이 시작되므로 호출부 입장에서는 결과가 같다.
  */
 
-import React, { useState, useCallback, useEffect } from 'react';
+import React, { useState, useCallback, useEffect, useRef } from 'react';
 import styled from 'styled-components/native';
-import { Modal, Vibration, ActivityIndicator } from 'react-native';
-import { useAuthentication } from '@/hooks/useAuthentication';
-import { PinLockedError } from '@/services/pinAttemptService';
+import { Modal, ActivityIndicator } from 'react-native';
+import {
+  isBiometricUnlockAvailable,
+  useAuthentication,
+  usePinLockout,
+} from '@/hooks/useAuthentication';
+import {
+  describePinAttemptWarning,
+  PinLockedError,
+} from '@/services/pinAttemptService';
+import { errorFeedback } from '@/utils/haptics';
+import { useTheme } from '@/hooks/useTheme';
+import { PinPad } from './PinPad';
+
+const PIN_LENGTH = 6;
 
 interface Props {
   visible: boolean;
+  /** PIN 또는 생체인증으로 서명 세션이 열린 뒤 한 번 호출된다. */
   onConfirm: () => void;
   onCancel: () => void;
   title?: string;
   message?: string;
+  /**
+   * 생체인증이 설정·지원되는 기기에서 생체인증 승인을 허용할지 (기본값 true).
+   * 허용되면 모달을 열 때 한 번 자동으로 프롬프트를 띄우고, 키패드의 🔐 키로
+   * 다시 시도할 수 있다.
+   */
+  allowBiometric?: boolean;
 }
 
 export function PinConfirmModal({
@@ -22,19 +45,26 @@ export function PinConfirmModal({
   onCancel,
   title = 'PIN 확인',
   message = '계속하려면 PIN을 입력하세요.',
+  allowBiometric = true,
 }: Props) {
+  const { theme } = useTheme();
   const [pin, setPin] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [biometricAvailable, setBiometricAvailable] = useState(false);
   const {
     authenticate,
     cancel,
     isAuthenticating: isLoading,
   } = useAuthentication();
+  const lockout = usePinLockout(visible);
+  const { refresh: refreshLockout, lockUntil } = lockout;
 
   useEffect(() => {
     cancel();
     setPin('');
     setError(null);
+    setNotice(null);
   }, [visible, cancel]);
 
   useEffect(() => {
@@ -47,45 +77,97 @@ export function PinConfirmModal({
     onCancel();
   }, [cancel, onCancel]);
 
+  const confirmWithBiometric = useCallback(async () => {
+    setError(null);
+    setNotice(null);
+    try {
+      const authenticated = await authenticate();
+      if (authenticated === null) return;
+      if (authenticated) {
+        onConfirm();
+        return;
+      }
+      setNotice('생체인증을 완료하지 못했습니다. PIN을 입력해주세요.');
+    } catch {
+      setNotice('생체인증을 사용할 수 없습니다. PIN을 입력해주세요.');
+    }
+  }, [authenticate, onConfirm]);
+
+  const confirmWithBiometricRef = useRef(confirmWithBiometric);
+  useEffect(() => {
+    confirmWithBiometricRef.current = confirmWithBiometric;
+  }, [confirmWithBiometric]);
+
+  // 모달이 열릴 때 생체인증 사용 가능 여부를 확인하고 한 번만 자동으로 시도한다.
+  useEffect(() => {
+    if (!visible || !allowBiometric) {
+      setBiometricAvailable(false);
+      return;
+    }
+    let cancelled = false;
+    isBiometricUnlockAvailable().then(available => {
+      if (cancelled) return;
+      setBiometricAvailable(available);
+      if (available) confirmWithBiometricRef.current();
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [visible, allowBiometric]);
+
   const handleVerify = useCallback(
     async (value: string) => {
       try {
         const authenticated = await authenticate(value);
-        if (authenticated === null) return;
-        if (authenticated) {
+        if (authenticated === null) {
           setPin('');
-          onConfirm();
-        } else {
-          setError('PIN이 올바르지 않습니다.');
-          Vibration.vibrate(200);
-          setPin('');
+          return;
         }
+        setPin('');
+        if (authenticated) {
+          onConfirm();
+          return;
+        }
+        errorFeedback();
+        setError('PIN이 올바르지 않습니다.');
+        refreshLockout();
       } catch (reason) {
         setPin('');
-        setError(
-          reason instanceof PinLockedError
-            ? reason.message
-            : 'PIN 확인에 실패했습니다.',
-        );
+        errorFeedback();
+        if (reason instanceof PinLockedError) {
+          setError(null);
+          lockUntil(reason.retryAt);
+          refreshLockout();
+        } else {
+          setError('PIN 확인에 실패했습니다.');
+        }
       }
     },
-    [authenticate, onConfirm],
+    [authenticate, lockUntil, onConfirm, refreshLockout],
   );
 
-  const handleKeyPress = useCallback(
-    (key: string) => {
-      if (isLoading || !visible) return;
-      if (key === 'delete') {
-        setPin(prev => prev.slice(0, -1));
-      } else if (pin.length < 6) {
-        const next = pin + key;
-        setPin(next);
-        setError(null);
-        if (next.length === 6) handleVerify(next);
-      }
+  const keypadDisabled = isLoading || !visible || lockout.isLocked;
+
+  const handleDigit = useCallback(
+    (digit: string) => {
+      if (keypadDisabled || pin.length >= PIN_LENGTH) return;
+      const next = pin + digit;
+      setPin(next);
+      setError(null);
+      setNotice(null);
+      if (next.length === PIN_LENGTH) handleVerify(next);
     },
-    [handleVerify, isLoading, pin, visible],
+    [handleVerify, keypadDisabled, pin],
   );
+
+  const handleDelete = useCallback(() => {
+    setPin(previous => previous.slice(0, -1));
+  }, []);
+
+  const attemptWarning =
+    error && !lockout.isLocked
+      ? describePinAttemptWarning(lockout.failures)
+      : null;
 
   return (
     <Modal
@@ -96,63 +178,72 @@ export function PinConfirmModal({
     >
       <Overlay testID="pin-confirm-overlay">
         <Container testID="pin-confirm-container">
-          <Title testID="pin-confirm-title">{title}</Title>
+          <Title testID="pin-confirm-title" accessibilityRole="header">
+            {title}
+          </Title>
           <Message testID="pin-confirm-message">{message}</Message>
 
-          {/* PIN 표시 */}
-          <PinDisplay testID="pin-confirm-display">
-            {[...Array(6)].map((_, index) => (
-              <PinDot
-                key={index}
-                $filled={index < pin.length}
-                testID={`pin-dot-${index}`}
-              />
-            ))}
-          </PinDisplay>
+          <StatusArea>
+            {isLoading ? (
+              <LoadingRow accessibilityLiveRegion="polite">
+                <ActivityIndicator color={theme.colors.primary} />
+                <LoadingText>확인 중...</LoadingText>
+              </LoadingRow>
+            ) : lockout.isLocked ? (
+              <ErrorText testID="pin-confirm-error" accessibilityRole="alert">
+                {`PIN 입력이 제한되었습니다. ${lockout.countdown} 후 다시 시도해주세요.`}
+              </ErrorText>
+            ) : error ? (
+              <ErrorText
+                testID="pin-confirm-error"
+                accessibilityRole="alert"
+                accessibilityLiveRegion="assertive"
+              >
+                {error}
+              </ErrorText>
+            ) : notice ? (
+              <NoticeText testID="pin-confirm-notice">{notice}</NoticeText>
+            ) : null}
+            {attemptWarning ? (
+              <WarningText testID="pin-confirm-attempts-warning">
+                {attemptWarning}
+              </WarningText>
+            ) : null}
+          </StatusArea>
 
-          {error && <ErrorText testID="pin-confirm-error">{error}</ErrorText>}
+          <KeypadArea testID="pin-confirm-keypad">
+            <PinPad
+              value={pin}
+              length={PIN_LENGTH}
+              onDigit={handleDigit}
+              onDelete={handleDelete}
+              disabled={keypadDisabled}
+              error={!!error}
+              maxKeySize={64}
+              testIDPrefix="pin"
+              leftAction={
+                biometricAvailable
+                  ? {
+                      label: '🔐',
+                      accessibilityLabel: '생체인증으로 승인',
+                      onPress: () => {
+                        confirmWithBiometric();
+                      },
+                      testID: 'pin-confirm-biometric',
+                    }
+                  : null
+              }
+            />
+          </KeypadArea>
 
-          {isLoading ? (
-            <LoadingContainer>
-              <ActivityIndicator />
-              <LoadingText>확인 중...</LoadingText>
-            </LoadingContainer>
-          ) : (
-            <>
-              {/* 숫자 키패드 */}
-              <Keypad testID="pin-confirm-keypad">
-                {[
-                  ['1', '2', '3'],
-                  ['4', '5', '6'],
-                  ['7', '8', '9'],
-                  ['', '0', 'delete'],
-                ].map((row, rowIndex) => (
-                  <KeypadRow key={rowIndex}>
-                    {row.map(key => (
-                      <KeyButton
-                        key={key || `empty-${rowIndex}`}
-                        onPress={() => key && handleKeyPress(key)}
-                        disabled={!key}
-                        activeOpacity={0.7}
-                        testID={key ? `pin-key-${key}` : undefined}
-                      >
-                        {key === 'delete' ? (
-                          <KeyText>⌫</KeyText>
-                        ) : (
-                          <KeyText>{key}</KeyText>
-                        )}
-                      </KeyButton>
-                    ))}
-                  </KeypadRow>
-                ))}
-              </Keypad>
-            </>
-          )}
-          <ButtonContainer>
-            <CancelButton onPress={handleCancel} testID="pin-confirm-cancel">
-              <CancelButtonText>취소</CancelButtonText>
-            </CancelButton>
-          </ButtonContainer>
+          <CancelButton
+            onPress={handleCancel}
+            testID="pin-confirm-cancel"
+            accessibilityRole="button"
+            accessibilityLabel="취소"
+          >
+            <CancelButtonText>취소</CancelButtonText>
+          </CancelButton>
         </Container>
       </Overlay>
     </Modal>
@@ -162,101 +253,83 @@ export function PinConfirmModal({
 // Styled Components
 const Overlay = styled.View`
   flex: 1;
-  background-color: rgba(0, 0, 0, 0.8);
+  background-color: ${({ theme }) => theme.colors.overlay};
   justify-content: center;
   align-items: center;
-  padding: ${({ theme }) => theme.spacing.lg}px;
+  padding: ${({ theme }) => theme.spacing.md}px;
 `;
 
 const Container = styled.View`
   background-color: ${({ theme }) => theme.colors.surface};
   border-radius: ${({ theme }) => theme.borderRadius.xl}px;
-  padding: ${({ theme }) => theme.spacing.xl}px;
+  padding: ${({ theme }) => theme.spacing.lg}px
+    ${({ theme }) => theme.spacing.md}px;
   width: 100%;
-  max-width: 340px;
+  max-width: 360px;
   align-items: center;
 `;
 
 const Title = styled.Text`
-  font-size: 22px;
+  font-size: 20px;
   font-weight: bold;
   color: ${({ theme }) => theme.colors.textPrimary};
-  margin-bottom: ${({ theme }) => theme.spacing.sm}px;
+  margin-bottom: ${({ theme }) => theme.spacing.xs}px;
 `;
 
 const Message = styled.Text`
   font-size: 14px;
   color: ${({ theme }) => theme.colors.textSecondary};
   text-align: center;
-  margin-bottom: ${({ theme }) => theme.spacing.lg}px;
 `;
 
-const PinDisplay = styled.View`
-  flex-direction: row;
+const StatusArea = styled.View`
+  min-height: 44px;
+  width: 100%;
+  align-items: center;
   justify-content: center;
-  gap: 12px;
-  margin-bottom: ${({ theme }) => theme.spacing.md}px;
-`;
-
-const PinDot = styled.View<{ $filled: boolean }>`
-  width: 16px;
-  height: 16px;
-  border-radius: 8px;
-  background-color: ${({ $filled, theme }) =>
-    $filled ? theme.colors.primary : theme.colors.border};
+  padding: ${({ theme }) => theme.spacing.xs}px 0;
 `;
 
 const ErrorText = styled.Text`
   font-size: 14px;
   color: ${({ theme }) => theme.colors.error};
-  margin-bottom: ${({ theme }) => theme.spacing.md}px;
+  text-align: center;
 `;
 
-const LoadingContainer = styled.View`
-  padding: ${({ theme }) => theme.spacing.xl}px;
+const NoticeText = styled.Text`
+  font-size: 14px;
+  color: ${({ theme }) => theme.colors.textSecondary};
+  text-align: center;
+`;
+
+const WarningText = styled.Text`
+  font-size: 12px;
+  color: ${({ theme }) => theme.colors.warning};
+  text-align: center;
+  margin-top: 2px;
+`;
+
+const LoadingRow = styled.View`
+  flex-direction: row;
   align-items: center;
 `;
 
 const LoadingText = styled.Text`
   color: ${({ theme }) => theme.colors.textSecondary};
   font-size: 14px;
-  margin-top: ${({ theme }) => theme.spacing.sm}px;
+  margin-left: ${({ theme }) => theme.spacing.sm}px;
 `;
 
-const Keypad = styled.View`
+const KeypadArea = styled.View`
   width: 100%;
-  margin-top: ${({ theme }) => theme.spacing.md}px;
-`;
-
-const KeypadRow = styled.View`
-  flex-direction: row;
-  justify-content: center;
-  margin-bottom: ${({ theme }) => theme.spacing.sm}px;
-`;
-
-const KeyButton = styled.TouchableOpacity`
-  width: 70px;
-  height: 54px;
-  justify-content: center;
-  align-items: center;
-  margin: 0 ${({ theme }) => theme.spacing.sm}px;
-  background-color: ${({ theme }) => theme.colors.backgroundSecondary};
-  border-radius: ${({ theme }) => theme.borderRadius.md}px;
-`;
-
-const KeyText = styled.Text`
-  font-size: 24px;
-  color: ${({ theme }) => theme.colors.textPrimary};
-`;
-
-const ButtonContainer = styled.View`
-  width: 100%;
-  margin-top: ${({ theme }) => theme.spacing.lg}px;
 `;
 
 const CancelButton = styled.TouchableOpacity`
-  padding: ${({ theme }) => theme.spacing.md}px;
+  min-height: ${({ theme }) => theme.touchTarget}px;
+  min-width: 120px;
+  padding: 0 ${({ theme }) => theme.spacing.md}px;
   align-items: center;
+  justify-content: center;
 `;
 
 const CancelButtonText = styled.Text`

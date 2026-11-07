@@ -17,10 +17,12 @@ jest.mock('../../src/store/walletStore', () => ({
   }),
 }));
 
+let mockAutoLockTimeout = '1min';
 jest.mock('../../src/store/securityStore', () => ({
   useSecurityStore: () => ({
-    autoLockTimeout: '1min',
+    autoLockTimeout: mockAutoLockTimeout,
     updateLastActiveTime: mockUpdateLastActiveTime,
+    shouldAutoLock: () => false,
   }),
   AUTO_LOCK_OPTIONS: {
     immediate: 0,
@@ -30,6 +32,11 @@ jest.mock('../../src/store/securityStore', () => ({
     '1hour': 3600000,
     never: -1,
   },
+}));
+
+const mockVaultClear = jest.fn();
+jest.mock('../../src/services/onboardingVault', () => ({
+  onboardingVault: { clear: (reason?: string) => mockVaultClear(reason) },
 }));
 
 // React Native AppState 모킹
@@ -102,6 +109,59 @@ describe('useAppState', () => {
       // 에러 없이 처리되어야 함
       expect(true).toBe(true);
     });
+  });
+});
+
+describe('useAppState - 온보딩 보관소와 즉시 잠금', () => {
+  const emit = (state: string) =>
+    act(() => {
+      appStateCallback!(state);
+    });
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    appStateCallback = null;
+    mockAutoLockTimeout = '1min';
+  });
+
+  it('keeps the onboarding phrase while the app is only inactive', () => {
+    renderHook(() => useAppState());
+
+    // 제어 센터, 전화 수신, Face ID 프롬프트 등
+    emit('inactive');
+    emit('active');
+
+    expect(mockVaultClear).not.toHaveBeenCalled();
+  });
+
+  it('clears the onboarding phrase when the app actually goes to the background', () => {
+    renderHook(() => useAppState());
+
+    emit('inactive');
+    emit('background');
+
+    expect(mockVaultClear).toHaveBeenCalledTimes(1);
+    expect(mockVaultClear).toHaveBeenCalledWith('background');
+  });
+
+  it('clears on a direct active → background transition (Android)', () => {
+    renderHook(() => useAppState());
+    emit('background');
+    expect(mockVaultClear).toHaveBeenCalledWith('background');
+  });
+
+  it("locks an 'immediate' wallet on background, not on inactive", () => {
+    mockAutoLockTimeout = 'immediate';
+    renderHook(() => useAppState());
+
+    emit('inactive');
+    expect(mockLock).not.toHaveBeenCalled();
+    emit('active');
+    expect(mockLock).not.toHaveBeenCalled();
+
+    emit('inactive');
+    emit('background');
+    expect(mockLock).toHaveBeenCalledTimes(1);
   });
 });
 

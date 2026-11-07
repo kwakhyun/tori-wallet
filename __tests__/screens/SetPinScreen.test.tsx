@@ -5,6 +5,7 @@
 
 import React from 'react';
 import {
+  act,
   cleanup,
   render,
   fireEvent,
@@ -12,11 +13,13 @@ import {
 } from '@testing-library/react-native';
 import { ThemeProvider } from 'styled-components/native';
 import { lightTheme } from '../../src/styles/theme';
-import { Alert } from 'react-native';
+import { Alert, AlertButton } from 'react-native';
 
 // 네비게이션 모킹
 const mockDispatch = jest.fn();
 const mockGoBack = jest.fn();
+type BeforeRemoveListener = (event: { preventDefault: () => void }) => void;
+const mockBeforeRemove: BeforeRemoveListener[] = [];
 jest.mock('@react-navigation/native', () => {
   const actualNav = jest.requireActual('@react-navigation/native');
   return {
@@ -25,13 +28,12 @@ jest.mock('@react-navigation/native', () => {
       navigate: jest.fn(),
       goBack: mockGoBack,
       dispatch: mockDispatch,
-    }),
-    useRoute: () => ({
-      params: {
-        mnemonic:
-          'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about',
-        walletAddress:
-          '0x1234567890123456789012345678901234567890' as `0x${string}`,
+      addListener: (event: string, listener: BeforeRemoveListener) => {
+        if (event === 'beforeRemove') mockBeforeRemove.push(listener);
+        return () => {
+          const index = mockBeforeRemove.indexOf(listener);
+          if (index >= 0) mockBeforeRemove.splice(index, 1);
+        };
       },
     }),
     CommonActions: {
@@ -58,42 +60,61 @@ jest.mock('../../src/store/walletStore', () => ({
 const mockStoreMnemonic = jest.fn();
 const mockStoreAccounts = jest.fn();
 const mockClearAll = jest.fn();
+const mockIsBiometricSupported = jest.fn();
+const mockEnableBiometric = jest.fn();
 jest.mock('../../src/services/walletService', () => ({
   walletService: {
     storeMnemonic: (...args: unknown[]) => mockStoreMnemonic(...args),
     storeAccounts: (...args: unknown[]) => mockStoreAccounts(...args),
     clearAll: (...args: unknown[]) => mockClearAll(...args),
+    isBiometricSupported: () => mockIsBiometricSupported(),
+    enableBiometric: (mnemonic: string) => mockEnableBiometric(mnemonic),
   },
 }));
 
 const mockMnemonic =
   'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about';
+const mockSnapshot = jest.fn();
+const mockIsActive = jest.fn();
+const mockClear = jest.fn();
 jest.mock('../../src/services/onboardingVault', () => ({
   onboardingVault: {
-    getSnapshot: jest.fn(() => ({
-      sessionId: 1,
-      mnemonic: mockMnemonic,
-      walletAddress: '0x1234567890123456789012345678901234567890',
-    })),
-    isActive: jest.fn(() => true),
-    clear: jest.fn(),
+    getSnapshot: () => mockSnapshot(),
+    isActive: (id: number) => mockIsActive(id),
+    clear: (reason?: string) => mockClear(reason),
   },
 }));
 
 const mockStartSession = jest.fn();
+const mockIsUnlocked = jest.fn();
 jest.mock('../../src/services/signerVault', () => ({
   signerVault: {
     startSession: (mnemonic: string) => mockStartSession(mnemonic),
+    isUnlocked: () => mockIsUnlocked(),
   },
 }));
 
 // Alert 모킹
 jest.spyOn(Alert, 'alert').mockImplementation(() => {});
 
-import SetPinScreen from '../../src/screens/Auth/SetPinScreen';
+import SetPinScreen, {
+  PIN_MISMATCH_MESSAGE,
+  WEAK_PIN_MESSAGE,
+} from '../../src/screens/Auth/SetPinScreen';
+
+const STRONG_PIN = '135790';
 
 const renderWithTheme = (component: React.ReactElement) => {
   return render(<ThemeProvider theme={lightTheme}>{component}</ThemeProvider>);
+};
+
+const enterPin = (
+  view: ReturnType<typeof renderWithTheme>,
+  pin: string,
+): void => {
+  for (const digit of pin) {
+    fireEvent.press(view.getByTestId(`set-pin-key-${digit}`));
+  }
 };
 
 describe('SetPinScreen', () => {
@@ -104,10 +125,21 @@ describe('SetPinScreen', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    mockBeforeRemove.length = 0;
+    mockSnapshot.mockReturnValue({
+      sessionId: 1,
+      mnemonic: mockMnemonic,
+      walletAddress: '0x1234567890123456789012345678901234567890',
+      source: 'create',
+    });
+    mockIsActive.mockReturnValue(true);
     mockStoreMnemonic.mockResolvedValue(undefined);
     mockStoreAccounts.mockResolvedValue(undefined);
     mockClearAll.mockResolvedValue(undefined);
     mockStartSession.mockReturnValue(undefined);
+    mockIsBiometricSupported.mockResolvedValue(false);
+    mockEnableBiometric.mockResolvedValue(undefined);
+    mockIsUnlocked.mockReturnValue(true);
   });
 
   describe('렌더링', () => {
@@ -121,77 +153,57 @@ describe('SetPinScreen', () => {
       expect(getByText(/6자리 PIN을 입력/)).toBeTruthy();
     });
 
-    it('should render numeric keypad', () => {
-      const { getByText } = renderWithTheme(<SetPinScreen />);
+    it('should render numeric keypad with E2E key ids', () => {
+      const view = renderWithTheme(<SetPinScreen />);
 
       for (let i = 0; i <= 9; i++) {
-        expect(getByText(String(i))).toBeTruthy();
+        expect(view.getByText(String(i))).toBeTruthy();
+        expect(view.getByTestId(`set-pin-key-${i}`)).toBeTruthy();
       }
     });
 
-    it('should have back button', () => {
-      const { getByText } = renderWithTheme(<SetPinScreen />);
+    it('should have an accessible back button', () => {
+      const { getByText, getByLabelText } = renderWithTheme(<SetPinScreen />);
       expect(getByText('←')).toBeTruthy();
+      expect(getByLabelText('뒤로 가기')).toBeTruthy();
     });
   });
 
   describe('PIN 입력 - 1단계 (생성)', () => {
-    it('should handle number input', () => {
-      const { getByText } = renderWithTheme(<SetPinScreen />);
-
-      fireEvent.press(getByText('1'));
-      fireEvent.press(getByText('2'));
-      fireEvent.press(getByText('3'));
-
-      // 입력 확인 (dots가 채워짐)
-      expect(true).toBe(true);
-    });
-
     it('should transition to confirm step after 6 digits', async () => {
-      const { getByText } = renderWithTheme(<SetPinScreen />);
-
-      // 6자리 입력
-      fireEvent.press(getByText('1'));
-      fireEvent.press(getByText('2'));
-      fireEvent.press(getByText('3'));
-      fireEvent.press(getByText('4'));
-      fireEvent.press(getByText('5'));
-      fireEvent.press(getByText('6'));
-
-      await waitFor(() => {
-        expect(getByText('PIN 확인')).toBeTruthy();
-      });
+      const view = renderWithTheme(<SetPinScreen />);
+      enterPin(view, STRONG_PIN);
+      expect(view.getByText('PIN 확인')).toBeTruthy();
     });
+
+    it.each(['111111', '000000', '123456', '654321', '567890', '121212'])(
+      'rejects the weak PIN %s and stays on the create step',
+      pin => {
+        const view = renderWithTheme(<SetPinScreen />);
+        enterPin(view, pin);
+
+        expect(view.getByTestId('set-pin-error').props.children).toBe(
+          WEAK_PIN_MESSAGE,
+        );
+        expect(view.getByText('PIN 설정')).toBeTruthy();
+        expect(view.queryByText('PIN 확인')).toBeNull();
+        expect(mockStoreMnemonic).not.toHaveBeenCalled();
+      },
+    );
   });
 
   describe('PIN 입력 - 2단계 (확인)', () => {
     it('should complete wallet creation on matching PIN', async () => {
-      const { getByText } = renderWithTheme(<SetPinScreen />);
+      const view = renderWithTheme(<SetPinScreen />);
 
-      // 1단계: PIN 생성
-      fireEvent.press(getByText('1'));
-      fireEvent.press(getByText('2'));
-      fireEvent.press(getByText('3'));
-      fireEvent.press(getByText('4'));
-      fireEvent.press(getByText('5'));
-      fireEvent.press(getByText('6'));
-
-      await waitFor(() => {
-        expect(getByText('PIN 확인')).toBeTruthy();
-      });
-
-      // 2단계: PIN 확인 (동일한 PIN 입력)
-      fireEvent.press(getByText('1'));
-      fireEvent.press(getByText('2'));
-      fireEvent.press(getByText('3'));
-      fireEvent.press(getByText('4'));
-      fireEvent.press(getByText('5'));
-      fireEvent.press(getByText('6'));
+      enterPin(view, STRONG_PIN);
+      expect(view.getByText('PIN 확인')).toBeTruthy();
+      enterPin(view, STRONG_PIN);
 
       await waitFor(() => {
         expect(mockStoreMnemonic).toHaveBeenCalledWith(
           expect.stringContaining('abandon'),
-          '123456',
+          STRONG_PIN,
         );
       });
 
@@ -199,37 +211,161 @@ describe('SetPinScreen', () => {
         expect(mockAddWallet).toHaveBeenCalled();
         expect(mockUnlock).toHaveBeenCalled();
         expect(mockSetHasWallet).toHaveBeenCalledWith(true);
+        expect(mockClear).toHaveBeenCalledWith('completed');
+        expect(mockDispatch).toHaveBeenCalled();
       });
     });
 
-    it('should show error and reset on mismatched PIN', async () => {
-      // PIN 불일치 시 에러 표시 검증
-      // fake timer 문제로 인해 단순화
-      const { getByText } = renderWithTheme(<SetPinScreen />);
+    it('shows a mismatch error and returns to the create step', async () => {
+      const view = renderWithTheme(<SetPinScreen />);
 
-      // 렌더링 확인
-      expect(getByText('PIN 설정')).toBeTruthy();
+      enterPin(view, STRONG_PIN);
+      enterPin(view, '246802');
 
-      // Alert.alert mock이 준비되어 있는지만 확인
-      expect(Alert.alert).toBeDefined();
+      expect(view.getByTestId('set-pin-error').props.children).toBe(
+        PIN_MISMATCH_MESSAGE,
+      );
+      expect(view.getByText('PIN 설정')).toBeTruthy();
+      expect(mockStoreMnemonic).not.toHaveBeenCalled();
+      expect(Alert.alert).not.toHaveBeenCalled();
+    });
+
+    it('back on the confirm step returns to the create step without leaving', () => {
+      const view = renderWithTheme(<SetPinScreen />);
+      enterPin(view, STRONG_PIN);
+      expect(view.getByText('PIN 확인')).toBeTruthy();
+
+      fireEvent.press(view.getByLabelText('뒤로 가기'));
+
+      expect(view.getByText('PIN 설정')).toBeTruthy();
+      expect(mockGoBack).not.toHaveBeenCalled();
+    });
+
+    it('hardware back on the confirm step is intercepted and returns to the create step', () => {
+      const view = renderWithTheme(<SetPinScreen />);
+      enterPin(view, STRONG_PIN);
+
+      const preventDefault = jest.fn();
+      act(() => {
+        mockBeforeRemove.forEach(listener => listener({ preventDefault }));
+      });
+
+      expect(preventDefault).toHaveBeenCalled();
+      expect(view.getByText('PIN 설정')).toBeTruthy();
+    });
+
+    it('allows leaving from the create step', () => {
+      renderWithTheme(<SetPinScreen />);
+      const preventDefault = jest.fn();
+      mockBeforeRemove.forEach(listener => listener({ preventDefault }));
+      expect(preventDefault).not.toHaveBeenCalled();
+    });
+
+    it('uses import copy while importing a wallet', async () => {
+      mockSnapshot.mockReturnValue({
+        sessionId: 1,
+        mnemonic: mockMnemonic,
+        walletAddress: '0x1234567890123456789012345678901234567890',
+        source: 'import',
+      });
+      let finishStore!: () => void;
+      mockStoreMnemonic.mockReturnValue(
+        new Promise<void>(resolve => {
+          finishStore = resolve;
+        }),
+      );
+      const view = renderWithTheme(<SetPinScreen />);
+      enterPin(view, STRONG_PIN);
+      enterPin(view, STRONG_PIN);
+
+      expect(view.getByText('지갑 가져오는 중…')).toBeTruthy();
+      expect(view.queryByText('지갑 생성 중…')).toBeNull();
+      await act(async () => finishStore());
+    });
+
+    it('uses create copy while creating a wallet', async () => {
+      let finishStore!: () => void;
+      mockStoreMnemonic.mockReturnValue(
+        new Promise<void>(resolve => {
+          finishStore = resolve;
+        }),
+      );
+      const view = renderWithTheme(<SetPinScreen />);
+      enterPin(view, STRONG_PIN);
+      enterPin(view, STRONG_PIN);
+
+      expect(view.getByText('지갑 생성 중…')).toBeTruthy();
+      await act(async () => finishStore());
     });
   });
 
-  describe('삭제 버튼', () => {
-    it('should handle delete button in create step', () => {
-      const { getByText } = renderWithTheme(<SetPinScreen />);
+  describe('생체인증 등록 제안', () => {
+    const lastAlertButtons = (): AlertButton[] =>
+      ((Alert.alert as jest.Mock).mock.calls.at(-1)?.[2] ??
+        []) as AlertButton[];
 
-      fireEvent.press(getByText('1'));
-      fireEvent.press(getByText('2'));
-      fireEvent.press(getByText('⌫'));
+    it('offers optional biometric enrollment after the wallet is saved', async () => {
+      mockIsBiometricSupported.mockResolvedValue(true);
+      const view = renderWithTheme(<SetPinScreen />);
+      enterPin(view, STRONG_PIN);
+      enterPin(view, STRONG_PIN);
 
-      // 삭제 후에도 정상 동작
-      expect(true).toBe(true);
+      await waitFor(() =>
+        expect(Alert.alert).toHaveBeenCalledWith(
+          '생체인증 사용',
+          expect.any(String),
+          expect.any(Array),
+          expect.anything(),
+        ),
+      );
+      expect(mockSetHasWallet).toHaveBeenCalledWith(true);
+
+      const enable = lastAlertButtons().find(b => b.text === '사용하기');
+      await act(async () => {
+        await enable?.onPress?.();
+      });
+      expect(mockEnableBiometric).toHaveBeenCalledWith(mockMnemonic);
+    });
+
+    it('can be skipped', async () => {
+      mockIsBiometricSupported.mockResolvedValue(true);
+      const view = renderWithTheme(<SetPinScreen />);
+      enterPin(view, STRONG_PIN);
+      enterPin(view, STRONG_PIN);
+
+      await waitFor(() => expect(Alert.alert).toHaveBeenCalled());
+      const skip = lastAlertButtons().find(b => b.text === '나중에');
+      expect(skip?.style).toBe('cancel');
+      expect(mockEnableBiometric).not.toHaveBeenCalled();
+    });
+
+    it('is not offered when biometrics are unsupported', async () => {
+      const view = renderWithTheme(<SetPinScreen />);
+      enterPin(view, STRONG_PIN);
+      enterPin(view, STRONG_PIN);
+
+      await waitFor(() => expect(mockSetHasWallet).toHaveBeenCalled());
+      expect(Alert.alert).not.toHaveBeenCalled();
+    });
+
+    it('does not enroll if the wallet was locked before the user accepted', async () => {
+      mockIsBiometricSupported.mockResolvedValue(true);
+      const view = renderWithTheme(<SetPinScreen />);
+      enterPin(view, STRONG_PIN);
+      enterPin(view, STRONG_PIN);
+      await waitFor(() => expect(Alert.alert).toHaveBeenCalled());
+
+      mockIsUnlocked.mockReturnValue(false);
+      const enable = lastAlertButtons().find(b => b.text === '사용하기');
+      await act(async () => {
+        await enable?.onPress?.();
+      });
+      expect(mockEnableBiometric).not.toHaveBeenCalled();
     });
   });
 
   describe('뒤로 가기', () => {
-    it('should call goBack when back button pressed', () => {
+    it('should call goBack when back button pressed on the create step', () => {
       const { getByText } = renderWithTheme(<SetPinScreen />);
 
       fireEvent.press(getByText('←'));
@@ -239,41 +375,46 @@ describe('SetPinScreen', () => {
   });
 
   describe('에러 처리', () => {
-    it('should show error alert on wallet creation failure', () => {
-      // 지갑 생성 실패 시 에러 처리 검증
+    it('should show error alert on wallet creation failure', async () => {
       mockStoreMnemonic.mockRejectedValue(new Error('Storage failed'));
-      const { getByText } = renderWithTheme(<SetPinScreen />);
+      const view = renderWithTheme(<SetPinScreen />);
+      enterPin(view, STRONG_PIN);
+      enterPin(view, STRONG_PIN);
 
-      // 화면 렌더링 확인
-      expect(getByText('PIN 설정')).toBeTruthy();
+      await waitFor(() =>
+        expect(Alert.alert).toHaveBeenCalledWith(
+          '오류',
+          '지갑 생성에 실패했습니다. 다시 시도해주세요.',
+        ),
+      );
+      expect(mockSetHasWallet).not.toHaveBeenCalled();
+      expect(view.getByText('PIN 설정')).toBeTruthy();
+    });
 
-      // mock이 에러를 던지도록 설정되어 있는지 확인
-      expect(mockStoreMnemonic).toBeDefined();
+    it('clears stored data and stays quiet when the session ended in the background', async () => {
+      mockIsActive.mockReturnValue(false);
+      const view = renderWithTheme(<SetPinScreen />);
+      enterPin(view, STRONG_PIN);
+      enterPin(view, STRONG_PIN);
+
+      await waitFor(() => expect(mockClearAll).toHaveBeenCalled());
+      expect(Alert.alert).not.toHaveBeenCalled();
+      expect(mockSetHasWallet).not.toHaveBeenCalled();
     });
   });
 
   describe('보안 검증', () => {
     it('should not allow more than 6 digits in create step', () => {
-      const { getByText } = renderWithTheme(<SetPinScreen />);
+      const view = renderWithTheme(<SetPinScreen />);
 
-      // 7자리 입력 시도
-      for (let i = 0; i < 7; i++) {
-        fireEvent.press(getByText('1'));
-      }
-
-      // 6자리로 제한되어야 함
-      expect(true).toBe(true);
-    });
-
-    it('should store mnemonic with PIN encryption', () => {
-      // 니모닉이 PIN과 함께 암호화되어 저장되는지 확인
-      const { getByText } = renderWithTheme(<SetPinScreen />);
-
-      // 화면 렌더링 확인
-      expect(getByText('PIN 설정')).toBeTruthy();
-
-      // storeMnemonic mock이 설정되어 있는지 확인
-      expect(mockStoreMnemonic).toBeDefined();
+      enterPin(view, '13579');
+      expect(view.getByTestId('set-pin-dots').props.accessibilityLabel).toBe(
+        '새 PIN 6자리 중 5자리 입력됨',
+      );
+      fireEvent.press(view.getByTestId('set-pin-key-delete'));
+      expect(view.getByTestId('set-pin-dots').props.accessibilityLabel).toBe(
+        '새 PIN 6자리 중 4자리 입력됨',
+      );
     });
   });
 });

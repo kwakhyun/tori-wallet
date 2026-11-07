@@ -85,6 +85,37 @@ describe('WalletService', () => {
     );
   });
 
+  it.each([
+    [
+      15,
+      'absurd amount doctor acoustic avoid letter advice cage absurd amount doctor acoustic avoid letter all',
+    ],
+    [
+      18,
+      'absurd amount doctor acoustic avoid letter advice cage absurd amount doctor acoustic avoid letter advice cage absurd approve',
+    ],
+    [
+      21,
+      'absurd amount doctor acoustic avoid letter advice cage absurd amount doctor acoustic avoid letter advice cage absurd amount doctor acoustic banana',
+    ],
+  ])('accepts a checksum-valid %i-word BIP-39 mnemonic', (_count, phrase) => {
+    expect(walletService.validateMnemonic(phrase)).toBe(true);
+    expect(walletService.validateMnemonic(`  ${phrase.toUpperCase()}  `)).toBe(
+      true,
+    );
+  });
+
+  it('rejects non-standard word counts and broken 15-word checksums', () => {
+    const fifteen =
+      'absurd amount doctor acoustic avoid letter advice cage absurd amount doctor acoustic avoid letter all';
+    expect(
+      walletService.validateMnemonic(fifteen.replace(/ all$/, ' zoo')),
+    ).toBe(false);
+    expect(
+      walletService.validateMnemonic(fifteen.split(' ').slice(0, 13).join(' ')),
+    ).toBe(false);
+  });
+
   it('rejects a checksum-invalid mnemonic even when all words exist', () => {
     const invalidChecksum =
       'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon';

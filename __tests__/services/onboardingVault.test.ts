@@ -43,8 +43,66 @@ describe('onboardingVault', () => {
     jest.useFakeTimers();
     onboardingVault.start(MNEMONIC);
 
-    jest.advanceTimersByTime(10 * 60 * 1000);
+    jest.advanceTimersByTime(10 * 60 * 1000 - 1);
+    expect(onboardingVault.getSnapshot()).not.toBeNull();
+    jest.advanceTimersByTime(1);
 
     expect(onboardingVault.getSnapshot()).toBeNull();
+    expect(onboardingVault.getResetNotice()).toEqual({
+      reason: 'expired',
+      source: 'create',
+    });
+  });
+
+  it('records why an in-progress flow was discarded for the welcome screen', () => {
+    onboardingVault.start(
+      MNEMONIC,
+      '0x1234567890123456789012345678901234567890',
+    );
+    expect(onboardingVault.getSnapshot()?.source).toBe('import');
+
+    onboardingVault.clear('background');
+
+    expect(onboardingVault.getResetNotice()).toEqual({
+      reason: 'background',
+      source: 'import',
+    });
+  });
+
+  it('sets the notice before notifying subscribers', () => {
+    let seen: unknown = 'unset';
+    const unsubscribe = onboardingVault.subscribe(() => {
+      seen = onboardingVault.getResetNotice();
+    });
+    onboardingVault.start(MNEMONIC);
+    onboardingVault.clear('background');
+    expect(seen).toEqual({ reason: 'background', source: 'create' });
+    unsubscribe();
+  });
+
+  it.each(['cancelled', 'completed'] as const)(
+    'does not leave a notice when the flow was %s',
+    reason => {
+      onboardingVault.start(MNEMONIC);
+      onboardingVault.clear(reason);
+      expect(onboardingVault.getResetNotice()).toBeNull();
+    },
+  );
+
+  it('does not leave a notice when nothing was in progress', () => {
+    onboardingVault.dismissResetNotice();
+    onboardingVault.clear('background');
+    expect(onboardingVault.getResetNotice()).toBeNull();
+  });
+
+  it('drops the notice when a new flow starts or it is dismissed', () => {
+    onboardingVault.start(MNEMONIC);
+    onboardingVault.clear('background');
+    onboardingVault.start(MNEMONIC);
+    expect(onboardingVault.getResetNotice()).toBeNull();
+
+    onboardingVault.clear('expired');
+    onboardingVault.dismissResetNotice();
+    expect(onboardingVault.getResetNotice()).toBeNull();
   });
 });
