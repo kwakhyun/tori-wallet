@@ -5,6 +5,7 @@
 
 import React from 'react';
 import {
+  act,
   cleanup,
   render,
   fireEvent,
@@ -13,8 +14,12 @@ import {
 import UnlockScreen from '../../src/screens/Auth/UnlockScreen';
 import { ThemeProvider } from 'styled-components/native';
 import { lightTheme } from '../../src/styles/theme';
-import { Alert } from 'react-native';
-import { PinLockedError } from '../../src/services/pinAttemptService';
+import { Alert, AppState, AppStateStatus } from 'react-native';
+import {
+  PinLockedError,
+  pinAttemptService,
+} from '../../src/services/pinAttemptService';
+import { useToastStore } from '../../src/store/toastStore';
 
 // 네비게이션 모킹
 const mockNavigate = jest.fn();
@@ -58,6 +63,11 @@ jest.mock('../../src/services/signerVault', () => ({
   },
 }));
 
+const mockWalletReset = jest.fn();
+jest.mock('../../src/services/walletResetService', () => ({
+  walletResetService: { reset: () => mockWalletReset() },
+}));
+
 // Alert 모킹
 jest.spyOn(Alert, 'alert').mockImplementation(() => {});
 
@@ -65,17 +75,53 @@ const renderWithTheme = (component: React.ReactElement) => {
   return render(<ThemeProvider theme={lightTheme}>{component}</ThemeProvider>);
 };
 
+const enterPin = (
+  view: ReturnType<typeof renderWithTheme>,
+  pin: string,
+): void => {
+  for (const digit of pin)
+    fireEvent.press(view.getByTestId(`unlock-key-${digit}`));
+};
+
+const originalCurrentState = AppState.currentState;
+const listeners: Array<(state: AppStateStatus) => void> = [];
+const emitAppState = (state: AppStateStatus) => {
+  (AppState as { currentState: unknown }).currentState = state;
+  [...listeners].forEach(listener => listener(state));
+};
+
 describe('UnlockScreen', () => {
+  let getStatus: jest.SpyInstance;
+
   afterEach(() => {
     cleanup();
+    jest.useRealTimers();
+    (AppState as { currentState: unknown }).currentState = originalCurrentState;
   });
 
   beforeEach(() => {
     jest.clearAllMocks();
+    listeners.length = 0;
+    (AppState.addEventListener as jest.Mock).mockImplementation(
+      (_event: string, listener: (state: AppStateStatus) => void) => {
+        listeners.push(listener);
+        return {
+          remove: () => {
+            const index = listeners.indexOf(listener);
+            if (index >= 0) listeners.splice(index, 1);
+          },
+        };
+      },
+    );
+    getStatus = jest
+      .spyOn(pinAttemptService, 'getStatus')
+      .mockResolvedValue({ failures: 0, blockedUntil: 0 });
+    useToastStore.getState().reset();
     mockIsBiometricSupported.mockResolvedValue(false);
     mockIsBiometricEnabled.mockResolvedValue(false);
     mockUnlockWithPin.mockResolvedValue(false);
     mockUnlockWithBiometric.mockResolvedValue(false);
+    mockWalletReset.mockResolvedValue(undefined);
   });
 
   describe('렌더링', () => {
@@ -87,100 +133,86 @@ describe('UnlockScreen', () => {
       expect(getByText(/지갑 잠금을 해제/)).toBeTruthy();
     });
 
-    it('should render keypad with numbers 0-9', () => {
-      const { getByText } = renderWithTheme(<UnlockScreen />);
+    it('should render keypad with numbers 0-9 and E2E key ids', () => {
+      const view = renderWithTheme(<UnlockScreen />);
 
       for (let i = 0; i <= 9; i++) {
-        expect(getByText(String(i))).toBeTruthy();
+        expect(view.getByText(String(i))).toBeTruthy();
+        expect(view.getByTestId(`unlock-key-${i}`)).toBeTruthy();
       }
+      expect(view.getByText('⌫')).toBeTruthy();
     });
 
-    it('should render delete and biometric buttons', () => {
-      const { getByText } = renderWithTheme(<UnlockScreen />);
+    it('shows the biometric key only when biometrics are enabled and supported', async () => {
+      mockIsBiometricEnabled.mockResolvedValue(true);
+      mockIsBiometricSupported.mockResolvedValue(true);
+      const view = renderWithTheme(<UnlockScreen />);
 
-      expect(getByText('⌫')).toBeTruthy();
-      expect(getByText('🔐')).toBeTruthy();
+      expect(await view.findByTestId('unlock-biometric')).toBeTruthy();
+      expect(view.getByText('🔐')).toBeTruthy();
     });
+
+    it.each([
+      [true, false],
+      [false, true],
+    ])(
+      'hides the biometric key when enabled=%s and supported=%s',
+      async (enabled, supported) => {
+        mockIsBiometricEnabled.mockResolvedValue(enabled);
+        mockIsBiometricSupported.mockResolvedValue(supported);
+        const view = renderWithTheme(<UnlockScreen />);
+        await act(async () => {});
+        expect(view.queryByTestId('unlock-biometric')).toBeNull();
+        expect(view.queryByText('🔐')).toBeNull();
+      },
+    );
   });
 
   describe('PIN 입력', () => {
-    it('should handle PIN digit input', () => {
-      const { getByText } = renderWithTheme(<UnlockScreen />);
-
-      fireEvent.press(getByText('1'));
-      fireEvent.press(getByText('2'));
-      fireEvent.press(getByText('3'));
-
-      // PIN이 입력되었는지 확인 (dots로 표시됨)
-      expect(true).toBe(true);
-    });
-
-    it('should handle delete button', () => {
-      const { getByText } = renderWithTheme(<UnlockScreen />);
-
-      fireEvent.press(getByText('1'));
-      fireEvent.press(getByText('2'));
-      fireEvent.press(getByText('⌫'));
-
-      // 삭제가 정상적으로 동작
-      expect(true).toBe(true);
-    });
-
     it('should attempt unlock after 6 digits entered', async () => {
       mockUnlockWithPin.mockResolvedValue(true);
+      const view = renderWithTheme(<UnlockScreen />);
 
-      const { getByText } = renderWithTheme(<UnlockScreen />);
-
-      // 6자리 PIN 입력
-      fireEvent.press(getByText('1'));
-      fireEvent.press(getByText('2'));
-      fireEvent.press(getByText('3'));
-      fireEvent.press(getByText('4'));
-      fireEvent.press(getByText('5'));
-      fireEvent.press(getByText('6'));
+      enterPin(view, '123456');
 
       await waitFor(() => {
         expect(mockUnlockWithPin).toHaveBeenCalledWith('123456');
-      });
-    });
-
-    it('should call unlock on valid PIN', async () => {
-      mockUnlockWithPin.mockResolvedValue(true);
-
-      const { getByText } = renderWithTheme(<UnlockScreen />);
-
-      // 6자리 PIN 입력
-      fireEvent.press(getByText('1'));
-      fireEvent.press(getByText('2'));
-      fireEvent.press(getByText('3'));
-      fireEvent.press(getByText('4'));
-      fireEvent.press(getByText('5'));
-      fireEvent.press(getByText('6'));
-
-      await waitFor(() => {
         expect(mockUnlock).toHaveBeenCalled();
       });
     });
 
-    it('should show error on invalid PIN', async () => {
-      mockUnlockWithPin.mockResolvedValue(false);
+    it('shows an inline error for a wrong PIN without a blocking alert', async () => {
+      const view = renderWithTheme(<UnlockScreen />);
+      getStatus.mockResolvedValue({ failures: 1, blockedUntil: 0 });
 
-      const { getByText } = renderWithTheme(<UnlockScreen />);
+      enterPin(view, '111111');
 
-      // 잘못된 PIN 입력
-      fireEvent.press(getByText('1'));
-      fireEvent.press(getByText('1'));
-      fireEvent.press(getByText('1'));
-      fireEvent.press(getByText('1'));
-      fireEvent.press(getByText('1'));
-      fireEvent.press(getByText('1'));
+      expect(await view.findByText('PIN이 올바르지 않습니다.')).toBeTruthy();
+      expect(Alert.alert).not.toHaveBeenCalled();
+      expect(mockUnlock).not.toHaveBeenCalled();
+    });
 
-      await waitFor(() => {
-        expect(Alert.alert).toHaveBeenLastCalledWith(
-          '오류',
-          'PIN이 올바르지 않습니다.',
-        );
-      });
+    it('warns how many attempts remain before the lockout starts', async () => {
+      const view = renderWithTheme(<UnlockScreen />);
+      getStatus.mockResolvedValue({ failures: 3, blockedUntil: 0 });
+
+      enterPin(view, '111111');
+
+      await waitFor(() =>
+        expect(view.getByTestId('unlock-attempts-warning').props.children).toBe(
+          '2번 더 틀리면 PIN 입력이 30초 동안 제한됩니다.',
+        ),
+      );
+    });
+
+    it('clears the error when the next PIN entry starts', async () => {
+      const view = renderWithTheme(<UnlockScreen />);
+      enterPin(view, '111111');
+      await view.findByText('PIN이 올바르지 않습니다.');
+
+      fireEvent.press(view.getByTestId('unlock-key-1'));
+
+      expect(view.queryByText('PIN이 올바르지 않습니다.')).toBeNull();
     });
   });
 
@@ -193,20 +225,15 @@ describe('UnlockScreen', () => {
       renderWithTheme(<UnlockScreen />);
 
       await waitFor(() => {
-        expect(mockUnlockWithBiometric).toHaveBeenCalled();
+        expect(mockUnlockWithBiometric).toHaveBeenCalledTimes(1);
+        expect(mockUnlock).toHaveBeenCalled();
       });
     });
 
-    it('should unlock on successful biometric auth', async () => {
-      mockIsBiometricEnabled.mockResolvedValue(true);
-      mockIsBiometricSupported.mockResolvedValue(true);
-      mockUnlockWithBiometric.mockResolvedValue(true);
-
+    it('does not prompt when biometrics are disabled', async () => {
       renderWithTheme(<UnlockScreen />);
-
-      await waitFor(() => {
-        expect(mockUnlock).toHaveBeenCalled();
-      });
+      await act(async () => {});
+      expect(mockUnlockWithBiometric).not.toHaveBeenCalled();
     });
 
     it('should fall back to PIN when biometric fails', async () => {
@@ -217,35 +244,187 @@ describe('UnlockScreen', () => {
       const { getByText } = renderWithTheme(<UnlockScreen />);
 
       await waitFor(() => {
-        // 생체인증 실패해도 PIN 입력 화면은 표시됨
-        expect(getByText('PIN 입력')).toBeTruthy();
+        expect(mockUnlockWithBiometric).toHaveBeenCalled();
       });
+      expect(getByText('PIN 입력')).toBeTruthy();
+      expect(mockUnlock).not.toHaveBeenCalled();
     });
 
-    it('should handle biometric button press', async () => {
-      const { getByText } = renderWithTheme(<UnlockScreen />);
+    it('retries from the biometric key after a cancelled prompt', async () => {
+      mockIsBiometricEnabled.mockResolvedValue(true);
+      mockIsBiometricSupported.mockResolvedValue(true);
+      const view = renderWithTheme(<UnlockScreen />);
+      await waitFor(() =>
+        expect(mockUnlockWithBiometric).toHaveBeenCalledTimes(1),
+      );
+      mockUnlockWithBiometric.mockResolvedValue(true);
 
-      fireEvent.press(getByText('🔐'));
+      fireEvent.press(await view.findByTestId('unlock-biometric'));
 
-      // 생체인증 시도가 에러 없이 완료
-      expect(true).toBe(true);
+      await waitFor(() => expect(mockUnlock).toHaveBeenCalled());
+      expect(mockUnlockWithBiometric).toHaveBeenCalledTimes(2);
+    });
+
+    it('re-prompts when the app returns to active after locking in the background', async () => {
+      mockIsBiometricEnabled.mockResolvedValue(true);
+      mockIsBiometricSupported.mockResolvedValue(true);
+      // '즉시' 자동 잠금: 잠금 화면이 백그라운드에서 마운트된다.
+      (AppState as { currentState: unknown }).currentState = 'background';
+
+      renderWithTheme(<UnlockScreen />);
+      await act(async () => {});
+      expect(mockUnlockWithBiometric).not.toHaveBeenCalled();
+
+      mockUnlockWithBiometric.mockResolvedValue(true);
+      await act(async () => emitAppState('active'));
+
+      await waitFor(() => expect(mockUnlock).toHaveBeenCalled());
+      expect(mockUnlockWithBiometric).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not re-prompt for inactive → active transitions caused by the prompt itself', async () => {
+      mockIsBiometricEnabled.mockResolvedValue(true);
+      mockIsBiometricSupported.mockResolvedValue(true);
+      (AppState as { currentState: unknown }).currentState = 'active';
+      renderWithTheme(<UnlockScreen />);
+      await waitFor(() =>
+        expect(mockUnlockWithBiometric).toHaveBeenCalledTimes(1),
+      );
+
+      await act(async () => {
+        emitAppState('inactive');
+        emitAppState('active');
+      });
+
+      expect(mockUnlockWithBiometric).toHaveBeenCalledTimes(1);
     });
   });
 
   describe('보안 - 시도 횟수 제한', () => {
-    it('shows the persistent shared PIN lock and keeps the wallet locked', async () => {
+    it('shows a live mm:ss countdown, disables the keypad and keeps the wallet locked', async () => {
       mockUnlockWithPin.mockRejectedValue(
-        new PinLockedError(Date.now() + 30_000),
+        new PinLockedError(Date.now() + 1_900),
       );
-      const { getByText } = renderWithTheme(<UnlockScreen />);
-      for (const digit of '111111') fireEvent.press(getByText(digit));
-      await waitFor(() =>
-        expect(Alert.alert).toHaveBeenCalledWith(
-          '접근 제한',
-          expect.stringContaining('PIN 입력이 제한'),
-        ),
+      const view = renderWithTheme(<UnlockScreen />);
+      enterPin(view, '111111');
+
+      const countdown = await view.findByTestId('unlock-lockout-countdown');
+      expect(countdown.props.children).toBe('00:02');
+      expect(view.queryByText(/초 후/)).toBeNull();
+      expect(
+        view.getByTestId('unlock-key-1').props.accessibilityState.disabled,
+      ).toBe(true);
+      expect(Alert.alert).not.toHaveBeenCalled();
+
+      // 1초마다 갱신된다.
+      await waitFor(
+        () =>
+          expect(
+            view.getByTestId('unlock-lockout-countdown').props.children,
+          ).toBe('00:01'),
+        { timeout: 2_000 },
       );
+
+      // 제한 중에는 키를 눌러도 검증하지 않는다.
+      mockUnlockWithPin.mockClear();
+      enterPin(view, '123456');
+      expect(mockUnlockWithPin).not.toHaveBeenCalled();
+
+      // 시간이 지나면 자동으로 풀린다.
+      await waitFor(
+        () => expect(view.queryByTestId('unlock-lockout')).toBeNull(),
+        {
+          timeout: 3_000,
+        },
+      );
+      expect(
+        view.getByTestId('unlock-key-1').props.accessibilityState.disabled,
+      ).toBe(false);
       expect(mockUnlock).not.toHaveBeenCalled();
+    });
+
+    it('restores an active lockout from storage when the screen opens', async () => {
+      getStatus.mockResolvedValue({
+        failures: 9,
+        blockedUntil: Date.now() + 60 * 60 * 1000,
+      });
+      const view = renderWithTheme(<UnlockScreen />);
+
+      expect(
+        (await view.findByTestId('unlock-lockout-countdown')).props.children,
+      ).toMatch(/^(60:00|59:59)$/);
+    });
+  });
+
+  describe('PIN 분실', () => {
+    it('requires typing the confirmation word before resetting the wallet', async () => {
+      const view = renderWithTheme(<UnlockScreen />);
+
+      fireEvent.press(view.getByTestId('unlock-forgot-pin'));
+      expect(view.getByText(/복구 구문으로 지갑을 다시 가져오고/)).toBeTruthy();
+
+      fireEvent.press(view.getByTestId('forgot-pin-reset'));
+      expect(mockWalletReset).not.toHaveBeenCalled();
+
+      fireEvent.changeText(
+        view.getByTestId('forgot-pin-confirm-input'),
+        '초기',
+      );
+      fireEvent.press(view.getByTestId('forgot-pin-reset'));
+      expect(mockWalletReset).not.toHaveBeenCalled();
+
+      fireEvent.changeText(
+        view.getByTestId('forgot-pin-confirm-input'),
+        '초기화',
+      );
+      await act(async () => {
+        fireEvent.press(view.getByTestId('forgot-pin-reset'));
+      });
+
+      expect(mockWalletReset).toHaveBeenCalledTimes(1);
+      expect(useToastStore.getState().current?.message).toContain(
+        '복구 구문으로 지갑을 다시 가져오세요',
+      );
+    });
+
+    it('is available while the PIN lockout is active', async () => {
+      getStatus.mockResolvedValue({
+        failures: 6,
+        blockedUntil: Date.now() + 60_000,
+      });
+      const view = renderWithTheme(<UnlockScreen />);
+      await view.findByTestId('unlock-lockout');
+
+      fireEvent.press(view.getByTestId('unlock-forgot-pin'));
+      fireEvent.changeText(
+        view.getByTestId('forgot-pin-confirm-input'),
+        '초기화',
+      );
+      await act(async () => {
+        fireEvent.press(view.getByTestId('forgot-pin-reset'));
+      });
+
+      expect(mockWalletReset).toHaveBeenCalledTimes(1);
+    });
+
+    it('shows the reset failure inline and can return to PIN entry', async () => {
+      mockWalletReset.mockRejectedValue(new Error('삭제 실패'));
+      const view = renderWithTheme(<UnlockScreen />);
+
+      fireEvent.press(view.getByTestId('unlock-forgot-pin'));
+      fireEvent.changeText(
+        view.getByTestId('forgot-pin-confirm-input'),
+        '초기화',
+      );
+      await act(async () => {
+        fireEvent.press(view.getByTestId('forgot-pin-reset'));
+      });
+
+      expect(view.getByTestId('forgot-pin-error').props.children).toBe(
+        '삭제 실패',
+      );
+      fireEvent.press(view.getByTestId('forgot-pin-cancel'));
+      expect(view.getByTestId('unlock-key-1')).toBeTruthy();
     });
   });
 
@@ -253,21 +432,13 @@ describe('UnlockScreen', () => {
     it('should handle PIN verification error gracefully', async () => {
       mockUnlockWithPin.mockRejectedValue(new Error('Storage error'));
 
-      const { getByText } = renderWithTheme(<UnlockScreen />);
+      const view = renderWithTheme(<UnlockScreen />);
+      enterPin(view, '123456');
 
-      fireEvent.press(getByText('1'));
-      fireEvent.press(getByText('2'));
-      fireEvent.press(getByText('3'));
-      fireEvent.press(getByText('4'));
-      fireEvent.press(getByText('5'));
-      fireEvent.press(getByText('6'));
-
-      await waitFor(() => {
-        expect(Alert.alert).toHaveBeenCalledWith(
-          '오류',
-          'PIN 확인에 실패했습니다.',
-        );
-      });
+      expect(
+        await view.findByText('PIN 확인에 실패했습니다. 다시 시도해주세요.'),
+      ).toBeTruthy();
+      expect(mockUnlock).not.toHaveBeenCalled();
     });
   });
 });

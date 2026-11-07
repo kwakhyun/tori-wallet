@@ -36,13 +36,20 @@ export function useAppState() {
     (nextAppState: AppStateStatus) => {
       const previousState = appState.current;
 
-      // 백그라운드로 전환
-      if (
-        previousState === 'active' &&
-        (nextAppState === 'background' || nextAppState === 'inactive')
-      ) {
+      // 포그라운드를 벗어남 (inactive 포함): 시간 기반 자동 잠금 계산 시작
+      if (previousState === 'active' && nextAppState !== 'active') {
         backgroundTime.current = Date.now();
-        onboardingVault.clear();
+      }
+
+      // 실제 백그라운드 전환에서만 민감 정보를 폐기하고 즉시 잠근다.
+      // 'inactive'는 제어 센터, 알림 센터, 전화 수신, Face ID 프롬프트처럼
+      // 앱이 여전히 화면에 보이는 상태다. 여기서 지우면 사용자가 받아 적던
+      // 복구 구문이 사라지거나 생체인증 승인 중에 지갑이 잠긴다.
+      // 앱 전환기 스냅샷은 iOS SceneDelegate의 privacy view(sceneWillResignActive)와
+      // Android FLAG_SECURE가 가린다.
+      if (nextAppState === 'background' && previousState !== 'background') {
+        if (!backgroundTime.current) backgroundTime.current = Date.now();
+        onboardingVault.clear('background');
         logger.info('App went to background');
 
         // 즉시 잠금 설정인 경우

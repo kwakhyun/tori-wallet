@@ -1,4 +1,4 @@
-/** 니모닉/계정 저장과 기기 인증 정책을 관리한다. */
+/** 복구 구문(니모닉)/계정 저장과 기기 인증 정책을 관리한다. */
 
 import { Platform } from 'react-native';
 import * as Keychain from 'react-native-keychain';
@@ -13,6 +13,7 @@ import { wordlist as englishWordlist } from '@scure/bip39/wordlists/english';
 import { createLogger } from '@/utils/logger';
 import { decrypt, encrypt, isNewEncryptionFormat } from '@/utils/crypto';
 import { pinAttemptService } from './pinAttemptService';
+import { isSupportedWordCount } from './mnemonicWords';
 import {
   SecureRandomGenerator,
   secureRandomGenerator,
@@ -52,11 +53,12 @@ export class WalletService {
     }
   }
 
+  /** BIP39 표준 길이(12/15/18/21/24 단어)와 체크섬을 모두 검증한다. */
   validateMnemonic(mnemonic: string): boolean {
     const normalized = mnemonic.trim().toLowerCase().replace(/\s+/g, ' ');
     const wordCount = normalized.split(' ').length;
     return (
-      (wordCount === 12 || wordCount === 24) &&
+      isSupportedWordCount(wordCount) &&
       validateBip39Mnemonic(normalized, englishWordlist)
     );
   }
@@ -102,7 +104,7 @@ export class WalletService {
       await EncryptedStorage.setItem(MNEMONIC_STORAGE_KEY, encrypted);
     } catch (error) {
       logger.error('Failed to store mnemonic:', error);
-      throw new Error('니모닉 저장에 실패했습니다.');
+      throw new Error('복구 구문 저장에 실패했습니다.');
     }
   }
 

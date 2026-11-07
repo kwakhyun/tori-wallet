@@ -1,8 +1,78 @@
 import {
+  describePinAttemptWarning,
+  formatLockoutDuration,
+  formatLockoutRemaining,
+  isWeakPin,
+  lockoutDelayForFailure,
   PinAttemptService,
   PinLockedError,
   PIN_ATTEMPTS_KEY,
+  remainingAttemptsBeforeLockout,
 } from '../../src/services/pinAttemptService';
+
+describe('PIN lockout display helpers', () => {
+  it('formats the remaining lockout as mm:ss instead of seconds', () => {
+    expect(formatLockoutRemaining(3_600_000)).toBe('60:00');
+    expect(formatLockoutRemaining(65_000)).toBe('01:05');
+    expect(formatLockoutRemaining(29_001)).toBe('00:30');
+    expect(formatLockoutRemaining(0)).toBe('00:00');
+    expect(formatLockoutRemaining(-5)).toBe('00:00');
+  });
+
+  it('mirrors the lockout policy: free attempts, then 30s doubling to 1h', () => {
+    expect([1, 2, 3, 4].map(lockoutDelayForFailure)).toEqual([0, 0, 0, 0]);
+    expect(lockoutDelayForFailure(5)).toBe(30_000);
+    expect(lockoutDelayForFailure(6)).toBe(60_000);
+    expect(lockoutDelayForFailure(12)).toBe(3_600_000);
+    expect(lockoutDelayForFailure(21)).toBe(3_600_000);
+    expect(remainingAttemptsBeforeLockout(0)).toBe(5);
+    expect(remainingAttemptsBeforeLockout(4)).toBe(1);
+    expect(remainingAttemptsBeforeLockout(7)).toBe(0);
+  });
+
+  it('describes durations and the upcoming lockout in Korean', () => {
+    expect(formatLockoutDuration(30_000)).toBe('30초');
+    expect(formatLockoutDuration(120_000)).toBe('2분');
+    expect(formatLockoutDuration(3_600_000)).toBe('1시간');
+    expect(describePinAttemptWarning(0)).toBeNull();
+    expect(describePinAttemptWarning(1)).toBe(
+      '4번 더 틀리면 PIN 입력이 30초 동안 제한됩니다.',
+    );
+    expect(describePinAttemptWarning(5)).toBe(
+      '다시 틀리면 PIN 입력이 1분 동안 제한됩니다.',
+    );
+  });
+
+  it('formats PinLockedError without raw second counts', () => {
+    jest.useFakeTimers();
+    jest.setSystemTime(0);
+    expect(new PinLockedError(3_600_000).message).toBe(
+      'PIN 입력이 제한되었습니다. 60:00 후 다시 시도해주세요.',
+    );
+    jest.useRealTimers();
+  });
+
+  it.each([
+    '000000',
+    '111111',
+    '123456',
+    '234567',
+    '567890',
+    '654321',
+    '098765',
+    '121212',
+    '123123',
+  ])('rejects the weak PIN %s', pin => {
+    expect(isWeakPin(pin)).toBe(true);
+  });
+
+  it.each(['135790', '258036', '102938', '112358', '860413'])(
+    'accepts %s',
+    pin => {
+      expect(isWeakPin(pin)).toBe(false);
+    },
+  );
+});
 
 describe('durable PIN attempt limit', () => {
   const data = new Map<string, string>();
@@ -90,6 +160,24 @@ describe('durable PIN attempt limit', () => {
     storage.setItem.mockRejectedValueOnce(new Error('storage unavailable'));
     await expect(service.verify(check)).rejects.toThrow('storage unavailable');
     expect(check).not.toHaveBeenCalled();
+  });
+
+  it('reports the stored status without recording an attempt', async () => {
+    const service = new PinAttemptService(storage);
+    await expect(service.getStatus()).resolves.toEqual({
+      failures: 0,
+      blockedUntil: 0,
+    });
+    for (let i = 0; i < 4; i++) await service.verify(async () => null);
+    await expect(service.verify(async () => null)).rejects.toBeInstanceOf(
+      PinLockedError,
+    );
+    await expect(service.getStatus()).resolves.toEqual({
+      failures: 5,
+      blockedUntil: 130_000,
+    });
+    await service.getStatus();
+    expect(JSON.parse(data.get(PIN_ATTEMPTS_KEY)!).failures).toBe(5);
   });
 
   it('holds new PIN checks until wallet deletion completes', async () => {

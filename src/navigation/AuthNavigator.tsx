@@ -42,9 +42,19 @@ export function AuthNavigator(): React.JSX.Element {
       <Stack.Screen name="Welcome" component={WelcomeScreen} />
       <Stack.Screen name="CreateWallet" component={CreateWalletScreen} />
       <Stack.Screen name="ImportWallet" component={ImportWalletScreen} />
-      <Stack.Screen name="BackupMnemonic" component={BackupMnemonicScreen} />
+      {/* 복구 구문 폐기 확인과 PIN 확인 단계 되돌리기는 화면이 직접 처리하므로
+          iOS 스와이프 뒤로 가기로 우회하지 못하게 한다. */}
+      <Stack.Screen
+        name="BackupMnemonic"
+        component={BackupMnemonicScreen}
+        options={{ gestureEnabled: false }}
+      />
       <Stack.Screen name="VerifyMnemonic" component={VerifyMnemonicScreen} />
-      <Stack.Screen name="SetPin" component={SetPinScreen} />
+      <Stack.Screen
+        name="SetPin"
+        component={SetPinScreen}
+        options={{ gestureEnabled: false }}
+      />
     </Stack.Navigator>
   );
 }
