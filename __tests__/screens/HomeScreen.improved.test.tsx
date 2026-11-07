@@ -1,11 +1,13 @@
 /**
  * HomeScreen 테스트 (개선)
- * 홈 스크린 테스트 - 개선된 버전
  */
 
 import React from 'react';
+import { Linking } from 'react-native';
 import { render, fireEvent, waitFor, screen, act } from '../test-utils';
 import HomeScreen from '../../src/screens/Home/HomeScreen';
+import { usePreferencesStore } from '../../src/store/preferencesStore';
+import type { Token } from '../../src/services/tokenService';
 
 // 네비게이션 모킹
 const mockNavigate = jest.fn();
@@ -18,11 +20,13 @@ jest.mock('@react-navigation/native', () => {
     useNavigation: () => ({
       navigate: mockNavigate,
       goBack: mockGoBack,
+      canGoBack: () => true,
     }),
   };
 });
 
 // Store 모킹 - 다양한 상태를 테스트할 수 있도록 함수화
+const mockSetActiveNetwork = jest.fn();
 const createMockWalletStore = (overrides = {}) => ({
   wallets: [
     {
@@ -34,9 +38,16 @@ const createMockWalletStore = (overrides = {}) => ({
   activeWalletIndex: 0,
   activeNetworkChainId: 1,
   networks: [
-    { chainId: 1, name: 'Ethereum', symbol: 'ETH', isTestnet: false },
+    {
+      chainId: 1,
+      name: 'Ethereum',
+      symbol: 'ETH',
+      isTestnet: false,
+      blockExplorerUrl: 'https://etherscan.io',
+    },
     { chainId: 11155111, name: 'Sepolia', symbol: 'ETH', isTestnet: true },
   ],
+  setActiveNetwork: mockSetActiveNetwork,
   ...overrides,
 });
 
@@ -63,11 +74,51 @@ jest.mock('../../src/hooks/useBalance', () => ({
   useBalance: () => mockBalance,
 }));
 
-// coinService 모킹 - 동기적으로 반환하여 로딩 상태 즉시 완료
-jest.mock('../../src/services/coinService', () => ({
-  coinService: {
-    getNativeTokenPrice: jest.fn().mockResolvedValue(2000),
-    calculateUsdValue: jest.fn().mockReturnValue('$3,000.00'),
+const USDC = '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48';
+
+const nativeToken = (overrides: Partial<Token> = {}): Token => ({
+  symbol: 'ETH',
+  name: 'Ethereum',
+  address: 'native',
+  decimals: 18,
+  balance: '1.5',
+  balanceRaw: '1.5',
+  price: 2000,
+  priceChange24h: 2,
+  value: 3000,
+  usdValue: 3000,
+  priceAvailable: true,
+  balanceError: false,
+  coingeckoId: 'ethereum',
+  isCustom: false,
+  isTestnet: false,
+  ...overrides,
+});
+
+const usdcToken = (overrides: Partial<Token> = {}): Token => ({
+  symbol: 'USDC',
+  name: 'USD Coin',
+  address: USDC,
+  decimals: 6,
+  balance: '250',
+  balanceRaw: '250',
+  price: 1,
+  priceChange24h: 0,
+  value: 250,
+  usdValue: 250,
+  priceAvailable: true,
+  balanceError: false,
+  coingeckoId: 'usd-coin',
+  logoUrl: 'https://example.com/usdc.png',
+  isCustom: false,
+  isTestnet: false,
+  ...overrides,
+});
+
+const mockGetTokens = jest.fn();
+jest.mock('../../src/services/tokenService', () => ({
+  tokenService: {
+    getTokens: (...args: unknown[]) => mockGetTokens(...args),
   },
 }));
 
@@ -76,259 +127,340 @@ jest.mock('../../src/services/buyService', () => ({
   showBuyProviderAlert: jest.fn(),
 }));
 
-// buyService 가져오기
 import { showBuyProviderAlert } from '../../src/services/buyService';
 const mockShowBuyProviderAlert = showBuyProviderAlert as jest.Mock;
+
+const flush = async () => {
+  await act(async () => {
+    await Promise.resolve();
+  });
+};
 
 describe('HomeScreen', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     mockWalletStore = createMockWalletStore();
     mockBalance = createMockBalance();
+    mockGetTokens.mockResolvedValue([nativeToken(), usdcToken()]);
+    usePreferencesStore.setState({ currency: 'USD', hideBalances: false });
   });
 
   describe('Rendering', () => {
     it('should render correctly with wallet data', async () => {
       const { toJSON } = render(<HomeScreen />);
-      // 비동기 상태 업데이트 완료 대기
-      await act(async () => {
-        await Promise.resolve();
-      });
+      await flush();
       expect(toJSON()).not.toBeNull();
     });
 
     it('should display wallet address (truncated)', async () => {
       render(<HomeScreen />);
-      // 비동기 상태 업데이트 완료 대기
-      await act(async () => {
-        await Promise.resolve();
-      });
-      // 주소가 truncate되어 표시되어야 함 - testID 사용
       await waitFor(() => {
-        const addressText = screen.getByTestId('home-address-text');
-        expect(addressText).toBeTruthy();
+        expect(screen.getByTestId('home-address-text')).toHaveTextContent(
+          '0x1234...7890',
+        );
       });
     });
 
-    it('should display balance amount', async () => {
+    it('shows the native balance with the shared display format', async () => {
       render(<HomeScreen />);
-      await act(async () => {
-        await Promise.resolve();
-      });
       await waitFor(() => {
-        // testID를 통해 잔액 컨테이너 확인
-        const balanceValue = screen.getByTestId('home-balance-value');
-        expect(balanceValue).toBeTruthy();
+        expect(screen.getByTestId('home-balance-value')).toHaveTextContent(
+          '1.5 ETH',
+        );
       });
+    });
+
+    it('shows the total portfolio value instead of a hardcoded $0.00', async () => {
+      render(<HomeScreen />);
+      await waitFor(() => {
+        expect(screen.getByTestId('home-total-value')).toHaveTextContent(
+          '$3,250.00',
+        );
+      });
+      expect(screen.queryByText(/≈ \$0\.00/)).toBeNull();
+    });
+
+    it('lists native and ERC-20 tokens with balances', async () => {
+      render(<HomeScreen />);
+      await waitFor(() => {
+        expect(screen.getByTestId('home-token-native')).toBeTruthy();
+        expect(screen.getByTestId(`home-token-${USDC}`)).toBeTruthy();
+      });
+      expect(screen.getByText('250 USDC')).toBeTruthy();
+      expect(screen.getByText('$250.00')).toBeTruthy();
+    });
+
+    it('hides default tokens with a zero balance', async () => {
+      mockGetTokens.mockResolvedValue([
+        nativeToken(),
+        usdcToken({ balance: '0', balanceRaw: '0', usdValue: 0, value: 0 }),
+      ]);
+      render(<HomeScreen />);
+      await waitFor(() => {
+        expect(screen.getByTestId('home-token-native')).toBeTruthy();
+      });
+      expect(screen.queryByTestId(`home-token-${USDC}`)).toBeNull();
     });
 
     it('should display network name', async () => {
       render(<HomeScreen />);
-      await act(async () => {
-        await Promise.resolve();
-      });
       await waitFor(() => {
-        // testID를 통해 네트워크 이름 확인
-        const networkName = screen.getByTestId('home-network-name');
-        expect(networkName).toBeTruthy();
-      });
-    });
-
-    it('should show testnet indicator when on testnet', async () => {
-      mockWalletStore = createMockWalletStore({
-        activeNetworkChainId: 11155111,
-      });
-      render(<HomeScreen />);
-      await act(async () => {
-        await Promise.resolve();
-      });
-      await waitFor(() => {
-        // testID를 통해 네트워크 배지 확인
-        const networkBadge = screen.getByTestId('home-network-badge');
-        expect(networkBadge).toBeTruthy();
+        expect(screen.getByTestId('home-network-name')).toHaveTextContent(
+          'Ethereum',
+        );
       });
     });
   });
 
-  describe('Loading States', () => {
-    it('should show skeleton when loading', async () => {
-      mockBalance = createMockBalance({ isLoading: true, data: undefined });
+  describe('Prices', () => {
+    it('shows a dash instead of $0.00 when the price is unknown', async () => {
+      mockGetTokens.mockResolvedValue([
+        nativeToken({ priceAvailable: false, usdValue: null, value: 0 }),
+      ]);
       render(<HomeScreen />);
-      // 스켈레톤 컴포넌트가 렌더링되어야 함 (로딩 상태이므로 즉시 표시)
-      expect(screen.queryByTestId('home-skeleton')).toBeTruthy();
+      await waitFor(() => {
+        expect(screen.getByTestId('home-total-value')).toHaveTextContent('—');
+      });
+      expect(screen.queryByText('$0.00')).toBeNull();
     });
 
-    it('should show refresh indicator when refetching', async () => {
-      mockBalance = createMockBalance({ isRefetching: true });
+    it('does not block the balance while the token list is loading', async () => {
+      mockGetTokens.mockReturnValue(new Promise(() => undefined));
       render(<HomeScreen />);
-      await act(async () => {
-        await Promise.resolve();
+      await flush();
+      expect(screen.getByTestId('home-balance-value')).toHaveTextContent(
+        '1.5 ETH',
+      );
+      expect(screen.getByTestId('home-total-skeleton')).toBeTruthy();
+      expect(screen.getByTestId('home-tokens-skeleton')).toBeTruthy();
+      expect(screen.getByTestId('home-send-button')).toBeTruthy();
+    });
+  });
+
+  describe('Testnet', () => {
+    beforeEach(() => {
+      mockWalletStore = createMockWalletStore({
+        activeNetworkChainId: 11155111,
       });
-      // RefreshControl이 활성화되어 있어야 함 - 컨테이너가 렌더링됨
+      mockGetTokens.mockResolvedValue([
+        nativeToken({
+          name: 'Sepolia ETH',
+          priceAvailable: false,
+          usdValue: null,
+          value: 0,
+          coingeckoId: undefined,
+          isTestnet: true,
+        }),
+      ]);
+    });
+
+    it('shows "no real value" instead of a fiat amount', async () => {
+      render(<HomeScreen />);
       await waitFor(() => {
-        expect(screen.getByTestId('home-screen')).toBeTruthy();
+        expect(screen.getByTestId('home-balance-usd')).toHaveTextContent(
+          '테스트넷 — 실제 가치 없음',
+        );
       });
+      expect(screen.queryByTestId('home-total-value')).toBeNull();
+    });
+
+    it('opens the faucet link', async () => {
+      const openURL = jest
+        .spyOn(Linking, 'openURL')
+        .mockResolvedValue(undefined as never);
+      render(<HomeScreen />);
+      await waitFor(() => screen.getByTestId('home-faucet-button'));
+      fireEvent.press(screen.getByTestId('home-faucet-button'));
+      expect(openURL).toHaveBeenCalledWith(expect.stringContaining('sepolia'));
+    });
+
+    it('passes the chain id to the buy flow (which blocks testnets)', async () => {
+      render(<HomeScreen />);
+      fireEvent.press(screen.getByTestId('home-buy-button'));
+      expect(mockShowBuyProviderAlert).toHaveBeenCalledWith(
+        'eth',
+        '0x1234567890123456789012345678901234567890',
+        undefined,
+        11155111,
+      );
+    });
+  });
+
+  describe('Loading and error states', () => {
+    it('should show the balance skeleton when loading', async () => {
+      mockBalance = createMockBalance({ isLoading: true, data: undefined });
+      render(<HomeScreen />);
+      expect(screen.queryByTestId('home-skeleton')).toBeTruthy();
+      // 화면 전체를 막지 않는다
+      expect(screen.getByTestId('home-screen')).toBeTruthy();
+      expect(screen.getByTestId('home-send-button')).toBeTruthy();
+    });
+
+    it('shows an error with retry when balances cannot be loaded', async () => {
+      const refetch = jest.fn();
+      mockBalance = createMockBalance({
+        isError: true,
+        data: undefined,
+        refetch,
+      });
+      mockGetTokens.mockRejectedValue(new Error('RPC down'));
+      render(<HomeScreen />);
+      await waitFor(() => {
+        expect(screen.getByTestId('home-balance-error')).toBeTruthy();
+      });
+      fireEvent.press(screen.getByTestId('home-balance-error-retry'));
+      expect(refetch).toHaveBeenCalled();
+    });
+
+    it('marks a token whose balance failed instead of showing 0', async () => {
+      mockGetTokens.mockResolvedValue([
+        nativeToken(),
+        usdcToken({ balance: '—', balanceError: true, usdValue: null }),
+      ]);
+      render(<HomeScreen />);
+      await waitFor(() => {
+        expect(screen.getByText('잔액 조회 실패')).toBeTruthy();
+      });
+      expect(screen.getByText('— USDC')).toBeTruthy();
     });
   });
 
   describe('Navigation', () => {
     it('should navigate to SendTransaction on send button press', async () => {
       render(<HomeScreen />);
-      await act(async () => {
-        await Promise.resolve();
-      });
-
-      await waitFor(() => {
-        expect(screen.getByTestId('home-send-button')).toBeTruthy();
-      });
-
-      const sendButton = screen.getByTestId('home-send-button');
-      fireEvent.press(sendButton);
-
-      await waitFor(() => {
-        expect(mockNavigate).toHaveBeenCalledWith(
-          'SendTransaction',
-          expect.any(Object),
-        );
-      });
+      fireEvent.press(screen.getByTestId('home-send-button'));
+      expect(mockNavigate).toHaveBeenCalledWith(
+        'SendTransaction',
+        expect.any(Object),
+      );
     });
 
     it('should navigate to ReceiveToken on receive button press', async () => {
       render(<HomeScreen />);
-      await act(async () => {
-        await Promise.resolve();
-      });
-
-      await waitFor(() => {
-        expect(screen.getByTestId('home-receive-button')).toBeTruthy();
-      });
-
-      const receiveButton = screen.getByTestId('home-receive-button');
-      fireEvent.press(receiveButton);
-
-      await waitFor(() => {
-        expect(mockNavigate).toHaveBeenCalledWith('ReceiveToken');
-      });
+      fireEvent.press(screen.getByTestId('home-receive-button'));
+      expect(mockNavigate).toHaveBeenCalledWith('ReceiveToken');
     });
 
     it('should navigate to Swap on swap button press', async () => {
       render(<HomeScreen />);
-      await act(async () => {
-        await Promise.resolve();
-      });
+      fireEvent.press(screen.getByTestId('home-swap-button'));
+      expect(mockNavigate).toHaveBeenCalledWith('Swap');
+    });
 
+    it('opens TokenDetail with the ERC-20 contract, decimals and value', async () => {
+      render(<HomeScreen />);
+      await waitFor(() => screen.getByTestId(`home-token-${USDC}`));
+      fireEvent.press(screen.getByTestId(`home-token-${USDC}`));
+      expect(mockNavigate).toHaveBeenCalledWith('TokenDetail', {
+        symbol: 'USDC',
+        name: 'USD Coin',
+        balance: '250',
+        usdValue: 250,
+        contractAddress: USDC,
+        decimals: 6,
+        coingeckoId: 'usd-coin',
+        logoUrl: 'https://example.com/usdc.png',
+      });
+    });
+
+    it('opens TokenDetail for the native token without a contract', async () => {
+      render(<HomeScreen />);
+      await waitFor(() => screen.getByTestId('home-token-native'));
+      fireEvent.press(screen.getByTestId('home-token-native'));
+      expect(mockNavigate).toHaveBeenCalledWith(
+        'TokenDetail',
+        expect.objectContaining({
+          symbol: 'ETH',
+          contractAddress: undefined,
+          usdValue: 3000,
+        }),
+      );
+    });
+
+    it('opens the account list from the account label', () => {
+      render(<HomeScreen />);
+      fireEvent.press(screen.getByTestId('home-account-button'));
+      expect(mockNavigate).toHaveBeenCalledWith('Accounts');
+    });
+
+    it('opens token management from the bottom of the token list', () => {
+      render(<HomeScreen />);
+      fireEvent.press(screen.getByTestId('home-manage-tokens'));
+      expect(mockNavigate).toHaveBeenCalledWith('TokenManagement');
+    });
+
+    it('opens the network selector from the network badge', async () => {
+      render(<HomeScreen />);
+      fireEvent.press(screen.getByTestId('home-network-badge'));
       await waitFor(() => {
-        expect(screen.getByTestId('home-swap-button')).toBeTruthy();
+        expect(screen.getByTestId('network-selector-item-1')).toBeTruthy();
       });
-
-      const swapButton = screen.getByTestId('home-swap-button');
-      fireEvent.press(swapButton);
-
-      await waitFor(() => {
-        expect(mockNavigate).toHaveBeenCalledWith('Swap');
-      });
+      fireEvent.press(screen.getByTestId('network-selector-item-11155111'));
+      expect(mockSetActiveNetwork).toHaveBeenCalledWith(11155111);
     });
   });
 
   describe('User Interactions', () => {
-    it('should copy address to clipboard on address press', async () => {
+    it('copies the address with lightweight toast feedback', async () => {
       const mockClipboard = jest.fn();
       jest
         .spyOn(require('react-native').Clipboard, 'setString')
         .mockImplementation(mockClipboard);
+      const { useToastStore } = require('../../src/store/toastStore');
+      useToastStore.getState().reset();
 
       render(<HomeScreen />);
-      await act(async () => {
-        await Promise.resolve();
-      });
+      fireEvent.press(screen.getByTestId('home-address-row'));
 
+      expect(mockClipboard).toHaveBeenCalledWith(
+        '0x1234567890123456789012345678901234567890',
+      );
+      expect(useToastStore.getState().current?.message).toBe(
+        '주소를 복사했습니다',
+      );
+    });
+
+    it('passes symbol, address and chain id to the buy flow', () => {
+      render(<HomeScreen />);
+      fireEvent.press(screen.getByTestId('home-buy-button'));
+      expect(mockShowBuyProviderAlert).toHaveBeenCalledWith(
+        'eth',
+        '0x1234567890123456789012345678901234567890',
+        undefined,
+        1,
+      );
+    });
+
+    it('hides balances with the eye toggle', async () => {
+      render(<HomeScreen />);
+      await waitFor(() => screen.getByTestId('home-total-value'));
+      fireEvent.press(screen.getByTestId('home-hide-balance-toggle'));
       await waitFor(() => {
-        expect(screen.getByTestId('home-address-row')).toBeTruthy();
-      });
-
-      const addressRow = screen.getByTestId('home-address-row');
-      fireEvent.press(addressRow);
-
-      await waitFor(() => {
-        expect(mockClipboard).toHaveBeenCalledWith(
-          '0x1234567890123456789012345678901234567890',
+        expect(screen.getByTestId('home-total-value')).toHaveTextContent(
+          '••••',
         );
       });
+      expect(screen.getByTestId('home-balance-value')).toHaveTextContent(
+        '••••',
+      );
+      expect(screen.getByLabelText('잔액 보이기')).toBeTruthy();
     });
 
-    it('should call showBuyProviderAlert on buy button press', async () => {
+    it('refreshes balance and tokens on pull to refresh', async () => {
+      const refetch = jest.fn().mockResolvedValue(undefined);
+      mockBalance = createMockBalance({ refetch });
       render(<HomeScreen />);
+      await waitFor(() => screen.getByTestId('home-token-native'));
+      const scrollView = screen.getByTestId('home-scroll-view');
       await act(async () => {
-        await Promise.resolve();
+        await scrollView.props.refreshControl.props.onRefresh();
       });
-
-      await waitFor(() => {
-        expect(screen.getByTestId('home-buy-button')).toBeTruthy();
-      });
-
-      const buyButton = screen.getByTestId('home-buy-button');
-      fireEvent.press(buyButton);
-
-      await waitFor(() => {
-        expect(mockShowBuyProviderAlert).toHaveBeenCalled();
-      });
-    });
-
-    it('should have refetch function available for pull to refresh', async () => {
-      const mockRefetch = jest.fn();
-      mockBalance = createMockBalance({ refetch: mockRefetch });
-
-      render(<HomeScreen />);
-      await act(async () => {
-        await Promise.resolve();
-      });
-
-      // 로딩 완료 후 ScrollView가 렌더링되어야 함
-      await waitFor(() => {
-        expect(screen.getByTestId('home-scroll-view')).toBeTruthy();
-      });
-
-      // refetch 함수가 정의되어 있는지 확인
-      expect(mockRefetch).toBeDefined();
-    });
-  });
-
-  describe('Error Handling', () => {
-    it('should still render when balance fetch fails', async () => {
-      mockBalance = createMockBalance({
-        isError: true,
-        error: new Error('Network error'),
-        data: undefined,
-        isLoading: false,
-      });
-
-      render(<HomeScreen />);
-      await act(async () => {
-        await Promise.resolve();
-      });
-      // 에러 상태에서도 기본 UI는 렌더링되어야 함
-      await waitFor(() => {
-        expect(screen.getByTestId('home-screen')).toBeTruthy();
-      });
+      expect(refetch).toHaveBeenCalled();
+      expect(mockGetTokens).toHaveBeenCalledTimes(2);
     });
   });
 
   describe('Empty States', () => {
-    it('should handle zero balance gracefully', async () => {
-      mockBalance = createMockBalance({
-        data: { formatted: '0', wei: BigInt(0), symbol: 'ETH' },
-      });
-
-      render(<HomeScreen />);
-      await act(async () => {
-        await Promise.resolve();
-      });
-      // 잔액 컨테이너가 렌더링되어야 함
-      await waitFor(() => {
-        expect(screen.getByTestId('home-balance-container')).toBeTruthy();
-      });
-    });
-
     it('should show message when no wallet exists', () => {
       mockWalletStore = createMockWalletStore({ wallets: [] });
 
@@ -338,36 +470,51 @@ describe('HomeScreen', () => {
   });
 
   describe('Accessibility', () => {
-    it('should have accessible buttons', async () => {
+    it('labels glyph-only controls', async () => {
       render(<HomeScreen />);
-
-      // 비동기 상태 업데이트 완료 대기 (가격 로딩 완료 후 버튼 표시)
-      await act(async () => {
-        await Promise.resolve();
-      });
-
-      // home-send-button testID 사용
-      await waitFor(() => {
-        const sendButton = screen.getByTestId('home-send-button');
-        expect(sendButton).toBeTruthy();
-      });
+      expect(screen.getByLabelText('잔액 숨기기')).toBeTruthy();
+      expect(
+        screen.getByTestId('home-send-button').props.accessibilityLabel,
+      ).toBe('보내기');
+      expect(
+        screen.getByTestId('home-network-badge').props.accessibilityRole,
+      ).toBe('button');
     });
   });
 });
 
 describe('HomeScreen - Snapshot', () => {
+  // React 19 요소(예: ScrollView의 refreshControl prop)는 Jest 29 pretty-format이
+  // 일반 객체로 출력하려다 실패하므로 태그 이름만 기록한다.
+  expect.addSnapshotSerializer({
+    test: (val: unknown) =>
+      !!val &&
+      typeof val === 'object' &&
+      (val as { $$typeof?: symbol }).$$typeof ===
+        Symbol.for('react.transitional.element'),
+    print: (val: unknown) => {
+      const type = (val as { type?: { displayName?: string; name?: string } })
+        .type;
+      return `<${type?.displayName || type?.name || 'Element'} />`;
+    },
+  });
+
   beforeEach(() => {
     mockWalletStore = createMockWalletStore();
     mockBalance = createMockBalance();
+    mockGetTokens.mockResolvedValue([nativeToken(), usdcToken()]);
+    usePreferencesStore.setState({ currency: 'USD', hideBalances: false });
   });
 
-  it('should match snapshot', () => {
+  it('should match snapshot', async () => {
     const { toJSON } = render(<HomeScreen />);
+    await waitFor(() => screen.getByTestId(`home-token-${USDC}`));
     expect(toJSON()).toMatchSnapshot();
   });
 
   it('should match snapshot in loading state', () => {
     mockBalance = createMockBalance({ isLoading: true, data: undefined });
+    mockGetTokens.mockReturnValue(new Promise(() => undefined));
     const { toJSON } = render(<HomeScreen />);
     expect(toJSON()).toMatchSnapshot();
   });

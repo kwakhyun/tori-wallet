@@ -1,35 +1,28 @@
 /**
  * TokenDetailScreen 테스트
- * 토큰 상세 화면 테스트
  */
 
 import React from 'react';
-import { render, screen, fireEvent } from '@testing-library/react-native';
-import { ThemeProvider } from 'styled-components/native';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Linking } from 'react-native';
-import { theme } from '../../src/styles/theme';
+import { render, screen, fireEvent, waitFor, act } from '../test-utils';
+import { usePreferencesStore } from '../../src/store/preferencesStore';
 
 // Navigation mocks
 const mockNavigate = jest.fn();
 const mockGoBack = jest.fn();
+let mockParams: Record<string, unknown> = {};
 
 jest.mock('@react-navigation/native', () => ({
   useNavigation: () => ({
     navigate: mockNavigate,
     goBack: mockGoBack,
+    canGoBack: () => true,
   }),
-  useRoute: () => ({
-    params: {
-      symbol: 'ETH',
-      name: 'Ethereum',
-      balance: '1.5',
-      contractAddress: undefined,
-    },
-  }),
+  useRoute: () => ({ params: mockParams }),
 }));
 
 // Store mock
+let mockChainId = 1;
 jest.mock('../../src/store/walletStore', () => ({
   useWalletStore: () => ({
     wallets: [
@@ -39,15 +32,34 @@ jest.mock('../../src/store/walletStore', () => ({
       },
     ],
     activeWalletIndex: 0,
-    activeNetworkChainId: 1,
+    activeNetworkChainId: mockChainId,
     networks: [
-      { chainId: 1, name: 'Ethereum Mainnet', isTestnet: false },
-      { chainId: 11155111, name: 'Sepolia', isTestnet: true },
+      {
+        chainId: 1,
+        name: 'Ethereum Mainnet',
+        isTestnet: false,
+        blockExplorerUrl: 'https://etherscan.io',
+      },
+      {
+        chainId: 10,
+        name: 'Optimism',
+        isTestnet: false,
+        blockExplorerUrl: 'https://optimistic.etherscan.io',
+      },
+      {
+        chainId: 11155111,
+        name: 'Sepolia',
+        isTestnet: true,
+        blockExplorerUrl: 'https://sepolia.etherscan.io',
+      },
     ],
   }),
 }));
 
-// Balance hook mock
+// Balance hook mocks
+const mockNativeRefetch = jest.fn().mockResolvedValue(undefined);
+const mockTokenRefetch = jest.fn().mockResolvedValue(undefined);
+const mockUseTokenBalance = jest.fn();
 jest.mock('../../src/hooks/useBalance', () => ({
   useBalance: () => ({
     data: {
@@ -56,10 +68,44 @@ jest.mock('../../src/hooks/useBalance', () => ({
       symbol: 'ETH',
     },
     isLoading: false,
-    isRefetching: false,
-    refetch: jest.fn(),
+    isError: false,
+    refetch: mockNativeRefetch,
   }),
+  useTokenBalance: (...args: unknown[]) => mockUseTokenBalance(...args),
 }));
+
+const mockGetPrice = jest.fn();
+jest.mock('../../src/services/tokenService', () => ({
+  tokenService: {
+    getPrice: (...args: unknown[]) => mockGetPrice(...args),
+    isTestnet: (chainId: number) => chainId === 11155111,
+  },
+}));
+
+const mockGetPriceHistory = jest.fn();
+jest.mock('../../src/services/coinService', () => ({
+  coinService: {
+    getPriceHistory: (...args: unknown[]) => mockGetPriceHistory(...args),
+  },
+}));
+
+jest.mock('react-native-svg', () => {
+  const ReactLib = require('react');
+  const make = (name: string) => (props: any) =>
+    ReactLib.createElement(name, props, props.children);
+  return {
+    __esModule: true,
+    default: make('Svg'),
+    Svg: make('Svg'),
+    Path: make('Path'),
+    Line: make('Line'),
+    Text: make('SvgText'),
+    Defs: make('Defs'),
+    LinearGradient: make('LinearGradient'),
+    Stop: make('Stop'),
+    Circle: make('Circle'),
+  };
+});
 
 // Buy service mock
 const mockShowBuyProviderAlert = jest.fn();
@@ -68,114 +114,213 @@ jest.mock('../../src/services/buyService', () => ({
     mockShowBuyProviderAlert(...args),
 }));
 
-// Linking mock using spyOn
 const mockOpenURL = jest
   .spyOn(Linking, 'openURL')
   .mockImplementation(() => Promise.resolve());
 
 import TokenDetailScreen from '../../src/screens/TokenDetail/TokenDetailScreen';
 
-const queryClient = new QueryClient({
-  defaultOptions: {
-    queries: { retry: false },
-  },
-});
-
-const renderWithProviders = (component: React.ReactElement) => {
-  return render(
-    <QueryClientProvider client={queryClient}>
-      <ThemeProvider theme={theme}>{component}</ThemeProvider>
-    </QueryClientProvider>,
-  );
-};
+const USDC = '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48';
 
 describe('TokenDetailScreen', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    mockChainId = 1;
+    mockParams = {
+      symbol: 'ETH',
+      name: 'Ethereum',
+      balance: '1.5',
+      contractAddress: undefined,
+      coingeckoId: 'ethereum',
+      usdValue: 3000,
+    };
+    mockGetPrice.mockResolvedValue({ price: 2000, change24h: 3.5 });
+    mockGetPriceHistory.mockResolvedValue({
+      prices: [
+        [1700000000000, 1900],
+        [1700086400000, 2000],
+      ],
+      market_caps: [],
+      total_volumes: [],
+    });
+    mockUseTokenBalance.mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      isError: false,
+      refetch: mockTokenRefetch,
+    });
+    usePreferencesStore.setState({ currency: 'USD', hideBalances: false });
   });
 
-  it('should render correctly', () => {
-    renderWithProviders(<TokenDetailScreen />);
-
+  it('renders symbol, name and balance', () => {
+    render(<TokenDetailScreen />);
     expect(screen.getAllByText('ETH').length).toBeGreaterThan(0);
     expect(screen.getByText('Ethereum')).toBeTruthy();
+    expect(screen.getByTestId('token-detail-balance')).toHaveTextContent(
+      '1.5 ETH',
+    );
   });
 
-  it('should display token balance', () => {
-    renderWithProviders(<TokenDetailScreen />);
-
-    expect(screen.getByText(/1\.5.*ETH/)).toBeTruthy();
+  it('shows the real fiat value, price and 24h change', async () => {
+    render(<TokenDetailScreen />);
+    await waitFor(() => {
+      expect(screen.getByTestId('token-detail-fiat')).toHaveTextContent(
+        '$3,000.00',
+      );
+      expect(screen.getByTestId('token-detail-price')).toHaveTextContent(
+        '$2,000.00',
+      );
+    });
+    expect(screen.getByTestId('token-detail-change')).toHaveTextContent(
+      '+3.50% (24시간)',
+    );
+    expect(screen.queryByText(/≈ \$0\.00/)).toBeNull();
   });
 
-  it('should display token info section', () => {
-    renderWithProviders(<TokenDetailScreen />);
+  it('draws a price chart when the coingecko id is known', async () => {
+    render(<TokenDetailScreen />);
+    await waitFor(() => {
+      expect(screen.getByTestId('token-detail-chart')).toBeTruthy();
+    });
+    expect(mockGetPriceHistory).toHaveBeenCalledWith('ethereum', '7');
+  });
 
+  it('links to the market info (CoinDetail) screen', async () => {
+    render(<TokenDetailScreen />);
+    fireEvent.press(screen.getByTestId('token-detail-market-info'));
+    expect(mockNavigate).toHaveBeenCalledWith('CoinDetail', {
+      coinId: 'ethereum',
+      coinName: 'Ethereum',
+      coinSymbol: 'ETH',
+      coinImage: '',
+    });
+  });
+
+  it('shows no fiat value or market data on testnets', () => {
+    mockChainId = 11155111;
+    render(<TokenDetailScreen />);
+    expect(screen.getByTestId('token-detail-fiat')).toHaveTextContent(
+      '테스트넷 — 실제 가치 없음',
+    );
+    expect(screen.queryByTestId('token-detail-price')).toBeNull();
+    expect(mockGetPrice).not.toHaveBeenCalled();
+  });
+
+  it('displays the token info section', () => {
+    render(<TokenDetailScreen />);
     expect(screen.getByText('토큰 정보')).toBeTruthy();
     expect(screen.getByText('네트워크')).toBeTruthy();
     expect(screen.getByText('심볼')).toBeTruthy();
   });
 
-  it('should navigate to SendTransaction on send button press', () => {
-    renderWithProviders(<TokenDetailScreen />);
-
-    const sendButton = screen.getByText('보내기');
-    fireEvent.press(sendButton);
-
+  it('navigates to SendTransaction for the native token', () => {
+    render(<TokenDetailScreen />);
+    fireEvent.press(screen.getByText('보내기'));
     expect(mockNavigate).toHaveBeenCalledWith('SendTransaction', {
       tokenAddress: undefined,
     });
   });
 
-  it('should navigate to ReceiveToken on receive button press', () => {
-    renderWithProviders(<TokenDetailScreen />);
-
-    const receiveButton = screen.getByText('받기');
-    fireEvent.press(receiveButton);
-
+  it('navigates to ReceiveToken and Swap', () => {
+    render(<TokenDetailScreen />);
+    fireEvent.press(screen.getByText('받기'));
     expect(mockNavigate).toHaveBeenCalledWith('ReceiveToken');
+    fireEvent.press(screen.getByText('스왑'));
+    expect(mockNavigate).toHaveBeenCalledWith('Swap');
   });
 
-  it('should call showBuyProviderAlert on buy button press', () => {
-    renderWithProviders(<TokenDetailScreen />);
-
-    const buyButton = screen.getByText('구매');
-    fireEvent.press(buyButton);
-
+  it('passes address and chain id to the buy flow', () => {
+    render(<TokenDetailScreen />);
+    fireEvent.press(screen.getByText('구매'));
     expect(mockShowBuyProviderAlert).toHaveBeenCalledWith(
       'eth',
       '0x1234567890123456789012345678901234567890',
+      undefined,
+      1,
     );
   });
 
-  it('should open explorer when view explorer button is pressed', () => {
-    renderWithProviders(<TokenDetailScreen />);
-
-    const explorerButton = screen.getByText(/블록 탐색기에서 보기/);
-    fireEvent.press(explorerButton);
-
+  it("uses the active network's block explorer (not hardcoded etherscan)", () => {
+    mockChainId = 10;
+    render(<TokenDetailScreen />);
+    fireEvent.press(screen.getByTestId('token-detail-explorer'));
     expect(mockOpenURL).toHaveBeenCalledWith(
-      expect.stringContaining('etherscan.io'),
+      'https://optimistic.etherscan.io/address/0x1234567890123456789012345678901234567890',
     );
   });
 
-  it('should navigate back when back button is pressed', () => {
-    renderWithProviders(<TokenDetailScreen />);
-
-    const backButton = screen.getByText('‹');
-    fireEvent.press(backButton);
-
+  it('navigates back via the accessible header button', () => {
+    render(<TokenDetailScreen />);
+    fireEvent.press(screen.getByLabelText('뒤로 가기'));
     expect(mockGoBack).toHaveBeenCalled();
   });
 
-  it('should display ETH icon for native token', () => {
-    renderWithProviders(<TokenDetailScreen />);
-
+  it('shows the ETH glyph for the native token without a logo', () => {
+    render(<TokenDetailScreen />);
     expect(screen.getByText('Ξ')).toBeTruthy();
   });
-});
 
-describe('TokenDetailScreen - Component Definition', () => {
-  it('should be a valid function component', () => {
-    expect(typeof TokenDetailScreen).toBe('function');
+  describe('ERC-20 tokens', () => {
+    beforeEach(() => {
+      mockParams = {
+        symbol: 'USDC',
+        name: 'USD Coin',
+        balance: '250',
+        contractAddress: USDC,
+        decimals: 6,
+        coingeckoId: 'usd-coin',
+        usdValue: 250,
+      };
+      mockGetPrice.mockResolvedValue({ price: 1, change24h: 0 });
+      mockUseTokenBalance.mockReturnValue({
+        data: { formatted: '300', wei: 300000000n, symbol: '' },
+        isLoading: false,
+        isError: false,
+        refetch: mockTokenRefetch,
+      });
+    });
+
+    it('reads the ERC-20 balance with the contract and decimals', () => {
+      render(<TokenDetailScreen />);
+      expect(mockUseTokenBalance).toHaveBeenCalledWith(
+        '0x1234567890123456789012345678901234567890',
+        USDC,
+        6,
+        1,
+      );
+      expect(screen.getByTestId('token-detail-balance')).toHaveTextContent(
+        '300 USDC',
+      );
+    });
+
+    it('sends the ERC-20 token and receives with the token address', () => {
+      render(<TokenDetailScreen />);
+      fireEvent.press(screen.getByText('보내기'));
+      expect(mockNavigate).toHaveBeenCalledWith('SendTransaction', {
+        tokenAddress: USDC,
+      });
+      fireEvent.press(screen.getByText('받기'));
+      expect(mockNavigate).toHaveBeenCalledWith('ReceiveToken', {
+        tokenAddress: USDC,
+      });
+    });
+
+    it('refetches the shown token on pull to refresh', async () => {
+      render(<TokenDetailScreen />);
+      const scroll = screen.getByTestId('token-detail-scroll');
+      await act(async () => {
+        await scroll.props.refreshControl.props.onRefresh();
+      });
+      expect(mockTokenRefetch).toHaveBeenCalled();
+      expect(mockNativeRefetch).not.toHaveBeenCalled();
+    });
+
+    it('links to the token page on the explorer', () => {
+      render(<TokenDetailScreen />);
+      fireEvent.press(screen.getByTestId('token-detail-explorer'));
+      expect(mockOpenURL).toHaveBeenCalledWith(
+        `https://etherscan.io/token/${USDC}?a=0x1234567890123456789012345678901234567890`,
+      );
+    });
   });
 });

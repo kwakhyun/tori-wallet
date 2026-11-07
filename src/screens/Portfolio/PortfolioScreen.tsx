@@ -1,22 +1,35 @@
 /**
- * 포트폴리오 화면 (토큰 목록, 자산 현황, 차트)
+ * 포트폴리오 화면 (자산 현황, 추이, 배분, 토큰 목록)
+ *
+ * - 금액은 모두 useFiat().formatFiat (표시 통화, 잔액 숨기기 반영)
+ * - 비교할 기록이 없는 기간 변동은 '—'
+ * - 조회 실패/가격 미확인/테스트넷 데이터는 기록(스냅샷)하지 않는다 (서비스에서 판단)
  */
 
-import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import React, {
+  useState,
+  useEffect,
+  useCallback,
+  useRef,
+  useMemo,
+} from 'react';
 import styled from 'styled-components/native';
 import { useShallow } from 'zustand/react/shallow';
-import { useTheme } from '@/hooks/useTheme';
 import {
   StatusBar,
   FlatList,
   RefreshControl,
   Image,
   ScrollView,
-  Dimensions,
   TouchableOpacity,
+  useWindowDimensions,
 } from 'react-native';
+import { useNavigation } from '@react-navigation/native';
+import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useQuery } from '@tanstack/react-query';
+import type { RootStackParamList } from '@/navigation/RootNavigator';
+import { useTheme } from '@/hooks/useTheme';
+import { useFiat } from '@/hooks/useFiat';
 import { useWalletStore } from '@/store/walletStore';
 import { tokenService, Token } from '@/services/tokenService';
 import {
@@ -27,30 +40,33 @@ import {
 } from '@/services/portfolioAnalyticsService';
 import { PieChart, LineChart } from '@/components/charts';
 import { PortfolioScreenSkeleton } from '@/components/common/Skeleton';
+import { TabScreen } from '@/components/common/Screen';
+import { ErrorState } from '@/components/common/StateViews';
+import { tokenDetailParams } from '@/screens/TokenDetail/tokenDetailParams';
 
-const { width: SCREEN_WIDTH } = Dimensions.get('window');
-
+type NavigationProp = NativeStackNavigationProp<RootStackParamList>;
 type ViewMode = 'overview' | 'tokens';
 type TimeRange = '7d' | '30d' | '90d';
 
-const TIME_RANGES: TimeRange[] = ['7d', '30d', '90d'];
+const TIME_RANGES: { value: TimeRange; label: string; days: number }[] = [
+  { value: '7d', label: '7일', days: 7 },
+  { value: '30d', label: '30일', days: 30 },
+  { value: '90d', label: '90일', days: 90 },
+];
 
-const formatUSD = (value: number): string => {
-  if (value === 0) return '$0.00';
-  if (Math.abs(value) < 0.01) return value > 0 ? '< $0.01' : '> -$0.01';
-  return `$${value.toLocaleString('en-US', {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  })}`;
-};
-
-const formatChange = (value: number, showSign: boolean = true): string => {
-  const sign = showSign && value > 0 ? '+' : '';
+export const formatChange = (value: number | null | undefined): string => {
+  if (value === null || value === undefined || !Number.isFinite(value)) {
+    return '—';
+  }
+  const sign = value > 0 ? '+' : '';
   return `${sign}${value.toFixed(2)}%`;
 };
 
 function PortfolioScreen(): React.JSX.Element {
   const { theme, isDarkMode } = useTheme();
+  const navigation = useNavigation<NavigationProp>();
+  const { width: windowWidth } = useWindowDimensions();
+  const { formatFiat, mask, hideBalances } = useFiat();
   const { wallets, activeWalletIndex, activeNetworkChainId, networks } =
     useWalletStore(
       useShallow(state => ({
@@ -63,6 +79,7 @@ function PortfolioScreen(): React.JSX.Element {
 
   const activeWallet = wallets[activeWalletIndex];
   const activeNetwork = networks.find(n => n.chainId === activeNetworkChainId);
+  const isTestnet = !!activeNetwork?.isTestnet;
 
   const [viewMode, setViewMode] = useState<ViewMode>('overview');
   const [timeRange, setTimeRange] = useState<TimeRange>('30d');
@@ -74,16 +91,14 @@ function PortfolioScreen(): React.JSX.Element {
   const [chartData, setChartData] = useState<{
     labels: string[];
     values: number[];
-  }>({
-    labels: [],
-    values: [],
-  });
+  }>({ labels: [], values: [] });
+  const [isPullRefreshing, setIsPullRefreshing] = useState(false);
   const analyticsRequestId = useRef(0);
 
   const {
-    data: tokens,
+    data: tokenData,
     isLoading,
-    isRefetching,
+    isError,
     refetch,
   } = useQuery({
     queryKey: ['tokens', activeWallet?.address, activeNetworkChainId],
@@ -93,7 +108,13 @@ function PortfolioScreen(): React.JSX.Element {
     staleTime: 30000,
   });
 
-  const totalValue = tokens ? tokenService.getTotalValue(tokens) : 0;
+  const tokens = useMemo(
+    () => (Array.isArray(tokenData) ? tokenData : undefined),
+    [tokenData],
+  );
+
+  const totalValue = tokens ? tokenService.getTotalValue(tokens) : null;
+  const totalComplete = tokens ? tokenService.isTotalComplete(tokens) : false;
 
   // 분석 데이터 로드
   const loadAnalytics = useCallback(async () => {
@@ -109,7 +130,7 @@ function PortfolioScreen(): React.JSX.Element {
     }
 
     try {
-      // 현재 스냅샷이 차트에 포함되도록 먼저 저장
+      // 현재 스냅샷이 차트에 포함되도록 먼저 저장 (신뢰할 수 없는 값은 서비스가 거부)
       await portfolioAnalyticsService.saveSnapshot(
         address,
         activeNetworkChainId,
@@ -118,9 +139,8 @@ function PortfolioScreen(): React.JSX.Element {
 
       const alloc = portfolioAnalyticsService.calculateAllocation(tokens);
       const perfData = portfolioAnalyticsService.calculatePerformance(tokens);
-      const days = timeRange === '7d' ? 7 : timeRange === '30d' ? 30 : 90;
+      const days = TIME_RANGES.find(r => r.value === timeRange)?.days ?? 30;
 
-      // 서로 의존하지 않는 저장소 조회는 병렬 실행
       const [statsData, chart] = await Promise.all([
         portfolioAnalyticsService.calculateStats(
           address,
@@ -155,125 +175,226 @@ function PortfolioScreen(): React.JSX.Element {
     };
   }, [loadAnalytics]);
 
+  const handleRefresh = useCallback(async () => {
+    setIsPullRefreshing(true);
+    try {
+      await refetch();
+    } finally {
+      setIsPullRefreshing(false);
+    }
+  }, [refetch]);
+
+  const handleTokenPress = useCallback(
+    (token: Token) => {
+      navigation.navigate('TokenDetail', tokenDetailParams(token));
+    },
+    [navigation],
+  );
+
   const renderToken = useCallback(
-    ({ item }: { item: Token }) => (
-      <TokenItem>
-        {item.logoUrl ? (
-          <TokenLogo source={{ uri: item.logoUrl }} />
-        ) : (
-          <TokenLogoPlaceholder>
-            <TokenLogoText>{item.symbol.charAt(0)}</TokenLogoText>
-          </TokenLogoPlaceholder>
-        )}
+    ({ item }: { item: Token }) => {
+      const priceText =
+        isTestnet || !item.priceAvailable
+          ? '—'
+          : formatFiat(item.price, {
+              ignoreHidden: true,
+              maximumFractionDigits: item.price < 1 ? 6 : undefined,
+            });
+      const valueText = isTestnet
+        ? '실제 가치 없음'
+        : item.balanceError
+        ? '잔액 조회 실패'
+        : formatFiat(item.usdValue ?? null, { showTinyAsLessThan: true });
+      const balanceText = `${item.balance} ${item.symbol}`;
+      return (
+        <TokenItem
+          onPress={() => handleTokenPress(item)}
+          testID={`portfolio-token-${
+            item.address === 'native' ? 'native' : item.address
+          }`}
+          accessibilityRole="button"
+          accessibilityLabel={`${item.name}, ${mask(balanceText)}${
+            hideBalances ? '' : `, ${valueText}`
+          }`}
+          accessibilityHint="토큰 상세 보기"
+        >
+          {item.logoUrl ? (
+            <TokenLogo source={{ uri: item.logoUrl }} />
+          ) : (
+            <TokenLogoPlaceholder>
+              <TokenLogoText>{item.symbol.charAt(0)}</TokenLogoText>
+            </TokenLogoPlaceholder>
+          )}
 
-        <TokenInfo>
-          <TokenRow>
-            <TokenName>{item.name}</TokenName>
-            <TokenBalance>
-              {item.balance} {item.symbol}
-            </TokenBalance>
-          </TokenRow>
+          <TokenInfo>
+            <TokenRow>
+              <TokenName numberOfLines={1}>{item.name}</TokenName>
+              <TokenBalance numberOfLines={1}>{mask(balanceText)}</TokenBalance>
+            </TokenRow>
 
-          <TokenRow>
-            <PriceRow>
-              <TokenSymbol>{formatUSD(item.price)}</TokenSymbol>
-              {item.priceChange24h !== 0 && (
-                <TokenPriceChange $positive={item.priceChange24h > 0}>
-                  {formatChange(item.priceChange24h)}
-                </TokenPriceChange>
-              )}
-            </PriceRow>
-            <TokenValue>{formatUSD(item.value)}</TokenValue>
-          </TokenRow>
-        </TokenInfo>
-      </TokenItem>
-    ),
-    [],
+            <TokenRow>
+              <PriceRow>
+                <TokenSymbol>{priceText}</TokenSymbol>
+                {item.priceAvailable && !isTestnet && (
+                  <TokenPriceChange $positive={item.priceChange24h >= 0}>
+                    {formatChange(item.priceChange24h)}
+                  </TokenPriceChange>
+                )}
+              </PriceRow>
+              <TokenValue $error={!!item.balanceError && !isTestnet}>
+                {valueText}
+              </TokenValue>
+            </TokenRow>
+          </TokenInfo>
+        </TokenItem>
+      );
+    },
+    [formatFiat, handleTokenPress, hideBalances, isTestnet, mask],
+  );
+
+  const statValue = (value: number | null | undefined) => (
+    <StatValue
+      $tone={
+        value === null || value === undefined
+          ? 'neutral'
+          : value >= 0
+          ? 'positive'
+          : 'negative'
+      }
+    >
+      {formatChange(value)}
+    </StatValue>
+  );
+
+  const refreshControl = (
+    <RefreshControl
+      refreshing={isPullRefreshing}
+      onRefresh={handleRefresh}
+      tintColor={theme.colors.primary}
+    />
   );
 
   const renderOverview = () => (
-    <ScrollView showsVerticalScrollIndicator={false}>
+    <ScrollView
+      showsVerticalScrollIndicator={false}
+      refreshControl={refreshControl}
+      testID="portfolio-overview"
+    >
       {/* 총 자산 카드 */}
       <TotalValueCard>
         <TotalValueLabel>총 자산</TotalValueLabel>
-        <TotalValueAmount>{formatUSD(totalValue)}</TotalValueAmount>
-        {stats && stats.changePercent24h !== 0 && (
-          <ChangeRow>
-            <ChangeText $positive={stats.changePercent24h >= 0}>
-              {formatChange(stats.changePercent24h)} 오늘
-            </ChangeText>
-            <ChangeAmount $positive={stats.changePercent24h >= 0}>
-              ({formatUSD(Math.abs(stats.change24h))})
-            </ChangeAmount>
-          </ChangeRow>
+        {isTestnet ? (
+          <>
+            <TotalValueAmount>—</TotalValueAmount>
+            <TestnetNote testID="portfolio-testnet-note">
+              테스트넷 — 실제 가치 없음
+            </TestnetNote>
+          </>
+        ) : (
+          <>
+            <TotalValueAmount
+              testID="portfolio-total-value"
+              numberOfLines={1}
+              adjustsFontSizeToFit
+            >
+              {formatFiat(totalValue)}
+            </TotalValueAmount>
+            {!totalComplete && tokens && !hideBalances ? (
+              <TotalNote>
+                일부 자산은 시세를 불러오지 못해 제외했습니다
+              </TotalNote>
+            ) : null}
+            {stats &&
+            stats.changePercent24h !== null &&
+            stats.change24h !== null ? (
+              <ChangeRow>
+                <ChangeText $positive={stats.changePercent24h >= 0}>
+                  {formatChange(stats.changePercent24h)} 지난 24시간
+                </ChangeText>
+                <ChangeAmount $positive={stats.changePercent24h >= 0}>
+                  ({formatFiat(stats.change24h, { signed: true })})
+                </ChangeAmount>
+              </ChangeRow>
+            ) : null}
+          </>
         )}
       </TotalValueCard>
 
       {/* 기간 선택 */}
-      <TimeRangeContainer>
-        {TIME_RANGES.map(range => (
-          <TimeRangeButton
-            key={range}
-            $active={timeRange === range}
-            onPress={() => setTimeRange(range)}
-          >
-            <TimeRangeText $active={timeRange === range}>
-              {range === '7d' ? '7일' : range === '30d' ? '30일' : '90일'}
-            </TimeRangeText>
-          </TimeRangeButton>
-        ))}
+      <TimeRangeContainer accessibilityRole="tablist">
+        {TIME_RANGES.map(range => {
+          const active = timeRange === range.value;
+          return (
+            <TimeRangeButton
+              key={range.value}
+              $active={active}
+              onPress={() => setTimeRange(range.value)}
+              accessibilityRole="tab"
+              accessibilityState={{ selected: active }}
+              accessibilityLabel={`${range.label} 추이`}
+              testID={`portfolio-range-${range.value}`}
+            >
+              <TimeRangeText $active={active}>{range.label}</TimeRangeText>
+            </TimeRangeButton>
+          );
+        })}
       </TimeRangeContainer>
 
       {/* 라인 차트 */}
       <ChartCard>
-        <ChartTitle>포트폴리오 추이</ChartTitle>
+        <ChartTitle accessibilityRole="header">포트폴리오 추이</ChartTitle>
         <LineChart
           labels={chartData.labels}
           values={chartData.values}
-          width={SCREEN_WIDTH - 64}
+          width={Math.max(windowWidth - 80, 200)}
           height={180}
+          title="포트폴리오 추이"
+          emptyMessage={
+            isTestnet
+              ? '테스트넷 자산은 실제 가치가 없어 기록하지 않습니다.'
+              : '포트폴리오 탭을 열 때마다 하루 한 번 기록됩니다.'
+          }
+          testID="portfolio-line-chart"
         />
       </ChartCard>
 
       {/* 자산 배분 파이 차트 */}
       <ChartCard>
-        <ChartTitle>자산 배분</ChartTitle>
+        <ChartTitle accessibilityRole="header">자산 배분</ChartTitle>
         <PieChart data={allocation} size={180} innerRadius={50} />
       </ChartCard>
 
       {/* 성과 지표 */}
-      {performance && (
+      {performance && !isTestnet && (
         <StatsCard>
-          <ChartTitle>성과 지표</ChartTitle>
+          <ChartTitle accessibilityRole="header">성과 지표</ChartTitle>
           <StatsGrid>
             <StatItem>
               <StatLabel>24시간 변동</StatLabel>
-              <StatValue $positive={(stats?.changePercent24h ?? 0) >= 0}>
-                {formatChange(stats?.changePercent24h ?? 0)}
-              </StatValue>
+              {statValue(stats?.changePercent24h)}
             </StatItem>
             <StatItem>
               <StatLabel>7일 변동</StatLabel>
-              <StatValue $positive={(stats?.changePercent7d ?? 0) >= 0}>
-                {formatChange(stats?.changePercent7d ?? 0)}
-              </StatValue>
+              {statValue(stats?.changePercent7d)}
             </StatItem>
             <StatItem>
               <StatLabel>30일 변동</StatLabel>
-              <StatValue $positive={(stats?.changePercent30d ?? 0) >= 0}>
-                {formatChange(stats?.changePercent30d ?? 0)}
-              </StatValue>
+              {statValue(stats?.changePercent30d)}
             </StatItem>
             <StatItem>
-              <StatLabel>변동성</StatLabel>
-              <StatValue>{performance.volatility.toFixed(2)}%</StatValue>
+              <StatLabel>보유 자산 간 24h 변동 편차</StatLabel>
+              <StatValue $tone="neutral">
+                {performance.volatility === null
+                  ? '—'
+                  : `${performance.volatility.toFixed(2)}%p`}
+              </StatValue>
             </StatItem>
           </StatsGrid>
 
           {performance.bestPerformer && (
             <PerformerRow>
-              <PerformerLabel>🏆 최고 성과</PerformerLabel>
-              <PerformerValue $positive>
+              <PerformerLabel>24시간 최고 성과</PerformerLabel>
+              <PerformerValue $positive={performance.bestPerformer.change >= 0}>
                 {performance.bestPerformer.symbol} (
                 {formatChange(performance.bestPerformer.change)})
               </PerformerValue>
@@ -281,8 +402,10 @@ function PortfolioScreen(): React.JSX.Element {
           )}
           {performance.worstPerformer && (
             <PerformerRow>
-              <PerformerLabel>📉 최저 성과</PerformerLabel>
-              <PerformerValue $positive={false}>
+              <PerformerLabel>24시간 최저 성과</PerformerLabel>
+              <PerformerValue
+                $positive={performance.worstPerformer.change >= 0}
+              >
                 {performance.worstPerformer.symbol} (
                 {formatChange(performance.worstPerformer.change)})
               </PerformerValue>
@@ -291,21 +414,23 @@ function PortfolioScreen(): React.JSX.Element {
         </StatsCard>
       )}
 
-      {/* 통계 요약 */}
-      {stats && (
+      {/* 통계 요약 (기록된 총 자산액 기준) */}
+      {stats && !isTestnet && (
         <StatsCard>
-          <ChartTitle>통계 요약</ChartTitle>
+          <ChartTitle accessibilityRole="header">
+            기록된 총 자산 요약
+          </ChartTitle>
           <StatsRow>
-            <StatLabel>최고가</StatLabel>
-            <StatPlainValue>{formatUSD(stats.highestValue)}</StatPlainValue>
+            <StatLabel>최고 자산액</StatLabel>
+            <StatPlainValue>{formatFiat(stats.highestValue)}</StatPlainValue>
           </StatsRow>
           <StatsRow>
-            <StatLabel>최저가</StatLabel>
-            <StatPlainValue>{formatUSD(stats.lowestValue)}</StatPlainValue>
+            <StatLabel>최저 자산액</StatLabel>
+            <StatPlainValue>{formatFiat(stats.lowestValue)}</StatPlainValue>
           </StatsRow>
           <StatsRow>
-            <StatLabel>평균가</StatLabel>
-            <StatPlainValue>{formatUSD(stats.averageValue)}</StatPlainValue>
+            <StatLabel>평균 자산액</StatLabel>
+            <StatPlainValue>{formatFiat(stats.averageValue)}</StatPlainValue>
           </StatsRow>
         </StatsCard>
       )}
@@ -316,96 +441,98 @@ function PortfolioScreen(): React.JSX.Element {
 
   const renderTokenList = () => (
     <FlatList
-      data={tokens}
+      data={tokens ?? []}
       renderItem={renderToken}
       keyExtractor={item =>
         item.address === 'native' ? 'native' : item.address
       }
       ListEmptyComponent={
         <EmptyState>
-          <EmptyIcon>💰</EmptyIcon>
           <EmptyText>
             토큰이 없습니다.{'\n'}
             {activeNetwork?.name}에서 토큰을 받아보세요.
           </EmptyText>
         </EmptyState>
       }
-      refreshControl={
-        <RefreshControl
-          refreshing={isRefetching}
-          onRefresh={refetch}
-          tintColor={theme.colors.primary}
-        />
-      }
+      refreshControl={refreshControl}
       showsVerticalScrollIndicator={false}
     />
   );
 
   if (!activeWallet) {
     return (
-      <Container>
+      <TabScreen>
         <StatusBar barStyle={isDarkMode ? 'light-content' : 'dark-content'} />
         <Content>
-          <Title>포트폴리오</Title>
+          <Title accessibilityRole="header">포트폴리오</Title>
           <EmptyState>
             <EmptyText>지갑이 없습니다</EmptyText>
           </EmptyState>
         </Content>
-      </Container>
+      </TabScreen>
     );
   }
 
+  const renderBody = () => {
+    if (isLoading && !tokens) return <PortfolioScreenSkeleton />;
+    if (isError && !tokens) {
+      return (
+        <ErrorState
+          title="자산 정보를 불러오지 못했습니다"
+          onRetry={() => refetch()}
+          testID="portfolio-error"
+        />
+      );
+    }
+    return viewMode === 'overview' ? renderOverview() : renderTokenList();
+  };
+
   return (
-    <Container>
+    <TabScreen testID="portfolio-screen">
       <StatusBar barStyle={isDarkMode ? 'light-content' : 'dark-content'} />
       <Content>
         <Header>
-          <Title>포트폴리오</Title>
+          <Title accessibilityRole="header">포트폴리오</Title>
           <NetworkBadge>
-            <NetworkDot $isTestnet={activeNetwork?.isTestnet} />
-            <NetworkName>{activeNetwork?.name}</NetworkName>
+            <NetworkDot $isTestnet={isTestnet} />
+            <NetworkName numberOfLines={1}>{activeNetwork?.name}</NetworkName>
           </NetworkBadge>
         </Header>
 
         {/* 뷰 모드 탭 */}
-        <TabContainer>
+        <TabContainer accessibilityRole="tablist">
           <TabButton
             $active={viewMode === 'overview'}
             onPress={() => setViewMode('overview')}
+            accessibilityRole="tab"
+            accessibilityState={{ selected: viewMode === 'overview' }}
+            accessibilityLabel="분석"
+            testID="portfolio-tab-overview"
           >
-            <TabText $active={viewMode === 'overview'}>📊 분석</TabText>
+            <TabText $active={viewMode === 'overview'}>분석</TabText>
           </TabButton>
           <TabButton
             $active={viewMode === 'tokens'}
             onPress={() => setViewMode('tokens')}
+            accessibilityRole="tab"
+            accessibilityState={{ selected: viewMode === 'tokens' }}
+            accessibilityLabel="자산"
+            testID="portfolio-tab-tokens"
           >
-            <TabText $active={viewMode === 'tokens'}>💰 자산</TabText>
+            <TabText $active={viewMode === 'tokens'}>자산</TabText>
           </TabButton>
         </TabContainer>
 
-        {isLoading ? (
-          <PortfolioScreenSkeleton />
-        ) : viewMode === 'overview' ? (
-          renderOverview()
-        ) : (
-          renderTokenList()
-        )}
+        {renderBody()}
       </Content>
-    </Container>
+    </TabScreen>
   );
 }
-
-// Styled Components
-const Container = styled(SafeAreaView).attrs({
-  edges: ['top', 'left', 'right'],
-})`
-  flex: 1;
-  background-color: ${({ theme }) => theme.colors.background};
-`;
 
 const Content = styled.View`
   flex: 1;
   padding: ${({ theme }) => theme.spacing.lg}px;
+  padding-bottom: 0;
 `;
 
 const Header = styled.View`
@@ -424,6 +551,8 @@ const Title = styled.Text`
 const NetworkBadge = styled.View`
   flex-direction: row;
   align-items: center;
+  flex-shrink: 1;
+  margin-left: ${({ theme }) => theme.spacing.sm}px;
   background-color: ${({ theme }) => theme.colors.backgroundSecondary};
   padding: ${({ theme }) => theme.spacing.xs}px
     ${({ theme }) => theme.spacing.sm}px;
@@ -442,6 +571,7 @@ const NetworkDot = styled.View<{ $isTestnet?: boolean }>`
 const NetworkName = styled.Text`
   color: ${({ theme }) => theme.colors.textSecondary};
   font-size: 12px;
+  flex-shrink: 1;
 `;
 
 // 탭 컨테이너
@@ -455,7 +585,8 @@ const TabContainer = styled.View`
 
 const TabButton = styled(TouchableOpacity)<{ $active: boolean }>`
   flex: 1;
-  padding: ${({ theme }) => theme.spacing.sm}px;
+  min-height: 44px;
+  justify-content: center;
   border-radius: ${({ theme }) => theme.borderRadius.sm}px;
   align-items: center;
   background-color: ${({ $active, theme }) =>
@@ -464,7 +595,7 @@ const TabButton = styled(TouchableOpacity)<{ $active: boolean }>`
 
 const TabText = styled.Text<{ $active: boolean }>`
   color: ${({ theme, $active }) =>
-    $active ? '#FFFFFF' : theme.colors.textMuted};
+    $active ? theme.colors.onPrimary : theme.colors.textSecondary};
   font-weight: 600;
   font-size: 14px;
 `;
@@ -490,9 +621,25 @@ const TotalValueAmount = styled.Text`
   font-weight: bold;
 `;
 
+const TotalNote = styled.Text`
+  color: ${({ theme }) => theme.colors.textTertiary};
+  font-size: 12px;
+  margin-top: ${({ theme }) => theme.spacing.xs}px;
+  text-align: center;
+`;
+
+const TestnetNote = styled.Text`
+  color: ${({ theme }) => theme.colors.warning};
+  font-size: 13px;
+  font-weight: 600;
+  margin-top: ${({ theme }) => theme.spacing.xs}px;
+`;
+
 const ChangeRow = styled.View`
   flex-direction: row;
   align-items: center;
+  flex-wrap: wrap;
+  justify-content: center;
   margin-top: ${({ theme }) => theme.spacing.xs}px;
 `;
 
@@ -519,16 +666,20 @@ const TimeRangeContainer = styled.View`
 `;
 
 const TimeRangeButton = styled(TouchableOpacity)<{ $active: boolean }>`
-  padding: ${({ theme }) => theme.spacing.xs}px
-    ${({ theme }) => theme.spacing.md}px;
+  min-height: 44px;
+  min-width: 64px;
+  align-items: center;
+  justify-content: center;
+  padding: 0 ${({ theme }) => theme.spacing.md}px;
   border-radius: ${({ theme }) => theme.borderRadius.full}px;
   background-color: ${({ $active, theme }) =>
     $active ? theme.colors.primary : theme.colors.surface};
 `;
 
 const TimeRangeText = styled.Text<{ $active: boolean }>`
-  color: ${({ $active }) => ($active ? '#FFFFFF' : '#71717A')};
-  font-size: 12px;
+  color: ${({ theme, $active }) =>
+    $active ? theme.colors.onPrimary : theme.colors.textSecondary};
+  font-size: 13px;
   font-weight: 600;
 `;
 
@@ -573,13 +724,13 @@ const StatLabel = styled.Text`
   margin-bottom: 4px;
 `;
 
-const StatValue = styled.Text<{ $positive?: boolean }>`
-  color: ${({ theme, $positive }) =>
-    $positive === undefined
-      ? theme.colors.textPrimary
-      : $positive
+const StatValue = styled.Text<{ $tone: 'positive' | 'negative' | 'neutral' }>`
+  color: ${({ theme, $tone }) =>
+    $tone === 'positive'
       ? theme.colors.success
-      : theme.colors.error};
+      : $tone === 'negative'
+      ? theme.colors.error
+      : theme.colors.textPrimary};
   font-size: 16px;
   font-weight: 600;
 `;
@@ -620,9 +771,10 @@ const PerformerValue = styled.Text<{ $positive: boolean }>`
 `;
 
 // 토큰 아이템
-const TokenItem = styled.View`
+const TokenItem = styled.TouchableOpacity`
   flex-direction: row;
   align-items: center;
+  min-height: 64px;
   background-color: ${({ theme }) => theme.colors.surface};
   border-radius: ${({ theme }) => theme.borderRadius.lg}px;
   padding: ${({ theme }) => theme.spacing.md}px;
@@ -640,13 +792,13 @@ const TokenLogoPlaceholder = styled.View`
   width: 40px;
   height: 40px;
   border-radius: 20px;
-  background-color: ${({ theme }) => theme.colors.primary};
+  background-color: ${({ theme }) => theme.colors.primarySubtle};
   align-items: center;
   justify-content: center;
 `;
 
 const TokenLogoText = styled.Text`
-  color: white;
+  color: ${({ theme }) => theme.colors.primary};
   font-size: 16px;
   font-weight: bold;
 `;
@@ -666,12 +818,15 @@ const TokenName = styled.Text`
   color: ${({ theme }) => theme.colors.textPrimary};
   font-size: 16px;
   font-weight: 600;
+  flex-shrink: 1;
+  margin-right: ${({ theme }) => theme.spacing.sm}px;
 `;
 
 const TokenBalance = styled.Text`
   color: ${({ theme }) => theme.colors.textPrimary};
-  font-size: 16px;
+  font-size: 15px;
   font-weight: 600;
+  flex-shrink: 1;
 `;
 
 const TokenSymbol = styled.Text`
@@ -679,8 +834,9 @@ const TokenSymbol = styled.Text`
   font-size: 14px;
 `;
 
-const TokenValue = styled.Text`
-  color: ${({ theme }) => theme.colors.textSecondary};
+const TokenValue = styled.Text<{ $error?: boolean }>`
+  color: ${({ theme, $error }) =>
+    $error ? theme.colors.error : theme.colors.textSecondary};
   font-size: 14px;
 `;
 
@@ -702,11 +858,6 @@ const EmptyState = styled.View`
   align-items: center;
   justify-content: center;
   padding-top: 60px;
-`;
-
-const EmptyIcon = styled.Text`
-  font-size: 48px;
-  margin-bottom: ${({ theme }) => theme.spacing.md}px;
 `;
 
 const EmptyText = styled.Text`

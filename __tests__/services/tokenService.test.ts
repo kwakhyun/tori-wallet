@@ -98,7 +98,9 @@ describe('TokenService', () => {
         ]),
       ).toBe(true);
       expect(
-        tokenService.isTotalComplete([token({ usdValue: null, balanceRaw: '2' })]),
+        tokenService.isTotalComplete([
+          token({ usdValue: null, balanceRaw: '2' }),
+        ]),
       ).toBe(false);
       expect(
         tokenService.isTotalComplete([token({ balanceError: true })]),
@@ -293,9 +295,9 @@ describe('TokenService', () => {
 
   describe('getTokenMetadata', () => {
     it('rejects invalid addresses before any RPC call', async () => {
-      await expect(
-        tokenService.getTokenMetadata('0x123', 1),
-      ).rejects.toThrow('올바른 컨트랙트 주소');
+      await expect(tokenService.getTokenMetadata('0x123', 1)).rejects.toThrow(
+        '올바른 컨트랙트 주소',
+      );
       expect(mockReadContract).not.toHaveBeenCalled();
     });
 
