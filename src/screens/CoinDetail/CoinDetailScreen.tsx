@@ -1,238 +1,287 @@
 /**
- * 코인 상세 화면 (가격, 시세 그래프, 구매)
- * 차트 요소의 위치가 동적으로 계산되어 인라인 스타일 필요
+ * 코인 상세 화면 (가격, 시세 그래프, 내 보유량, 구매)
+ *
+ * - 차트는 react-native-svg 경로(LineChart)로 그린다.
+ * - 기간을 바꾸면 차트 영역에 로딩 표시를 한다.
+ * - 현재 네트워크에서 이 자산을 보유 중이면 보유량과 보내기/스왑을 보여 준다.
+ * - 조회 실패는 $0.00이 아니라 '—'와 다시 시도로 표시한다.
  */
 
-/* eslint-disable react-native/no-inline-styles */
-import React, { useState, useCallback, useEffect } from 'react';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import React, { useState, useCallback, useEffect, useMemo } from 'react';
 import styled from 'styled-components/native';
-import { useTheme } from '@/hooks/useTheme';
+import { useShallow } from 'zustand/react/shallow';
 import {
   StatusBar,
   ScrollView,
   RefreshControl,
   ActivityIndicator,
   Image,
-  Alert,
+  useWindowDimensions,
 } from 'react-native';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import type { RouteProp } from '@react-navigation/native';
+import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import type { RootStackParamList } from '@/navigation/RootNavigator';
-import { coinService, CoinDetail, PriceHistory } from '@/services/coinService';
+import { useTheme } from '@/hooks/useTheme';
+import { useFiat } from '@/hooks/useFiat';
+import { useWalletStore } from '@/store/walletStore';
+import { showToast } from '@/store/toastStore';
+import { coinService } from '@/services/coinService';
+import { tokenService, type Token } from '@/services/tokenService';
 import { showBuyProviderAlert } from '@/services/buyService';
-import { createLogger } from '@/utils/logger';
-
-const logger = createLogger('CoinDetail');
+import { formatDisplayAmount } from '@/utils/format';
+import { Screen } from '@/components/common/Screen';
+import { ScreenHeader } from '@/components/common/ScreenHeader';
+import { ErrorState } from '@/components/common/StateViews';
+import { LineChart } from '@/components/charts/LineChart';
 
 type NavigationProp = NativeStackNavigationProp<RootStackParamList>;
 type CoinDetailRouteProp = RouteProp<RootStackParamList, 'CoinDetail'>;
 
-const CHART_HEIGHT = 220;
+const CHART_HEIGHT = 200;
 
 // 1일, 7일, 1달만 지원 (API 요청량 절감)
 type TimeRange = '1' | '7' | '30';
+const RANGES: { value: TimeRange; label: string }[] = [
+  { value: '1', label: '1일' },
+  { value: '7', label: '7일' },
+  { value: '30', label: '1달' },
+];
+
+function formatChartLabel(timestamp: number, range: TimeRange): string {
+  const date = new Date(timestamp);
+  if (range === '1') {
+    return `${date.getHours()}:${String(date.getMinutes()).padStart(2, '0')}`;
+  }
+  return `${date.getMonth() + 1}/${date.getDate()}`;
+}
+
+function isHeld(token: Token): boolean {
+  if (token.balanceError) return false;
+  const amount = Number(token.balanceRaw);
+  return Number.isFinite(amount) && amount > 0;
+}
 
 function CoinDetailScreen(): React.JSX.Element {
   const { theme, isDarkMode } = useTheme();
   const navigation = useNavigation<NavigationProp>();
   const route = useRoute<CoinDetailRouteProp>();
+  const { width: windowWidth } = useWindowDimensions();
+  const { formatFiat, mask } = useFiat();
   const { coinId, coinName, coinSymbol, coinImage } = route.params;
 
-  const [coinDetail, setCoinDetail] = useState<CoinDetail | null>(null);
-  const [priceHistory, setPriceHistory] = useState<PriceHistory | null>(null);
+  const { wallets, activeWalletIndex, activeNetworkChainId, networks } =
+    useWalletStore(
+      useShallow(state => ({
+        wallets: state.wallets,
+        activeWalletIndex: state.activeWalletIndex,
+        activeNetworkChainId: state.activeNetworkChainId,
+        networks: state.networks,
+      })),
+    );
+  const activeWallet = wallets?.[activeWalletIndex];
+  const activeNetwork = networks?.find(n => n.chainId === activeNetworkChainId);
+
   const [selectedRange, setSelectedRange] = useState<TimeRange>('7');
-  const [isLoading, setIsLoading] = useState(true);
-  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [isPullRefreshing, setIsPullRefreshing] = useState(false);
 
-  const loadData = useCallback(async () => {
-    try {
-      // 코인 상세 정보와 가격 히스토리를 별도로 처리
-      const [detail, history] = await Promise.allSettled([
-        coinService.getCoinDetail(coinId),
-        coinService.getPriceHistory(coinId, selectedRange),
-      ]);
-
-      if (detail.status === 'fulfilled') {
-        setCoinDetail(detail.value);
-      }
-
-      if (history.status === 'fulfilled') {
-        setPriceHistory(history.value);
-      } else {
-        // 히스토리 로딩 실패 시 빈 데이터 설정
-        setPriceHistory({ prices: [], market_caps: [], total_volumes: [] });
-      }
-    } catch (error) {
-      logger.error('Failed to load coin data:', error);
-    } finally {
-      setIsLoading(false);
-      setIsRefreshing(false);
-    }
-  }, [coinId, selectedRange]);
-
-  // Rate Limit 알림 콜백 설정
+  // Rate Limit 안내는 화면을 막지 않는 토스트로 표시
   useEffect(() => {
     coinService.setRateLimitCallback((message: string) => {
-      Alert.alert('데이터 조회 제한', message, [{ text: '확인' }]);
+      showToast(message.replace(/\n/g, ' '), 'warning');
     });
   }, []);
 
-  useEffect(() => {
-    loadData();
-  }, [loadData]);
+  const detailQuery = useQuery({
+    queryKey: ['coinDetail', coinId],
+    queryFn: () => coinService.getCoinDetail(coinId),
+    staleTime: 3 * 60 * 1000,
+    retry: false,
+  });
 
-  const handleRefresh = useCallback(() => {
-    setIsRefreshing(true);
-    loadData();
-  }, [loadData]);
+  const historyQuery = useQuery({
+    queryKey: ['priceHistory', coinId, selectedRange],
+    queryFn: () => coinService.getPriceHistory(coinId, selectedRange),
+    staleTime: 10 * 60 * 1000,
+    retry: false,
+    // 기간을 바꾸는 동안 이전 차트를 유지하고 로딩 표시를 덮는다.
+    placeholderData: keepPreviousData,
+  });
 
-  const handleRangeChange = useCallback((range: TimeRange) => {
-    setSelectedRange(range);
-  }, []);
+  // 현재 네트워크의 보유 토큰 (홈/포트폴리오와 같은 캐시 사용)
+  const tokensQuery = useQuery({
+    queryKey: ['tokens', activeWallet?.address, activeNetworkChainId],
+    queryFn: () =>
+      tokenService.getTokens(activeWallet?.address || '', activeNetworkChainId),
+    enabled: !!activeWallet?.address,
+    staleTime: 30000,
+  });
+
+  const holding = useMemo(() => {
+    const list = Array.isArray(tokensQuery.data) ? tokensQuery.data : [];
+    return (
+      list.find(token => token.coingeckoId === coinId && isHeld(token)) ?? null
+    );
+  }, [tokensQuery.data, coinId]);
+
+  const chart = useMemo(() => {
+    const points = historyQuery.data?.prices ?? [];
+    return {
+      labels: points.map(([timestamp]) =>
+        formatChartLabel(timestamp, selectedRange),
+      ),
+      values: points.map(([, value]) => value),
+    };
+  }, [historyQuery.data, selectedRange]);
+
+  const handleRefresh = useCallback(async () => {
+    setIsPullRefreshing(true);
+    try {
+      await Promise.all([
+        detailQuery.refetch(),
+        historyQuery.refetch(),
+        activeWallet?.address ? tokensQuery.refetch() : Promise.resolve(),
+      ]);
+    } finally {
+      setIsPullRefreshing(false);
+    }
+  }, [detailQuery, historyQuery, tokensQuery, activeWallet?.address]);
 
   const handleBuy = useCallback(() => {
-    // 지갑 주소 없이 구매 서비스로 이동 (사용자가 직접 입력)
-    showBuyProviderAlert(coinSymbol);
-  }, [coinSymbol]);
+    showBuyProviderAlert(
+      coinSymbol,
+      activeWallet?.address,
+      undefined,
+      activeNetworkChainId,
+    );
+  }, [coinSymbol, activeWallet?.address, activeNetworkChainId]);
 
-  // 라인 차트 렌더링 (SVG 없이 View로 구현)
-  const renderChart = useCallback(() => {
-    if (!priceHistory || priceHistory.prices.length === 0) {
+  const handleSend = useCallback(() => {
+    if (!holding) return;
+    navigation.navigate('SendTransaction', {
+      tokenAddress: holding.address === 'native' ? undefined : holding.address,
+    });
+  }, [navigation, holding]);
+
+  const handleSwap = useCallback(() => {
+    navigation.navigate('Swap');
+  }, [navigation]);
+
+  const marketData = detailQuery.data?.market_data;
+  const currentPrice = marketData?.current_price?.usd ?? null;
+  const priceChange24h = marketData?.price_change_percentage_24h ?? null;
+  const priceDigits = (value: number | null | undefined) =>
+    value !== null && value !== undefined && value < 1 ? 6 : undefined;
+  const formatPrice = (value: number | null | undefined) =>
+    formatFiat(value ?? null, {
+      ignoreHidden: true,
+      maximumFractionDigits: priceDigits(value),
+    });
+  const formatPercent = (value: number | null | undefined) =>
+    value === null || value === undefined || !Number.isFinite(value)
+      ? '—'
+      : `${value >= 0 ? '+' : ''}${value.toFixed(2)}%`;
+  const changeColor = (value: number | null | undefined) =>
+    value === null || value === undefined
+      ? theme.colors.textSecondary
+      : value >= 0
+      ? theme.colors.success
+      : theme.colors.error;
+
+  const marketRows: { label: string; value: string }[] = [
+    {
+      label: '시가총액',
+      value: formatFiat(marketData?.market_cap?.usd || null, {
+        compact: true,
+        ignoreHidden: true,
+      }),
+    },
+    {
+      label: '24시간 거래량',
+      value: formatFiat(marketData?.total_volume?.usd || null, {
+        compact: true,
+        ignoreHidden: true,
+      }),
+    },
+    { label: '24시간 최고', value: formatPrice(marketData?.high_24h?.usd) },
+    { label: '24시간 최저', value: formatPrice(marketData?.low_24h?.usd) },
+    { label: '역대 최고가', value: formatPrice(marketData?.ath?.usd) },
+    {
+      label: '유통량',
+      value: marketData?.circulating_supply
+        ? `${formatDisplayAmount(
+            Math.round(marketData.circulating_supply),
+          )} ${coinSymbol.toUpperCase()}`
+        : '—',
+    },
+  ];
+
+  const renderChart = () => {
+    const chartWidth = Math.max(windowWidth - 48, 200);
+    if (historyQuery.isError && !historyQuery.data) {
       return (
-        <ChartPlaceholder>
-          <ChartPlaceholderText>차트 데이터 없음</ChartPlaceholderText>
-        </ChartPlaceholder>
+        <ChartBox style={{ height: CHART_HEIGHT }}>
+          <ErrorState
+            compact
+            title="차트를 불러오지 못했습니다"
+            message=""
+            onRetry={() => historyQuery.refetch()}
+            testID="coin-detail-chart-error"
+          />
+        </ChartBox>
       );
     }
-
-    const prices = priceHistory.prices.map(p => p[1]);
-    const minPrice = Math.min(...prices);
-    const maxPrice = Math.max(...prices);
-    const priceRange = maxPrice - minPrice || 1;
-    const isPositive = prices[prices.length - 1] >= prices[0];
-    const chartColor = isPositive ? theme.colors.success : theme.colors.error;
-
-    // 데이터를 40개 포인트로 샘플링 (더 부드러운 라인)
-    const sampleCount = 40;
-    const step = Math.max(1, Math.floor(prices.length / sampleCount));
-    const sampledPrices: number[] = [];
-    for (let i = 0; i < prices.length; i += step) {
-      sampledPrices.push(prices[i]);
-    }
-    // 마지막 가격 포함
-    if (sampledPrices[sampledPrices.length - 1] !== prices[prices.length - 1]) {
-      sampledPrices.push(prices[prices.length - 1]);
-    }
-
-    const chartWidth = 100; // 퍼센트
-    const pointWidth = chartWidth / (sampledPrices.length - 1);
-
     return (
-      <ChartContainer>
-        <ChartArea>
-          {/* 배경 그리드 라인 */}
-          <GridLine style={{ top: '0%' }} />
-          <GridLine style={{ top: '25%' }} />
-          <GridLine style={{ top: '50%' }} />
-          <GridLine style={{ top: '75%' }} />
-          <GridLine style={{ top: '100%' }} />
-
-          {/* 라인 차트 */}
-          <LineChartContainer>
-            {sampledPrices.map((price, index) => {
-              if (index === sampledPrices.length - 1) return null;
-
-              const y1 = 100 - ((price - minPrice) / priceRange) * 100;
-              const y2 =
-                100 -
-                ((sampledPrices[index + 1] - minPrice) / priceRange) * 100;
-              const x1 = index * pointWidth;
-
-              // 라인 세그먼트의 각도와 길이 계산
-              const deltaX = pointWidth;
-              const deltaY = y2 - y1;
-              const length = Math.sqrt(deltaX * deltaX + deltaY * deltaY);
-              const angle = Math.atan2(deltaY, deltaX) * (180 / Math.PI);
-
-              return (
-                <LineSegment
-                  key={index}
-                  style={{
-                    left: `${x1}%`,
-                    top: `${y1}%`,
-                    width: `${length}%`,
-                    transform: [{ rotate: `${angle}deg` }],
-                    backgroundColor: chartColor,
-                  }}
-                />
-              );
-            })}
-
-            {/* 현재 가격 점 표시 */}
-            <CurrentPriceDot
-              style={{
-                right: 0,
-                top: `${
-                  100 -
-                  ((sampledPrices[sampledPrices.length - 1] - minPrice) /
-                    priceRange) *
-                    100
-                }%`,
-                backgroundColor: chartColor,
-              }}
+      <ChartBox style={{ minHeight: CHART_HEIGHT }}>
+        {historyQuery.data ? (
+          <LineChart
+            labels={chart.labels}
+            values={chart.values}
+            width={chartWidth}
+            height={CHART_HEIGHT}
+            showChange={false}
+            color={changeColor(
+              chart.values.length > 1
+                ? chart.values[chart.values.length - 1] - chart.values[0]
+                : null,
+            )}
+            title={`${coinName} 가격`}
+            emptyTitle="차트 데이터 없음"
+            emptyMessage=""
+            formatValue={(value, digits) =>
+              formatFiat(value, {
+                compact: true,
+                ignoreHidden: true,
+                maximumFractionDigits: digits,
+              })
+            }
+            testID="coin-detail-chart"
+          />
+        ) : null}
+        {historyQuery.isFetching ? (
+          <ChartLoadingOverlay testID="coin-detail-chart-loading">
+            <ActivityIndicator
+              color={theme.colors.primary}
+              accessibilityLabel="차트 불러오는 중"
             />
-          </LineChartContainer>
-        </ChartArea>
-
-        {/* 가격 라벨 */}
-        <ChartLabels>
-          <ChartLabel>{coinService.formatPrice(maxPrice)}</ChartLabel>
-          <ChartLabel>
-            {coinService.formatPrice((maxPrice + minPrice) / 2)}
-          </ChartLabel>
-          <ChartLabel>{coinService.formatPrice(minPrice)}</ChartLabel>
-        </ChartLabels>
-      </ChartContainer>
+          </ChartLoadingOverlay>
+        ) : null}
+      </ChartBox>
     );
-  }, [priceHistory, theme.colors.success, theme.colors.error]);
+  };
 
-  const currentPrice = coinDetail?.market_data?.current_price?.usd || 0;
-  const priceChange24h =
-    coinDetail?.market_data?.price_change_percentage_24h || 0;
-  const priceChangeColor =
-    priceChange24h >= 0 ? theme.colors.success : theme.colors.error;
-
-  if (isLoading) {
-    return (
-      <Container>
-        <StatusBar barStyle={isDarkMode ? 'light-content' : 'dark-content'} />
-        <LoadingContainer>
-          <ActivityIndicator size="large" color={theme.colors.primary} />
-        </LoadingContainer>
-      </Container>
-    );
-  }
+  const isInitialLoading = detailQuery.isLoading && !detailQuery.data;
 
   return (
-    <Container>
+    <Screen testID="coin-detail-screen">
       <StatusBar barStyle={isDarkMode ? 'light-content' : 'dark-content'} />
-      <Header>
-        <BackButton onPress={() => navigation.goBack()}>
-          <BackButtonText>‹</BackButtonText>
-        </BackButton>
-        <HeaderTitleContainer>
-          <CoinImageHeader source={{ uri: coinImage }} />
-          <HeaderTitle>{coinName}</HeaderTitle>
-        </HeaderTitleContainer>
-        <HeaderRight />
-      </Header>
+      <ScreenHeader title={coinName} subtitle={coinSymbol.toUpperCase()} />
 
       <ScrollView
         refreshControl={
           <RefreshControl
-            refreshing={isRefreshing}
+            refreshing={isPullRefreshing}
             onRefresh={handleRefresh}
             tintColor={theme.colors.primary}
           />
@@ -241,192 +290,146 @@ function CoinDetailScreen(): React.JSX.Element {
         <Content>
           {/* 가격 정보 */}
           <PriceSection>
-            <CurrentPrice>{coinService.formatPrice(currentPrice)}</CurrentPrice>
-            <PriceChangeRow>
-              <PriceChangeText style={{ color: priceChangeColor }}>
-                {coinService.formatPercentage(priceChange24h)}
-              </PriceChangeText>
-              <PriceChangeLabel>24시간</PriceChangeLabel>
-            </PriceChangeRow>
+            {coinImage ? <CoinImage source={{ uri: coinImage }} /> : null}
+            {isInitialLoading ? (
+              <ActivityIndicator
+                color={theme.colors.primary}
+                accessibilityLabel="가격 불러오는 중"
+              />
+            ) : detailQuery.isError && !detailQuery.data ? (
+              <ErrorState
+                compact
+                title="코인 정보를 불러오지 못했습니다"
+                onRetry={() => detailQuery.refetch()}
+                testID="coin-detail-error"
+              />
+            ) : (
+              <>
+                <CurrentPrice testID="coin-detail-price">
+                  {formatPrice(currentPrice)}
+                </CurrentPrice>
+                <PriceChangeRow>
+                  <ColoredText $color={changeColor(priceChange24h)}>
+                    {formatPercent(priceChange24h)}
+                  </ColoredText>
+                  <PriceChangeLabel>24시간</PriceChangeLabel>
+                </PriceChangeRow>
+              </>
+            )}
           </PriceSection>
 
           {/* 시세 차트 */}
           <ChartSection>
             {renderChart()}
-            <TimeRangeRow>
-              {(['1', '7', '30'] as TimeRange[]).map(range => (
-                <TimeRangeButton
-                  key={range}
-                  onPress={() => handleRangeChange(range)}
-                  $active={selectedRange === range}
-                >
-                  <TimeRangeText $active={selectedRange === range}>
-                    {range === '1' ? '1일' : range === '7' ? '7일' : '1달'}
-                  </TimeRangeText>
-                </TimeRangeButton>
-              ))}
+            <TimeRangeRow accessibilityRole="tablist">
+              {RANGES.map(range => {
+                const active = selectedRange === range.value;
+                return (
+                  <TimeRangeButton
+                    key={range.value}
+                    onPress={() => setSelectedRange(range.value)}
+                    $active={active}
+                    accessibilityRole="tab"
+                    accessibilityState={{ selected: active }}
+                    accessibilityLabel={`${range.label} 차트`}
+                    testID={`coin-detail-range-${range.value}`}
+                  >
+                    <TimeRangeText $active={active}>
+                      {range.label}
+                    </TimeRangeText>
+                  </TimeRangeButton>
+                );
+              })}
             </TimeRangeRow>
           </ChartSection>
 
+          {/* 내 보유량 */}
+          {holding ? (
+            <Section testID="coin-detail-holding">
+              <SectionTitle accessibilityRole="header">
+                내 보유량 · {activeNetwork?.name}
+              </SectionTitle>
+              <InfoCard>
+                <HoldingAmount>
+                  {mask(`${holding.balance} ${holding.symbol}`)}
+                </HoldingAmount>
+                <HoldingValue>
+                  {holding.isTestnet
+                    ? '테스트넷 — 실제 가치 없음'
+                    : formatFiat(holding.usdValue ?? null)}
+                </HoldingValue>
+                <HoldingActions>
+                  <SecondaryButton
+                    onPress={handleSend}
+                    accessibilityRole="button"
+                    accessibilityLabel={`${holding.symbol} 보내기`}
+                    testID="coin-detail-send"
+                  >
+                    <SecondaryButtonText>보내기</SecondaryButtonText>
+                  </SecondaryButton>
+                  <SecondaryButton
+                    onPress={handleSwap}
+                    accessibilityRole="button"
+                    accessibilityLabel={`${holding.symbol} 스왑`}
+                    testID="coin-detail-swap"
+                  >
+                    <SecondaryButtonText>스왑</SecondaryButtonText>
+                  </SecondaryButton>
+                </HoldingActions>
+              </InfoCard>
+            </Section>
+          ) : null}
+
           {/* 구매 버튼 */}
-          <BuyButton onPress={handleBuy}>
+          <BuyButton
+            onPress={handleBuy}
+            accessibilityRole="button"
+            accessibilityLabel={`${coinSymbol.toUpperCase()} 구매하기`}
+            testID="coin-detail-buy"
+          >
             <BuyButtonText>{coinSymbol.toUpperCase()} 구매하기</BuyButtonText>
           </BuyButton>
 
           {/* 시장 정보 */}
           <Section>
-            <SectionTitle>시장 정보</SectionTitle>
+            <SectionTitle accessibilityRole="header">시장 정보</SectionTitle>
             <InfoCard>
-              <InfoRow>
-                <InfoLabel>시가총액</InfoLabel>
-                <InfoValue>
-                  {coinDetail?.market_data?.market_cap?.usd
-                    ? coinService.formatMarketCap(
-                        coinDetail.market_data.market_cap.usd,
-                      )
-                    : '-'}
-                </InfoValue>
-              </InfoRow>
-              <InfoRow>
-                <InfoLabel>24시간 거래량</InfoLabel>
-                <InfoValue>
-                  {coinDetail?.market_data?.total_volume?.usd
-                    ? coinService.formatMarketCap(
-                        coinDetail.market_data.total_volume.usd,
-                      )
-                    : '-'}
-                </InfoValue>
-              </InfoRow>
-              <InfoRow>
-                <InfoLabel>24시간 최고</InfoLabel>
-                <InfoValue>
-                  {coinDetail?.market_data?.high_24h?.usd
-                    ? coinService.formatPrice(
-                        coinDetail.market_data.high_24h.usd,
-                      )
-                    : '-'}
-                </InfoValue>
-              </InfoRow>
-              <InfoRow>
-                <InfoLabel>24시간 최저</InfoLabel>
-                <InfoValue>
-                  {coinDetail?.market_data?.low_24h?.usd
-                    ? coinService.formatPrice(
-                        coinDetail.market_data.low_24h.usd,
-                      )
-                    : '-'}
-                </InfoValue>
-              </InfoRow>
-              <InfoRow>
-                <InfoLabel>역대 최고가</InfoLabel>
-                <InfoValue>
-                  {coinDetail?.market_data?.ath?.usd
-                    ? coinService.formatPrice(coinDetail.market_data.ath.usd)
-                    : '-'}
-                </InfoValue>
-              </InfoRow>
-              <InfoRow>
-                <InfoLabel>유통량</InfoLabel>
-                <InfoValue>
-                  {coinDetail?.market_data?.circulating_supply
-                    ? `${coinDetail.market_data.circulating_supply.toLocaleString()} ${coinSymbol.toUpperCase()}`
-                    : '-'}
-                </InfoValue>
-              </InfoRow>
+              {marketRows.map(row => (
+                <InfoRow key={row.label}>
+                  <InfoLabel>{row.label}</InfoLabel>
+                  <InfoValue>{detailQuery.data ? row.value : '—'}</InfoValue>
+                </InfoRow>
+              ))}
             </InfoCard>
           </Section>
 
           {/* 가격 변동 */}
           <Section>
-            <SectionTitle>가격 변동</SectionTitle>
+            <SectionTitle accessibilityRole="header">가격 변동</SectionTitle>
             <InfoCard>
               <InfoRow>
                 <InfoLabel>7일</InfoLabel>
-                <ColoredValue
-                  $isPositive={
-                    (coinDetail?.market_data?.price_change_percentage_7d ||
-                      0) >= 0
-                  }
+                <ColoredText
+                  $color={changeColor(marketData?.price_change_percentage_7d)}
                 >
-                  {coinService.formatPercentage(
-                    coinDetail?.market_data?.price_change_percentage_7d || 0,
-                  )}
-                </ColoredValue>
+                  {formatPercent(marketData?.price_change_percentage_7d)}
+                </ColoredText>
               </InfoRow>
               <InfoRow>
                 <InfoLabel>30일</InfoLabel>
-                <ColoredValue
-                  $isPositive={
-                    (coinDetail?.market_data?.price_change_percentage_30d ||
-                      0) >= 0
-                  }
+                <ColoredText
+                  $color={changeColor(marketData?.price_change_percentage_30d)}
                 >
-                  {coinService.formatPercentage(
-                    coinDetail?.market_data?.price_change_percentage_30d || 0,
-                  )}
-                </ColoredValue>
+                  {formatPercent(marketData?.price_change_percentage_30d)}
+                </ColoredText>
               </InfoRow>
             </InfoCard>
           </Section>
         </Content>
       </ScrollView>
-    </Container>
+    </Screen>
   );
 }
-
-const Container = styled(SafeAreaView)`
-  flex: 1;
-  background-color: ${({ theme }) => theme.colors.background};
-`;
-
-const Header = styled.View`
-  flex-direction: row;
-  align-items: center;
-  justify-content: space-between;
-  padding: ${({ theme }) => theme.spacing.md}px;
-  border-bottom-width: 1px;
-  border-bottom-color: ${({ theme }) => theme.colors.border};
-`;
-
-const BackButton = styled.TouchableOpacity`
-  width: 40px;
-  height: 40px;
-  align-items: center;
-  justify-content: center;
-`;
-
-const BackButtonText = styled.Text`
-  color: ${({ theme }) => theme.colors.textPrimary};
-  font-size: 32px;
-`;
-
-const HeaderTitleContainer = styled.View`
-  flex-direction: row;
-  align-items: center;
-`;
-
-const CoinImageHeader = styled(Image)`
-  width: 28px;
-  height: 28px;
-  border-radius: 14px;
-  margin-right: ${({ theme }) => theme.spacing.sm}px;
-`;
-
-const HeaderTitle = styled.Text`
-  color: ${({ theme }) => theme.colors.textPrimary};
-  font-size: ${({ theme }) => theme.typography.h3.fontSize}px;
-  font-weight: ${({ theme }) => theme.typography.h3.fontWeight};
-`;
-
-const HeaderRight = styled.View`
-  width: 40px;
-`;
-
-const LoadingContainer = styled.View`
-  flex: 1;
-  align-items: center;
-  justify-content: center;
-`;
 
 const Content = styled.View`
   padding: ${({ theme }) => theme.spacing.lg}px;
@@ -437,9 +440,16 @@ const PriceSection = styled.View`
   margin-bottom: ${({ theme }) => theme.spacing.lg}px;
 `;
 
+const CoinImage = styled(Image)`
+  width: 48px;
+  height: 48px;
+  border-radius: 24px;
+  margin-bottom: ${({ theme }) => theme.spacing.sm}px;
+`;
+
 const CurrentPrice = styled.Text`
   color: ${({ theme }) => theme.colors.textPrimary};
-  font-size: 36px;
+  font-size: 32px;
   font-weight: 700;
 `;
 
@@ -449,7 +459,8 @@ const PriceChangeRow = styled.View`
   margin-top: ${({ theme }) => theme.spacing.xs}px;
 `;
 
-const PriceChangeText = styled.Text`
+const ColoredText = styled.Text<{ $color: string }>`
+  color: ${({ $color }) => $color};
   font-size: ${({ theme }) => theme.typography.body.fontSize}px;
   font-weight: 600;
 `;
@@ -464,77 +475,25 @@ const ChartSection = styled.View`
   margin-bottom: ${({ theme }) => theme.spacing.lg}px;
 `;
 
-const ChartContainer = styled.View`
-  height: ${CHART_HEIGHT}px;
-  position: relative;
-  background-color: ${({ theme }) => theme.colors.backgroundSecondary};
+const ChartBox = styled.View`
+  background-color: ${({ theme }) => theme.colors.surface};
   border-radius: ${({ theme }) => theme.borderRadius.md}px;
+  padding: ${({ theme }) => theme.spacing.sm}px 0;
+  align-items: center;
+  justify-content: center;
   overflow: hidden;
 `;
 
-const ChartArea = styled.View`
-  flex: 1;
-  position: relative;
-  margin-right: 60px;
-`;
-
-const GridLine = styled.View`
+const ChartLoadingOverlay = styled.View`
   position: absolute;
+  top: 0;
   left: 0;
   right: 0;
-  height: 1px;
-  background-color: ${({ theme }) => theme.colors.border};
-  opacity: 0.3;
-`;
-
-const LineChartContainer = styled.View`
-  position: absolute;
-  top: 10px;
-  left: 10px;
-  right: 10px;
-  bottom: 10px;
-`;
-
-const LineSegment = styled.View`
-  position: absolute;
-  height: 2px;
-  transform-origin: left center;
-`;
-
-const CurrentPriceDot = styled.View`
-  position: absolute;
-  width: 8px;
-  height: 8px;
-  border-radius: 4px;
-  margin-top: -4px;
-  margin-right: -4px;
-`;
-
-const ChartPlaceholder = styled.View`
-  height: ${CHART_HEIGHT}px;
+  bottom: 0;
   align-items: center;
   justify-content: center;
-  background-color: ${({ theme }) => theme.colors.surface};
-  border-radius: ${({ theme }) => theme.borderRadius.md}px;
-`;
-
-const ChartPlaceholderText = styled.Text`
-  color: ${({ theme }) => theme.colors.textSecondary};
-`;
-
-const ChartLabels = styled.View`
-  position: absolute;
-  right: ${({ theme }) => theme.spacing.sm}px;
-  top: ${({ theme }) => theme.spacing.sm}px;
-  bottom: ${({ theme }) => theme.spacing.sm}px;
-  width: 55px;
-  justify-content: space-between;
-  align-items: flex-end;
-`;
-
-const ChartLabel = styled.Text`
-  color: ${({ theme }) => theme.colors.textMuted};
-  font-size: 10px;
+  background-color: ${({ theme }) => theme.colors.overlay};
+  opacity: 0.6;
 `;
 
 const TimeRangeRow = styled.View`
@@ -545,32 +504,70 @@ const TimeRangeRow = styled.View`
 `;
 
 const TimeRangeButton = styled.TouchableOpacity<{ $active: boolean }>`
-  padding: ${({ theme }) => theme.spacing.sm}px
-    ${({ theme }) => theme.spacing.md}px;
-  border-radius: ${({ theme }) => theme.borderRadius.sm}px;
+  min-height: 44px;
+  min-width: 64px;
+  padding: 0 ${({ theme }) => theme.spacing.md}px;
+  border-radius: ${({ theme }) => theme.borderRadius.full}px;
+  align-items: center;
+  justify-content: center;
   background-color: ${({ theme, $active }) =>
     $active ? theme.colors.primary : theme.colors.surface};
 `;
 
 const TimeRangeText = styled.Text<{ $active: boolean }>`
   color: ${({ theme, $active }) =>
-    $active ? '#fff' : theme.colors.textSecondary};
-  font-size: ${({ theme }) => theme.typography.caption.fontSize}px;
-  font-weight: 500;
+    $active ? theme.colors.onPrimary : theme.colors.textSecondary};
+  font-size: ${({ theme }) => theme.typography.bodySmall.fontSize}px;
+  font-weight: 600;
+`;
+
+const HoldingAmount = styled.Text`
+  color: ${({ theme }) => theme.colors.textPrimary};
+  font-size: 20px;
+  font-weight: 700;
+`;
+
+const HoldingValue = styled.Text`
+  color: ${({ theme }) => theme.colors.textSecondary};
+  font-size: ${({ theme }) => theme.typography.bodySmall.fontSize}px;
+  margin-top: ${({ theme }) => theme.spacing.xs}px;
+`;
+
+const HoldingActions = styled.View`
+  flex-direction: row;
+  gap: ${({ theme }) => theme.spacing.sm}px;
+  margin-top: ${({ theme }) => theme.spacing.md}px;
+`;
+
+const SecondaryButton = styled.TouchableOpacity`
+  flex: 1;
+  min-height: 44px;
+  align-items: center;
+  justify-content: center;
+  border-radius: ${({ theme }) => theme.borderRadius.md}px;
+  border-width: 1px;
+  border-color: ${({ theme }) => theme.colors.primary};
+`;
+
+const SecondaryButtonText = styled.Text`
+  color: ${({ theme }) => theme.colors.primary};
+  font-size: ${({ theme }) => theme.typography.button.fontSize}px;
+  font-weight: 600;
 `;
 
 const BuyButton = styled.TouchableOpacity`
   background-color: ${({ theme }) => theme.colors.primary};
   border-radius: ${({ theme }) => theme.borderRadius.md}px;
-  padding: ${({ theme }) => theme.spacing.md}px;
+  min-height: 52px;
   align-items: center;
-  margin-bottom: ${({ theme }) => theme.spacing.xl}px;
+  justify-content: center;
+  margin-bottom: ${({ theme }) => theme.spacing.lg}px;
 `;
 
 const BuyButtonText = styled.Text`
-  color: #fff;
+  color: ${({ theme }) => theme.colors.onPrimary};
   font-size: ${({ theme }) => theme.typography.button.fontSize}px;
-  font-weight: ${({ theme }) => theme.typography.button.fontWeight};
+  font-weight: 600;
 `;
 
 const Section = styled.View`
@@ -580,7 +577,7 @@ const Section = styled.View`
 const SectionTitle = styled.Text`
   color: ${({ theme }) => theme.colors.textSecondary};
   font-size: ${({ theme }) => theme.typography.caption.fontSize}px;
-  text-transform: uppercase;
+  font-weight: 600;
   margin-bottom: ${({ theme }) => theme.spacing.sm}px;
 `;
 
@@ -594,28 +591,23 @@ const InfoRow = styled.View`
   flex-direction: row;
   justify-content: space-between;
   align-items: center;
-  padding-top: ${({ theme }) => theme.spacing.sm}px;
-  padding-bottom: ${({ theme }) => theme.spacing.sm}px;
+  padding: ${({ theme }) => theme.spacing.sm}px 0;
   border-bottom-width: 1px;
   border-bottom-color: ${({ theme }) => theme.colors.border};
 `;
 
 const InfoLabel = styled.Text`
   color: ${({ theme }) => theme.colors.textSecondary};
-  font-size: ${({ theme }) => theme.typography.body.fontSize}px;
+  font-size: ${({ theme }) => theme.typography.bodySmall.fontSize}px;
 `;
 
 const InfoValue = styled.Text`
   color: ${({ theme }) => theme.colors.textPrimary};
-  font-size: ${({ theme }) => theme.typography.body.fontSize}px;
+  font-size: ${({ theme }) => theme.typography.bodySmall.fontSize}px;
   font-weight: 500;
-`;
-
-const ColoredValue = styled.Text<{ $isPositive: boolean }>`
-  color: ${({ theme, $isPositive }) =>
-    $isPositive ? theme.colors.success : theme.colors.error};
-  font-size: ${({ theme }) => theme.typography.body.fontSize}px;
-  font-weight: 500;
+  flex-shrink: 1;
+  text-align: right;
+  margin-left: ${({ theme }) => theme.spacing.md}px;
 `;
 
 export default CoinDetailScreen;

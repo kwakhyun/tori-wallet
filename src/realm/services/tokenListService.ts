@@ -207,6 +207,23 @@ class TokenListService {
   }
 
   /**
+   * 토큰 표시 여부 설정 (기본 토큰처럼 아직 저장되지 않은 토큰도 저장 후 설정)
+   */
+  async setTokenHidden(
+    input: CreateTokenInput,
+    hidden: boolean,
+  ): Promise<boolean> {
+    const existing = await this.getToken(input.address, input.chainId);
+    if (!existing) {
+      await this.addToken(input);
+    }
+    const result = await this.updateToken(input.address, input.chainId, {
+      isHidden: hidden,
+    });
+    return result !== null;
+  }
+
+  /**
    * 스팸 토큰 표시
    */
   async markAsSpam(address: string, chainId: number): Promise<boolean> {

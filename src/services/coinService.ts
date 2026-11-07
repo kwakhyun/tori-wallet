@@ -6,6 +6,17 @@
 const COINGECKO_API = 'https://api.coingecko.com/api/v3';
 const COINCAP_API = 'https://api.coincap.io/v2';
 
+/**
+ * 체인별 네이티브 토큰 시세 ID. 테스트넷(Sepolia 등)은 실제 가치가 없으므로 넣지 않는다.
+ */
+const NATIVE_COINGECKO_IDS: Record<number, string> = {
+  1: 'ethereum',
+  137: 'matic-network',
+  42161: 'ethereum', // Arbitrum (ETH 사용)
+  10: 'ethereum', // Optimism (ETH 사용)
+  8453: 'ethereum', // Base (ETH 사용)
+};
+
 export interface Coin {
   id: string;
   symbol: string;
@@ -162,10 +173,15 @@ class CoinService {
     return new Promise(resolve => setTimeout(resolve, ms));
   }
 
+  /**
+   * 성공한 결과만 캐시한다. fetcher가 던지면(조회 실패) 캐시하지 않으므로
+   * 다음 호출에서 다시 시도한다. shouldCache로 빈 결과 등을 제외할 수 있다.
+   */
   private async fetchWithCache<T>(
     key: string,
     fetcher: () => Promise<T>,
     cacheDuration: number = this.CACHE_DURATIONS.coinList,
+    shouldCache: (data: T) => boolean = () => true,
   ): Promise<T> {
     const cached = this.cache.get(key);
     if (cached && Date.now() - cached.timestamp < cacheDuration) {
@@ -173,8 +189,15 @@ class CoinService {
     }
 
     const data = await fetcher();
-    this.cache.set(key, { data, timestamp: Date.now() });
+    if (data !== null && data !== undefined && shouldCache(data)) {
+      this.cache.set(key, { data, timestamp: Date.now() });
+    }
     return data;
+  }
+
+  /** 테스트/로그아웃용 캐시 초기화 */
+  clearCache(): void {
+    this.cache.clear();
   }
 
   /**
@@ -268,35 +291,34 @@ class CoinService {
 
   /**
    * 코인 검색 (캐시 + 쓰로틀링 적용)
+   * 조회 실패(429 포함)는 빈 결과가 아니라 오류로 던지며 캐시하지 않는다.
+   * 2자 미만 검색어는 요청하지 않고 빈 결과를 반환한다.
    */
   async searchCoins(query: string): Promise<SearchResult> {
-    if (!query || query.length < 2) {
+    const normalized = (query || '').trim();
+    if (normalized.length < 2) {
       return { coins: [] };
     }
 
-    const cacheKey = `search_${query}`;
+    const cacheKey = `search_${normalized.toLowerCase()}`;
 
     return this.fetchWithCache<SearchResult>(
       cacheKey,
       async () => {
-        try {
-          const response = await this.throttledFetch(
-            `${COINGECKO_API}/search?query=${encodeURIComponent(query)}`,
-          );
+        const response = await this.throttledFetch(
+          `${COINGECKO_API}/search?query=${encodeURIComponent(normalized)}`,
+        );
 
-          if (!response.ok) {
-            // Rate limit (429) 체크
-            if (response.status === 429) {
-              this.notifyRateLimit();
-            }
-            return { coins: [] };
+        if (!response || !response.ok) {
+          if (response?.status === 429) {
+            this.notifyRateLimit();
+            throw new RateLimitError();
           }
-
-          return response.json() as Promise<SearchResult>;
-        } catch (error) {
-          console.warn('Search failed:', error);
-          return { coins: [] };
+          throw new Error('코인 검색에 실패했습니다.');
         }
+
+        const data = (await response.json()) as SearchResult;
+        return { coins: Array.isArray(data?.coins) ? data.coins : [] };
       },
       this.CACHE_DURATIONS.search,
     );
@@ -365,6 +387,7 @@ class CoinService {
         }
       },
       this.CACHE_DURATIONS.priceHistory,
+      data => Array.isArray(data?.prices) && data.prices.length > 0,
     );
   }
 
@@ -395,7 +418,7 @@ class CoinService {
       );
 
       if (!response.ok) {
-        return { prices: [], market_caps: [], total_volumes: [] };
+        throw new Error(`CoinCap HTTP ${response.status}`);
       }
 
       interface CoinCapHistoryItem {
@@ -405,13 +428,13 @@ class CoinService {
 
       const data = (await response.json()) as { data: CoinCapHistoryItem[] };
 
-      // CoinCap 형식을 PriceHistory 형식으로 변환
-      const prices: [number, number][] = (data.data || []).map(
-        (item: CoinCapHistoryItem) => [
+      // CoinCap 형식을 PriceHistory 형식으로 변환 (가격을 읽을 수 없는 점은 제외)
+      const prices: [number, number][] = (data.data || [])
+        .map((item: CoinCapHistoryItem): [number, number] => [
           item.time,
-          parseFloat(item.priceUsd) || 0,
-        ],
-      );
+          parseFloat(item.priceUsd),
+        ])
+        .filter(([, price]) => Number.isFinite(price) && price > 0);
 
       return {
         prices,
@@ -420,7 +443,7 @@ class CoinService {
       };
     } catch (error) {
       console.warn('CoinCap price history failed:', error);
-      return { prices: [], market_caps: [], total_volumes: [] };
+      throw new Error('가격 기록을 불러오지 못했습니다.');
     }
   }
 
@@ -453,6 +476,7 @@ class CoinService {
         }
       },
       this.CACHE_DURATIONS.trending,
+      data => Array.isArray(data?.coins) && data.coins.length > 0,
     );
   }
 
@@ -461,7 +485,7 @@ class CoinService {
    */
   formatPrice(price: number | null | undefined): string {
     if (price === null || price === undefined || isNaN(price)) {
-      return '$0.00';
+      return '—';
     }
     if (price >= 1000) {
       return `$${price.toLocaleString('en-US', {
@@ -482,7 +506,7 @@ class CoinService {
    */
   formatMarketCap(marketCap: number | null | undefined): string {
     if (marketCap === null || marketCap === undefined || isNaN(marketCap)) {
-      return '$0';
+      return '—';
     }
     if (marketCap >= 1e12) {
       return `$${(marketCap / 1e12).toFixed(2)}T`;
@@ -499,7 +523,7 @@ class CoinService {
    */
   formatPercentage(percentage: number | null | undefined): string {
     if (percentage === null || percentage === undefined || isNaN(percentage)) {
-      return '0.00%';
+      return '—';
     }
     const sign = percentage >= 0 ? '+' : '';
     return `${sign}${percentage.toFixed(2)}%`;
@@ -507,23 +531,16 @@ class CoinService {
 
   /**
    * 네이티브 토큰 가격 조회 (체인별)
+   * 테스트넷 자산은 실제 가치가 없으므로 null을 반환한다.
+   * 조회 실패도 0이 아니라 null이며, 실패 결과는 캐시하지 않는다.
    * 캐시 시간: 5분
    */
-  async getNativeTokenPrice(chainId: number): Promise<number> {
-    // 체인별 CoinGecko ID 매핑
-    const chainToCoingeckoId: Record<number, string> = {
-      1: 'ethereum',
-      137: 'matic-network',
-      42161: 'ethereum', // Arbitrum (ETH 사용)
-      10: 'ethereum', // Optimism (ETH 사용)
-      8453: 'ethereum', // Base (ETH 사용)
-      11155111: 'ethereum', // Sepolia (testnet, show ETH price)
-    };
-
-    const coinId = chainToCoingeckoId[chainId] || 'ethereum';
+  async getNativeTokenPrice(chainId: number): Promise<number | null> {
+    const coinId = NATIVE_COINGECKO_IDS[chainId];
+    if (!coinId) return null;
     const cacheKey = `native_price_${coinId}`;
 
-    return this.fetchWithCache<number>(
+    return this.fetchWithCache<number | null>(
       cacheKey,
       async () => {
         try {
@@ -531,27 +548,36 @@ class CoinService {
             `${COINGECKO_API}/simple/price?ids=${coinId}&vs_currencies=usd`,
           );
 
-          if (response.ok) {
+          if (response?.ok) {
             const data = (await response.json()) as Record<
               string,
-              { usd: number }
+              { usd?: number }
             >;
-            return data[coinId]?.usd || 0;
+            const price = data?.[coinId]?.usd;
+            if (
+              typeof price === 'number' &&
+              Number.isFinite(price) &&
+              price > 0
+            )
+              return price;
+          } else if (response?.status === 429) {
+            this.notifyRateLimit();
           }
 
           // CoinGecko 실패 시 CoinCap 백업
           const backupResponse = await fetch(`${COINCAP_API}/assets/${coinId}`);
-          if (backupResponse.ok) {
+          if (backupResponse?.ok) {
             const backupData = (await backupResponse.json()) as {
-              data: { priceUsd: string };
+              data?: { priceUsd?: string };
             };
-            return parseFloat(backupData.data?.priceUsd) || 0;
+            const price = parseFloat(backupData?.data?.priceUsd ?? '');
+            if (Number.isFinite(price) && price > 0) return price;
           }
 
-          return 0;
+          return null;
         } catch (error) {
           console.warn('Failed to fetch native token price:', error);
-          return 0;
+          return null;
         }
       },
       5 * 60 * 1000, // 5분 캐시

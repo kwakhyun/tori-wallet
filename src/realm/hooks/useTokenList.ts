@@ -177,6 +177,51 @@ export function useCustomTokens(chainId?: number) {
 }
 
 /**
+ * 토큰 표시 여부 관리 훅 (토큰 관리 화면용)
+ * 숨긴 토큰 주소 목록과 숨김/표시 동작을 제공한다.
+ */
+export function useTokenVisibility(chainId: number) {
+  const [hiddenAddresses, setHiddenAddresses] = useState<Set<string>>(
+    new Set(),
+  );
+  const [isLoading, setIsLoading] = useState(true);
+
+  const loadHidden = useCallback(async () => {
+    try {
+      setIsLoading(true);
+      const result = await tokenListService.getHiddenTokens(chainId);
+      setHiddenAddresses(
+        new Set((result || []).map(token => token.address.toLowerCase())),
+      );
+    } catch {
+      setHiddenAddresses(new Set());
+    } finally {
+      setIsLoading(false);
+    }
+  }, [chainId]);
+
+  useEffect(() => {
+    loadHidden();
+  }, [loadHidden]);
+
+  const setHidden = useCallback(
+    async (input: CreateTokenInput, hidden: boolean) => {
+      const success = await tokenListService.setTokenHidden(input, hidden);
+      await loadHidden();
+      return success;
+    },
+    [loadHidden],
+  );
+
+  return {
+    hiddenAddresses,
+    isLoading,
+    refetch: loadHidden,
+    setHidden,
+  };
+}
+
+/**
  * 토큰 검색 훅
  */
 export function useTokenSearch(query: string, chainId?: number) {

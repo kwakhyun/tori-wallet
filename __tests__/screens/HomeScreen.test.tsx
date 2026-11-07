@@ -6,6 +6,7 @@
 import React from 'react';
 import { render, screen, fireEvent, waitFor } from '../test-utils';
 import HomeScreen from '../../src/screens/Home/HomeScreen';
+import { usePreferencesStore } from '../../src/store/preferencesStore';
 
 // 네비게이션 모킹
 const mockNavigate = jest.fn();
@@ -48,11 +49,24 @@ jest.mock('../../src/hooks/useBalance', () => ({
   }),
 }));
 
-// coinService 모킹
-jest.mock('../../src/services/coinService', () => ({
-  coinService: {
-    getNativeTokenPrice: jest.fn().mockResolvedValue(2000),
-    calculateUsdValue: jest.fn().mockReturnValue('$3,000.00'),
+// tokenService 모킹 (네트워크 요청 방지)
+jest.mock('../../src/services/tokenService', () => ({
+  tokenService: {
+    getTokens: jest.fn().mockResolvedValue([
+      {
+        symbol: 'ETH',
+        name: 'Ethereum',
+        address: 'native',
+        decimals: 18,
+        balance: '1.5',
+        balanceRaw: '1.5',
+        price: 2000,
+        priceChange24h: 0,
+        value: 3000,
+        usdValue: 3000,
+        priceAvailable: true,
+      },
+    ]),
   },
 }));
 
@@ -64,6 +78,8 @@ jest.mock('../../src/services/buyService', () => ({
 describe('HomeScreen', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    // KRW 환율 조회(실제 네트워크)를 피하기 위해 USD 표시
+    usePreferencesStore.setState({ currency: 'USD', hideBalances: false });
   });
 
   describe('Rendering', () => {
@@ -130,10 +146,7 @@ describe('HomeScreen', () => {
         fireEvent.press(receiveButton);
 
         await waitFor(() => {
-          expect(mockNavigate).toHaveBeenCalledWith(
-            expect.stringMatching(/Receive/i),
-            expect.anything(),
-          );
+          expect(mockNavigate).toHaveBeenCalledWith('ReceiveToken');
         });
       } else {
         expect(screen.root).toBeTruthy();
@@ -148,10 +161,13 @@ describe('HomeScreen', () => {
       expect(screen.root).toBeTruthy();
     });
 
-    it('should display USD value', () => {
+    it('should display USD value', async () => {
       render(<HomeScreen />);
-      // 달러 기호가 있거나 가치가 표시됨
-      expect(screen.root).toBeTruthy();
+      await waitFor(() => {
+        expect(screen.getByTestId('home-total-value')).toHaveTextContent(
+          '$3,000.00',
+        );
+      });
     });
   });
 

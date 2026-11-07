@@ -154,12 +154,12 @@ describe('PortfolioAnalyticsService', () => {
       expect(performance.worstPerformer?.symbol).toBe('UNI'); // -3% change
     });
 
-    it('should calculate volatility', () => {
+    it('should calculate volatility across held tokens', () => {
       const performance =
         portfolioAnalyticsService.calculatePerformance(mockTokens);
 
       expect(typeof performance.volatility).toBe('number');
-      expect(performance.volatility).toBeGreaterThanOrEqual(0);
+      expect(performance.volatility!).toBeGreaterThanOrEqual(0);
     });
 
     it('should calculate weighted return', () => {
@@ -178,13 +178,22 @@ describe('PortfolioAnalyticsService', () => {
       expect(performance.totalReturn).toBe(0);
     });
 
-    it('should handle single token', () => {
+    it('does not name best/worst performers with a single token', () => {
       const singleToken = [mockTokens[0]];
       const performance =
         portfolioAnalyticsService.calculatePerformance(singleToken);
 
-      expect(performance.bestPerformer?.symbol).toBe('ETH');
-      expect(performance.worstPerformer?.symbol).toBe('ETH');
+      expect(performance.bestPerformer).toBeNull();
+      expect(performance.worstPerformer).toBeNull();
+      expect(performance.volatility).toBeNull();
+    });
+
+    it('ignores tokens without a known value', () => {
+      const performance = portfolioAnalyticsService.calculatePerformance([
+        mockTokens[0],
+        { ...mockTokens[2], usdValue: null, priceAvailable: false },
+      ]);
+      expect(performance.bestPerformer).toBeNull();
     });
   });
 
@@ -260,14 +269,14 @@ describe('PortfolioAnalyticsService', () => {
       ).resolves.not.toThrow();
     });
 
-    it('should save snapshot with empty tokens', async () => {
+    it('does not record an empty token list', async () => {
       await expect(
         portfolioAnalyticsService.saveSnapshot(
           '0x1234567890123456789012345678901234567890',
           1,
           [],
         ),
-      ).resolves.not.toThrow();
+      ).resolves.toBe(false);
     });
 
     it('should update existing snapshot for same day', async () => {
@@ -381,7 +390,7 @@ describe('PortfolioAnalyticsService', () => {
       expect(stats.changePercent24h).not.toBe(0);
     });
 
-    it('should handle zero historical value', async () => {
+    it('reports unknown (null) changes when there is no history', async () => {
       const AsyncStorage = require('@react-native-async-storage/async-storage');
       portfolioAnalyticsService.clearCache();
 
@@ -394,7 +403,100 @@ describe('PortfolioAnalyticsService', () => {
         mockTokens,
       );
 
-      expect(stats.changePercent24h).toBe(0);
+      expect(stats.changePercent24h).toBeNull();
+      expect(stats.change7d).toBeNull();
+      expect(stats.changePercent30d).toBeNull();
+    });
+
+    it('does not fall back to an arbitrarily old snapshot for 7d/30d', async () => {
+      const AsyncStorage = require('@react-native-async-storage/async-storage');
+      portfolioAnalyticsService.clearCache();
+      const day = 24 * 60 * 60 * 1000;
+
+      // 90일 전 스냅샷 하나뿐
+      AsyncStorage.getItem.mockResolvedValueOnce(
+        JSON.stringify([
+          { timestamp: Date.now() - 90 * day, totalValue: 100, tokens: [] },
+        ]),
+      );
+
+      const stats = await portfolioAnalyticsService.calculateStats(
+        '0xd1d1567890123456789012345678901234567890',
+        1,
+        mockTokens,
+      );
+
+      expect(stats.changePercent24h).toBeNull();
+      expect(stats.changePercent7d).toBeNull();
+      expect(stats.changePercent30d).toBeNull();
+      // 기록된 총 자산액 통계에는 포함
+      expect(stats.lowestValue).toBe(100);
+      expect(stats.highestValue).toBe(4500);
+    });
+
+    it('uses a snapshot near the 7-day mark', async () => {
+      const AsyncStorage = require('@react-native-async-storage/async-storage');
+      portfolioAnalyticsService.clearCache();
+      const day = 24 * 60 * 60 * 1000;
+
+      AsyncStorage.getItem.mockResolvedValueOnce(
+        JSON.stringify([
+          {
+            timestamp: Date.now() - 7 * day - 3 * 60 * 60 * 1000,
+            totalValue: 4000,
+            tokens: [],
+          },
+        ]),
+      );
+
+      const stats = await portfolioAnalyticsService.calculateStats(
+        '0xd2d2567890123456789012345678901234567890',
+        1,
+        mockTokens,
+      );
+
+      expect(stats.change7d).toBe(500);
+      expect(stats.changePercent7d).toBeCloseTo(12.5);
+      expect(stats.changePercent24h).toBeNull();
+    });
+  });
+
+  describe('saveSnapshot - reliability guard', () => {
+    const address = '0x9999567890123456789012345678901234567890';
+
+    it.each([
+      ['a failed balance', { balanceError: true, usdValue: null }],
+      [
+        'an unpriced token with a balance',
+        { priceAvailable: false, usdValue: null },
+      ],
+      ['a testnet asset', { isTestnet: true, usdValue: null }],
+    ])('does not record a snapshot containing %s', async (_label, patch) => {
+      const AsyncStorage = require('@react-native-async-storage/async-storage');
+      const saved = await portfolioAnalyticsService.saveSnapshot(address, 1, [
+        mockTokens[0],
+        { ...mockTokens[1], ...patch },
+      ]);
+      expect(saved).toBe(false);
+      expect(AsyncStorage.setItem).not.toHaveBeenCalled();
+    });
+
+    it('records a snapshot when every value is known', async () => {
+      const AsyncStorage = require('@react-native-async-storage/async-storage');
+      const saved = await portfolioAnalyticsService.saveSnapshot(address, 1, [
+        { ...mockTokens[0], usdValue: 3000, priceAvailable: true },
+        // 잔액 0인 미가격 토큰은 총액에 영향이 없으므로 허용
+        {
+          ...mockTokens[1],
+          balance: '0',
+          balanceRaw: '0',
+          usdValue: null,
+          priceAvailable: false,
+        },
+      ]);
+      expect(saved).toBe(true);
+      const [, json] = AsyncStorage.setItem.mock.calls[0];
+      expect(JSON.parse(json)[0].totalValue).toBe(3000);
     });
   });
 
