@@ -78,6 +78,30 @@ describe('TokenListService', () => {
     });
   });
 
+  describe('setTokenHidden', () => {
+    it('stores a default token that is not saved yet, then hides it', async () => {
+      const input = {
+        address: '0xdAC17F958D2ee523a2206206994597C13D831ec7',
+        chainId: 1,
+        symbol: 'USDT',
+        name: 'Tether USD',
+        decimals: 6,
+      };
+
+      const ok = await tokenListService.setTokenHidden(input, true);
+      expect(ok).toBe(true);
+
+      const stored = await tokenListService.getToken(input.address, 1);
+      expect(stored?.isHidden).toBe(true);
+      expect(stored?.isCustom).toBe(false);
+
+      await tokenListService.setTokenHidden(input, false);
+      expect(
+        (await tokenListService.getToken(input.address, 1))?.isHidden,
+      ).toBe(false);
+    });
+  });
+
   describe('addTokensBatch', () => {
     it('should add multiple tokens', async () => {
       const tokens = [

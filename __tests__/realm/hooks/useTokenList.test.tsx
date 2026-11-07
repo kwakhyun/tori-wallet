@@ -18,6 +18,7 @@ jest.mock('../../../src/realm/services', () => ({
     hideToken: jest.fn().mockResolvedValue(true),
     showToken: jest.fn().mockResolvedValue(true),
     updateTokenBalance: jest.fn().mockResolvedValue(undefined),
+    setTokenHidden: jest.fn().mockResolvedValue(true),
   },
 }));
 
@@ -28,7 +29,9 @@ import {
   useTokenSearch,
   useLastKnownBalances,
   useTokenUpdate,
+  useTokenVisibility,
 } from '../../../src/realm/hooks/useTokenList';
+import { tokenListService } from '../../../src/realm/services';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -150,6 +153,32 @@ describe('useTokenList hooks', () => {
       expect(typeof result.current.updateToken).toBe('function');
       expect(typeof result.current.updateBalanceSnapshot).toBe('function');
       expect(typeof result.current.isUpdating).toBe('boolean');
+    });
+  });
+
+  describe('useTokenVisibility', () => {
+    it('exposes hidden addresses (lower-cased) and updates visibility', async () => {
+      (tokenListService.getHiddenTokens as jest.Mock).mockResolvedValue([
+        { address: '0xABC', chainId: 1, isHidden: true },
+      ]);
+      const { result } = renderHook(() => useTokenVisibility(1), { wrapper });
+
+      await act(async () => {
+        await new Promise(resolve => setTimeout(resolve, 20));
+      });
+      expect(result.current.hiddenAddresses.has('0xabc')).toBe(true);
+
+      const input = {
+        address: '0xdef',
+        chainId: 1,
+        symbol: 'DEF',
+        name: 'Def',
+        decimals: 18,
+      };
+      await act(async () => {
+        await result.current.setHidden(input, true);
+      });
+      expect(tokenListService.setTokenHidden).toHaveBeenCalledWith(input, true);
     });
   });
 });
