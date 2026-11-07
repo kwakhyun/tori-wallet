@@ -48,6 +48,11 @@ describe('formatFiatValue', () => {
 describe('fiatService', () => {
   const originalFetch = global.fetch;
 
+  beforeEach(() => {
+    // jest.setup.js가 기본으로 막아 둔 refresh를 실제 구현으로 되돌린다.
+    (fiatService.refresh as jest.Mock).mockRestore?.();
+  });
+
   afterEach(() => {
     global.fetch = originalFetch;
     fiatService.reset();

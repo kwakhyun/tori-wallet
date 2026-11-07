@@ -308,3 +308,11 @@ jest.mock(
   'react-native-safe-area-context',
   () => require('react-native-safe-area-context/jest/mock').default,
 );
+
+// 표시 통화 기본값(KRW)으로 화면을 렌더링하면 환율 조회가 실행된다.
+// 테스트에서 실제 네트워크 요청이 나가지 않도록 기본적으로 막고,
+// fiatService 자체 테스트에서는 mockRestore로 원래 동작을 사용한다.
+beforeEach(() => {
+  const { fiatService } = require('./src/services/fiatService');
+  jest.spyOn(fiatService, 'refresh').mockResolvedValue(undefined);
+});
