@@ -110,15 +110,25 @@ export function useTokenBalance(
   });
 }
 
+export interface MultiBalanceEntry {
+  tokenAddress: string;
+  symbol: string;
+  /** 조회 실패 시 null (0으로 표시하지 않는다) */
+  wei: bigint | null;
+  formatted: string | null;
+  error: boolean;
+}
+
 /**
  * 여러 토큰 잔액 일괄 조회
+ * 개별 토큰 조회 실패는 error: true, wei/formatted: null로 표시한다.
  */
 export function useMultipleBalances(
   address: string | undefined,
   tokens: Array<{ address: string; decimals: number; symbol: string }>,
   chainId: number = 1,
 ) {
-  return useQuery<Array<BalanceData & { tokenAddress: string }>>({
+  return useQuery<MultiBalanceEntry[]>({
     queryKey: ['multipleBalances', address, tokens, chainId],
     queryFn: async () => {
       if (!address) {
@@ -152,14 +162,16 @@ export function useMultipleBalances(
               wei: balance,
               formatted,
               symbol: token.symbol,
+              error: false,
             };
           } catch (error) {
             logger.warn(`Failed to fetch balance for ${token.address}:`, error);
             return {
               tokenAddress: token.address,
-              wei: BigInt(0),
-              formatted: '0',
+              wei: null,
+              formatted: null,
               symbol: token.symbol,
+              error: true,
             };
           }
         }),

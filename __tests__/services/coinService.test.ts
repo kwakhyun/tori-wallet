@@ -8,8 +8,16 @@ import { coinService, RateLimitError } from '../../src/services/coinService';
 global.fetch = jest.fn();
 
 describe('CoinService', () => {
+  beforeAll(() => {
+    // 요청 간 쓰로틀링 대기를 없애 테스트를 빠르게 한다.
+    (
+      coinService as unknown as { MIN_REQUEST_INTERVAL: number }
+    ).MIN_REQUEST_INTERVAL = 0;
+  });
+
   beforeEach(() => {
     jest.clearAllMocks();
+    coinService.clearCache();
   });
 
   describe('RateLimitError', () => {
@@ -49,16 +57,16 @@ describe('CoinService', () => {
       expect(coinService.formatPrice(0.001234)).toBe('$0.001234');
     });
 
-    it('should handle null', () => {
-      expect(coinService.formatPrice(null)).toBe('$0.00');
+    it('shows a dash (not $0.00) for null', () => {
+      expect(coinService.formatPrice(null)).toBe('—');
     });
 
-    it('should handle undefined', () => {
-      expect(coinService.formatPrice(undefined)).toBe('$0.00');
+    it('shows a dash for undefined', () => {
+      expect(coinService.formatPrice(undefined)).toBe('—');
     });
 
-    it('should handle NaN', () => {
-      expect(coinService.formatPrice(NaN)).toBe('$0.00');
+    it('shows a dash for NaN', () => {
+      expect(coinService.formatPrice(NaN)).toBe('—');
     });
   });
 
@@ -81,12 +89,12 @@ describe('CoinService', () => {
       expect(result).toContain('150');
     });
 
-    it('should handle null', () => {
-      expect(coinService.formatMarketCap(null)).toBe('$0');
+    it('shows a dash for null', () => {
+      expect(coinService.formatMarketCap(null)).toBe('—');
     });
 
-    it('should handle undefined', () => {
-      expect(coinService.formatMarketCap(undefined)).toBe('$0');
+    it('shows a dash for undefined', () => {
+      expect(coinService.formatMarketCap(undefined)).toBe('—');
     });
   });
 
@@ -103,12 +111,12 @@ describe('CoinService', () => {
       expect(coinService.formatPercentage(0)).toBe('+0.00%');
     });
 
-    it('should handle null', () => {
-      expect(coinService.formatPercentage(null)).toBe('0.00%');
+    it('shows a dash for null', () => {
+      expect(coinService.formatPercentage(null)).toBe('—');
     });
 
-    it('should handle undefined', () => {
-      expect(coinService.formatPercentage(undefined)).toBe('0.00%');
+    it('shows a dash for undefined', () => {
+      expect(coinService.formatPercentage(undefined)).toBe('—');
     });
   });
 
@@ -159,14 +167,51 @@ describe('CoinService', () => {
       expect(result.coins.length).toBeGreaterThan(0);
     });
 
-    it('should handle API error gracefully', async () => {
+    it('rejects on API error instead of returning "no results"', async () => {
       (global.fetch as jest.Mock).mockResolvedValueOnce({
         ok: false,
         status: 500,
       });
 
-      const result = await coinService.searchCoins('test query');
-      expect(result.coins).toEqual([]);
+      await expect(coinService.searchCoins('test query')).rejects.toThrow();
+    });
+
+    it('rejects with RateLimitError on 429 and does not cache it', async () => {
+      (global.fetch as jest.Mock)
+        .mockResolvedValueOnce({ ok: false, status: 429 })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              coins: [
+                {
+                  id: 'pepe',
+                  name: 'Pepe',
+                  symbol: 'pepe',
+                  thumb: 'url',
+                  market_cap_rank: 30,
+                },
+              ],
+            }),
+        });
+
+      await expect(coinService.searchCoins('pepe')).rejects.toBeInstanceOf(
+        RateLimitError,
+      );
+      // 실패가 캐시되지 않았으므로 다시 요청해 결과를 받는다.
+      const retry = await coinService.searchCoins('pepe');
+      expect(retry.coins).toHaveLength(1);
+      expect(global.fetch).toHaveBeenCalledTimes(2);
+    });
+
+    it('returns a genuine empty result without treating it as an error', async () => {
+      (global.fetch as jest.Mock).mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ coins: [] }),
+      });
+      await expect(coinService.searchCoins('zzzz')).resolves.toEqual({
+        coins: [],
+      });
     });
   });
 
@@ -266,21 +311,32 @@ describe('CoinService', () => {
   });
 
   describe('getNativeTokenPrice', () => {
-    it('should return a number', async () => {
-      // 캐시 동작으로 인해 실제 값 대신 타입만 확인
-      const price = await coinService.getNativeTokenPrice(1);
-      expect(typeof price).toBe('number');
+    it('returns the price on success', async () => {
+      (global.fetch as jest.Mock).mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ ethereum: { usd: 2500 } }),
+      });
+      await expect(coinService.getNativeTokenPrice(1)).resolves.toBe(2500);
     });
 
-    it('should handle different chain IDs', async () => {
-      // 각 체인에 대해 숫자를 반환하는지 확인
-      const ethPrice = await coinService.getNativeTokenPrice(1);
-      const polygonPrice = await coinService.getNativeTokenPrice(137);
-      const arbitrumPrice = await coinService.getNativeTokenPrice(42161);
+    it('returns null for testnets without requesting a mainnet price', async () => {
+      await expect(
+        coinService.getNativeTokenPrice(11155111),
+      ).resolves.toBeNull();
+      expect(global.fetch).not.toHaveBeenCalled();
+    });
 
-      expect(typeof ethPrice).toBe('number');
-      expect(typeof polygonPrice).toBe('number');
-      expect(typeof arbitrumPrice).toBe('number');
+    it('returns null (not 0) on failure and does not cache the failure', async () => {
+      (global.fetch as jest.Mock)
+        .mockResolvedValueOnce({ ok: false, status: 429 })
+        .mockResolvedValueOnce({ ok: false, status: 500 })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () => Promise.resolve({ 'matic-network': { usd: 0.5 } }),
+        });
+
+      await expect(coinService.getNativeTokenPrice(137)).resolves.toBeNull();
+      await expect(coinService.getNativeTokenPrice(137)).resolves.toBe(0.5);
     });
   });
 
@@ -374,7 +430,7 @@ describe('CoinService', () => {
       expect(result).toHaveProperty('prices');
     });
 
-    it('should handle fetch error gracefully', async () => {
+    it('rejects (and does not cache) when every source fails', async () => {
       (global.fetch as jest.Mock).mockRejectedValueOnce(
         new Error('Network error'),
       );
@@ -385,11 +441,24 @@ describe('CoinService', () => {
         status: 500,
       });
 
-      const result = await coinService.getPriceHistory(
+      await expect(
+        coinService.getPriceHistory('bitcoin-error-history', '1'),
+      ).rejects.toThrow();
+
+      (global.fetch as jest.Mock).mockResolvedValueOnce({
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            prices: [[1, 2]],
+            market_caps: [],
+            total_volumes: [],
+          }),
+      });
+      const retry = await coinService.getPriceHistory(
         'bitcoin-error-history',
         '1',
       );
-      expect(result.prices).toEqual([]);
+      expect(retry.prices).toHaveLength(1);
     });
   });
 
@@ -416,13 +485,28 @@ describe('CoinService', () => {
 
   describe('getTopCoins - additional tests', () => {
     it('should return array for any page', async () => {
-      const result = await coinService.getTopCoins(1, 10);
+      (global.fetch as jest.Mock).mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve([]),
+      });
+      const result = await coinService.getTopCoins(2, 10);
       expect(Array.isArray(result)).toBe(true);
+    });
+
+    it('rejects when CoinGecko and CoinCap both fail', async () => {
+      (global.fetch as jest.Mock)
+        .mockResolvedValueOnce({ ok: false, status: 429 })
+        .mockResolvedValueOnce({ ok: false, status: 503 });
+      await expect(coinService.getTopCoins(3, 10)).rejects.toThrow();
     });
   });
 
   describe('searchCoins - additional tests', () => {
     it('should return object with coins property', async () => {
+      (global.fetch as jest.Mock).mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ coins: [] }),
+      });
       const result = await coinService.searchCoins('bitcoin');
       expect(result).toHaveProperty('coins');
     });
@@ -452,11 +536,16 @@ describe('CoinService', () => {
   });
 
   describe('getNativeTokenPrice - additional tests', () => {
-    it('should return cached price on subsequent calls', async () => {
+    it('returns the cached price on subsequent calls', async () => {
+      (global.fetch as jest.Mock).mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ ethereum: { usd: 3000 } }),
+      });
       const price1 = await coinService.getNativeTokenPrice(1);
       const price2 = await coinService.getNativeTokenPrice(1);
-      expect(typeof price1).toBe('number');
-      expect(typeof price2).toBe('number');
+      expect(price1).toBe(3000);
+      expect(price2).toBe(3000);
+      expect(global.fetch).toHaveBeenCalledTimes(1);
     });
   });
 

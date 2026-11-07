@@ -3,7 +3,7 @@
  */
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { Token } from './tokenService';
+import type { Token } from './tokenService';
 
 // 포트폴리오 스냅샷
 export interface PortfolioSnapshot {
@@ -23,14 +23,16 @@ export interface AssetAllocation {
 }
 
 // 포트폴리오 통계
+// 비교할 스냅샷이 기간 안에 없으면 변동 값은 null('—' 표시)이다.
 export interface PortfolioStats {
   totalValue: number;
-  change24h: number;
-  changePercent24h: number;
-  change7d: number;
-  changePercent7d: number;
-  change30d: number;
-  changePercent30d: number;
+  change24h: number | null;
+  changePercent24h: number | null;
+  change7d: number | null;
+  changePercent7d: number | null;
+  change30d: number | null;
+  changePercent30d: number | null;
+  /** 기록된 총 자산액 중 최고/최저/평균 (토큰 가격이 아님) */
   highestValue: number;
   lowestValue: number;
   averageValue: number;
@@ -40,10 +42,54 @@ export interface PortfolioStats {
 export interface PerformanceMetrics {
   totalReturn: number;
   totalReturnPercent: number;
+  /** 가격을 아는 보유 자산이 2개 이상일 때만 계산 */
   bestPerformer: { symbol: string; change: number } | null;
   worstPerformer: { symbol: string; change: number } | null;
-  volatility: number;
+  /** 보유 자산 간 24시간 변동률의 표준편차(%p). 자산이 2개 미만이면 null */
+  volatility: number | null;
 }
+
+export type TokenLike = Pick<Token, 'symbol' | 'value' | 'balance'> &
+  Partial<
+    Pick<
+      Token,
+      | 'name'
+      | 'usdValue'
+      | 'priceAvailable'
+      | 'balanceError'
+      | 'balanceRaw'
+      | 'isTestnet'
+      | 'priceChange24h'
+      | 'logoUrl'
+    >
+  >;
+
+/** 토큰의 USD 가치 (모르면 null). usdValue가 없는 과거 형식은 value를 사용 */
+export function tokenUsdValue(token: TokenLike): number | null {
+  if (token.balanceError || token.isTestnet) return null;
+  if (token.usdValue !== undefined) return token.usdValue;
+  if (token.priceAvailable === false) return null;
+  return Number.isFinite(token.value) ? token.value : null;
+}
+
+function hasBalance(token: TokenLike): boolean {
+  const amount = Number(token.balanceRaw ?? token.balance);
+  return Number.isFinite(amount) ? amount > 0 : true;
+}
+
+/**
+ * 스냅샷으로 저장해도 되는지: 조회 실패나 가격 미확인 때문에 0으로 계산된
+ * 총액이 기록되면 차트와 변동률이 거짓이 되므로 저장하지 않는다.
+ */
+export function isSnapshotReliable(tokens: TokenLike[]): boolean {
+  if (tokens.length === 0) return false;
+  return tokens.every(token => {
+    if (token.balanceError || token.isTestnet) return false;
+    return tokenUsdValue(token) !== null || !hasBalance(token);
+  });
+}
+
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 // 차트용 색상 팔레트
 const CHART_COLORS = [
@@ -84,9 +130,11 @@ export class PortfolioAnalyticsService {
   async saveSnapshot(
     address: string,
     chainId: number,
-    tokens: Token[],
-  ): Promise<void> {
-    if (this.clearing) return;
+    tokens: TokenLike[],
+  ): Promise<boolean> {
+    if (this.clearing) return false;
+    // 조회 실패/가격 미확인/테스트넷 데이터는 기록하지 않는다.
+    if (!isSnapshotReliable(tokens)) return false;
     const key = this.key(address, chainId);
     const generation = this.generation;
     const task = (this.writes.get(key) ?? Promise.resolve())
@@ -101,26 +149,30 @@ export class PortfolioAnalyticsService {
     } finally {
       if (this.writes.get(key) === task) this.writes.delete(key);
     }
+    return true;
   }
 
   private async writeSnapshot(
     address: string,
     chainId: number,
-    tokens: Token[],
+    tokens: TokenLike[],
   ) {
     const key = this.key(address, chainId);
     const generation = this.generation;
     const history = await this.readHistory(address, chainId);
     if (generation !== this.generation) return;
 
-    const totalValue = tokens.reduce((sum, t) => sum + t.value, 0);
+    const totalValue = tokens.reduce(
+      (sum, t) => sum + (tokenUsdValue(t) ?? 0),
+      0,
+    );
 
     const snapshot: PortfolioSnapshot = {
       timestamp: Date.now(),
       totalValue,
       tokens: tokens.map(t => ({
         symbol: t.symbol,
-        value: t.value,
+        value: tokenUsdValue(t) ?? 0,
         balance: t.balance,
       })),
     };
@@ -204,71 +256,76 @@ export class PortfolioAnalyticsService {
   /**
    * 자산 배분 계산
    */
-  calculateAllocation(tokens: Token[]): AssetAllocation[] {
-    const totalValue = tokens.reduce((sum, t) => sum + t.value, 0);
+  calculateAllocation(tokens: TokenLike[]): AssetAllocation[] {
+    const priced = tokens
+      .map(token => ({ token, value: tokenUsdValue(token) ?? 0 }))
+      .filter(item => item.value > 0)
+      .sort((a, b) => b.value - a.value);
+    const totalValue = priced.reduce((sum, item) => sum + item.value, 0);
 
     if (totalValue === 0) return [];
 
-    return tokens
-      .filter(t => t.value > 0)
-      .map((token, index) => ({
-        symbol: token.symbol,
-        name: token.name,
-        value: token.value,
-        percentage: (token.value / totalValue) * 100,
-        color: CHART_COLORS[index % CHART_COLORS.length],
-        logoUrl: token.logoUrl,
-      }))
-      .sort((a, b) => b.value - a.value);
+    // 정렬 후 색을 배정해 큰 자산이 항상 같은 색을 갖게 한다.
+    return priced.map(({ token, value }, index) => ({
+      symbol: token.symbol,
+      name: token.name ?? token.symbol,
+      value,
+      percentage: (value / totalValue) * 100,
+      color: CHART_COLORS[index % CHART_COLORS.length],
+      logoUrl: token.logoUrl,
+    }));
   }
 
   /**
    * 포트폴리오 통계 계산
+   * 기간 비교는 해당 시점 근처(허용 오차 안)의 스냅샷이 있을 때만 계산한다.
+   * 오래된 스냅샷으로 대체하지 않는다.
    */
   async calculateStats(
     address: string,
     chainId: number,
-    currentTokens: Token[],
+    currentTokens: TokenLike[],
   ): Promise<PortfolioStats> {
     const history = await this.getHistory(address, chainId);
-    const currentValue = currentTokens.reduce((sum, t) => sum + t.value, 0);
+    const currentReliable = isSnapshotReliable(currentTokens);
+    const currentValue = currentTokens.reduce(
+      (sum, t) => sum + (tokenUsdValue(t) ?? 0),
+      0,
+    );
 
     const now = Date.now();
-    const day = 24 * 60 * 60 * 1000;
+    const compare = (periodMs: number, toleranceMs: number) => {
+      if (!currentReliable) return { change: null, percent: null };
+      const past = this.findSnapshotNear(history, now - periodMs, toleranceMs);
+      if (!past) return { change: null, percent: null };
+      const change = currentValue - past.totalValue;
+      const percent =
+        past.totalValue > 0 ? (change / past.totalValue) * 100 : null;
+      return { change, percent };
+    };
 
-    // 24시간 전 값 찾기
-    const value24hAgo = this.findValueAt(history, now - day);
-    const change24h = currentValue - value24hAgo;
-    const changePercent24h =
-      value24hAgo > 0 ? (change24h / value24hAgo) * 100 : 0;
+    const d1 = compare(DAY_MS, DAY_MS / 2);
+    const d7 = compare(7 * DAY_MS, 1.5 * DAY_MS);
+    const d30 = compare(30 * DAY_MS, 4 * DAY_MS);
 
-    // 7일 전 값 찾기
-    const value7dAgo = this.findValueAt(history, now - 7 * day);
-    const change7d = currentValue - value7dAgo;
-    const changePercent7d = value7dAgo > 0 ? (change7d / value7dAgo) * 100 : 0;
+    // 기록된 총 자산액의 최고/최저/평균
+    const values = history.map(s => s.totalValue).filter(Number.isFinite);
+    if (currentReliable) values.push(currentValue);
 
-    // 30일 전 값 찾기
-    const value30dAgo = this.findValueAt(history, now - 30 * day);
-    const change30d = currentValue - value30dAgo;
-    const changePercent30d =
-      value30dAgo > 0 ? (change30d / value30dAgo) * 100 : 0;
-
-    // 최고/최저/평균값
-    const values = history.map(s => s.totalValue);
-    values.push(currentValue);
-
-    const highestValue = Math.max(...values);
-    const lowestValue = Math.min(...values);
-    const averageValue = values.reduce((a, b) => a + b, 0) / values.length;
+    const highestValue = values.length ? Math.max(...values) : currentValue;
+    const lowestValue = values.length ? Math.min(...values) : currentValue;
+    const averageValue = values.length
+      ? values.reduce((a, b) => a + b, 0) / values.length
+      : currentValue;
 
     return {
       totalValue: currentValue,
-      change24h,
-      changePercent24h,
-      change7d,
-      changePercent7d,
-      change30d,
-      changePercent30d,
+      change24h: d1.change,
+      changePercent24h: d1.percent,
+      change7d: d7.change,
+      changePercent7d: d7.percent,
+      change30d: d30.change,
+      changePercent30d: d30.percent,
       highestValue,
       lowestValue,
       averageValue,
@@ -276,44 +333,47 @@ export class PortfolioAnalyticsService {
   }
 
   /**
-   * 성과 지표 계산
+   * 성과 지표 계산 (가격을 아는 보유 자산만 대상)
    */
-  calculatePerformance(tokens: Token[]): PerformanceMetrics {
-    // 24시간 변동률 기준 정렬
-    const sorted = [...tokens]
-      .filter(t => t.value > 0)
-      .sort((a, b) => b.priceChange24h - a.priceChange24h);
+  calculatePerformance(tokens: TokenLike[]): PerformanceMetrics {
+    const held = tokens
+      .map(token => ({
+        symbol: token.symbol,
+        value: tokenUsdValue(token) ?? 0,
+        change: token.priceChange24h ?? 0,
+      }))
+      .filter(item => item.value > 0);
 
-    const bestPerformer =
-      sorted.length > 0
-        ? { symbol: sorted[0].symbol, change: sorted[0].priceChange24h }
-        : null;
+    const sorted = [...held].sort((a, b) => b.change - a.change);
+    const comparable = sorted.length >= 2;
 
-    const worstPerformer =
-      sorted.length > 0
-        ? {
-            symbol: sorted[sorted.length - 1].symbol,
-            change: sorted[sorted.length - 1].priceChange24h,
-          }
-        : null;
+    const bestPerformer = comparable
+      ? { symbol: sorted[0].symbol, change: sorted[0].change }
+      : null;
+    const worstPerformer = comparable
+      ? {
+          symbol: sorted[sorted.length - 1].symbol,
+          change: sorted[sorted.length - 1].change,
+        }
+      : null;
 
     // 가중평균 수익률
-    const totalValue = tokens.reduce((sum, t) => sum + t.value, 0);
+    const totalValue = held.reduce((sum, t) => sum + t.value, 0);
     const weightedReturn =
       totalValue > 0
-        ? tokens.reduce(
-            (sum, t) => sum + (t.value / totalValue) * t.priceChange24h,
-            0,
-          )
+        ? held.reduce((sum, t) => sum + (t.value / totalValue) * t.change, 0)
         : 0;
 
-    // 변동성 (표준편차)
-    const changes = tokens.map(t => t.priceChange24h);
-    const avgChange = changes.reduce((a, b) => a + b, 0) / changes.length || 0;
-    const variance =
-      changes.reduce((sum, c) => sum + Math.pow(c - avgChange, 2), 0) /
-        changes.length || 0;
-    const volatility = Math.sqrt(variance);
+    // 보유 자산 간 24시간 변동률의 표준편차
+    let volatility: number | null = null;
+    if (comparable) {
+      const changes = held.map(t => t.change);
+      const avg = changes.reduce((a, b) => a + b, 0) / changes.length;
+      const variance =
+        changes.reduce((sum, c) => sum + Math.pow(c - avg, 2), 0) /
+        changes.length;
+      volatility = Math.sqrt(variance);
+    }
 
     return {
       totalReturn: weightedReturn,
@@ -350,24 +410,24 @@ export class PortfolioAnalyticsService {
   }
 
   /**
-   * 특정 시점의 포트폴리오 값 찾기
+   * 목표 시점 ± 허용 오차 안에서 가장 가까운 스냅샷 (없으면 null)
    */
-  private findValueAt(history: PortfolioSnapshot[], timestamp: number): number {
-    if (history.length === 0) return 0;
-
-    // 가장 가까운 스냅샷 찾기
-    let closest = history[0];
-    let closestDiff = Math.abs(history[0].timestamp - timestamp);
-
+  private findSnapshotNear(
+    history: PortfolioSnapshot[],
+    timestamp: number,
+    toleranceMs: number,
+  ): PortfolioSnapshot | null {
+    let closest: PortfolioSnapshot | null = null;
+    let closestDiff = Infinity;
     for (const snapshot of history) {
+      if (!Number.isFinite(snapshot.totalValue)) continue;
       const diff = Math.abs(snapshot.timestamp - timestamp);
-      if (diff < closestDiff && snapshot.timestamp <= timestamp) {
+      if (diff <= toleranceMs && diff < closestDiff) {
         closest = snapshot;
         closestDiff = diff;
       }
     }
-
-    return closest.totalValue;
+    return closest;
   }
 
   /**
