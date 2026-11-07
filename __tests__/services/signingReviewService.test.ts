@@ -131,3 +131,58 @@ it('resolves a missing pending nonce before reviewing a sign-only transaction', 
     blockTag: 'pending',
   });
 });
+
+describe('token metadata for readable amounts', () => {
+  const token = '0x00000000000000000000000000000000000000aa';
+  const usdc = '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48';
+  const permit = (tokenAddress: string) => ({
+    account,
+    chainId: 1,
+    method: 'eth_signTypedData_v4',
+    params: [
+      account,
+      JSON.stringify({
+        domain: { name: 'Permit2', chainId: 1 },
+        types: {},
+        primaryType: 'PermitSingle',
+        message: {
+          details: {
+            token: tokenAddress,
+            amount: '1',
+            expiration: 1,
+            nonce: 0,
+          },
+          spender: to,
+          sigDeadline: 1,
+        },
+      }),
+    ],
+  });
+
+  it('reads decimals and symbol for unknown tokens and binds them to the snapshot', async () => {
+    const readContract = jest.fn(({ functionName }) =>
+      Promise.resolve(functionName === 'decimals' ? 18 : 'FOO\u0000'),
+    );
+    (chainClient.getClient as jest.Mock).mockReturnValue({ readContract });
+    const prepared = await prepareSigningRequest(permit(token));
+    expect(prepared.tokenMetadata).toEqual({
+      [token]: { decimals: 18, symbol: 'FOO' },
+    });
+    expect(analyzeSigningRequest(prepared).details).toContainEqual({
+      label: '승인 수량',
+      value: '0.000000000000000001 FOO',
+    });
+  });
+
+  it('does not query known tokens and tolerates contracts without decimals', async () => {
+    const readContract = jest.fn().mockRejectedValue(new Error('revert'));
+    (chainClient.getClient as jest.Mock).mockReturnValue({ readContract });
+    expect((await prepareSigningRequest(permit(usdc))).tokenMetadata).toBe(
+      undefined,
+    );
+    expect(readContract).not.toHaveBeenCalled();
+    expect((await prepareSigningRequest(permit(token))).tokenMetadata).toBe(
+      undefined,
+    );
+  });
+});
