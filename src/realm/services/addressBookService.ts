@@ -18,6 +18,8 @@ export interface CreateAddressInput {
 }
 
 export interface UpdateAddressInput {
+  /** 변경할 주소 (다른 항목과 중복되면 예외) */
+  address?: string;
   name?: string;
   chainId?: number;
   isFavorite?: boolean;
@@ -91,7 +93,18 @@ class AddressBookService {
       return null;
     }
 
+    const nextAddress = input.address?.toLowerCase();
+    if (nextAddress !== undefined && nextAddress !== entry.address) {
+      const duplicates = realm
+        .objects<AddressBookEntry>('AddressBook')
+        .filtered('address ==[c] $0 AND id != $1', nextAddress, id);
+      if (duplicates.length > 0) {
+        throw new Error('Address already exists in address book');
+      }
+    }
+
     realm.write(() => {
+      if (nextAddress !== undefined) entry.address = nextAddress;
       if (input.name !== undefined) entry.name = input.name;
       if (input.chainId !== undefined) entry.chainId = input.chainId;
       if (input.isFavorite !== undefined) entry.isFavorite = input.isFavorite;

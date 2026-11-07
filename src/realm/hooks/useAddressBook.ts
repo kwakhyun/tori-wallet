@@ -11,6 +11,28 @@ import {
 import type { AddressBookEntry } from '../schemas';
 
 /**
+ * 주소록 변경 알림
+ *
+ * 화면마다 별도로 조회하는 훅(주소록/즐겨찾기/검색/이름 조회)이 같은 데이터를 보도록
+ * 쓰기 작업 후 모든 구독 훅에 다시 불러오라고 알린다.
+ */
+type ChangeListener = () => void | Promise<void>;
+const changeListeners = new Set<ChangeListener>();
+
+export async function notifyAddressBookChanged(): Promise<void> {
+  await Promise.all([...changeListeners].map(listener => listener()));
+}
+
+function useAddressBookChanges(listener: ChangeListener): void {
+  useEffect(() => {
+    changeListeners.add(listener);
+    return () => {
+      changeListeners.delete(listener);
+    };
+  }, [listener]);
+}
+
+/**
  * 주소록 목록 훅
  */
 export function useAddressBook() {
@@ -37,43 +59,35 @@ export function useAddressBook() {
     loadAddresses();
   }, [loadAddresses]);
 
-  const addAddress = useCallback(
-    async (input: CreateAddressInput) => {
-      const newAddress = await addressBookService.create(input);
-      await loadAddresses();
-      return newAddress;
-    },
-    [loadAddresses],
-  );
+  useAddressBookChanges(loadAddresses);
+
+  const addAddress = useCallback(async (input: CreateAddressInput) => {
+    const newAddress = await addressBookService.create(input);
+    await notifyAddressBookChanged();
+    return newAddress;
+  }, []);
 
   const updateAddress = useCallback(
     async (id: string, input: UpdateAddressInput) => {
       const updated = await addressBookService.update(id, input);
-      await loadAddresses();
+      await notifyAddressBookChanged();
       return updated;
     },
-    [loadAddresses],
+    [],
   );
 
-  const deleteAddress = useCallback(
-    async (id: string) => {
-      const success = await addressBookService.delete(id);
-      if (success) {
-        await loadAddresses();
-      }
-      return success;
-    },
-    [loadAddresses],
-  );
+  const deleteAddress = useCallback(async (id: string) => {
+    const success = await addressBookService.delete(id);
+    if (success) await notifyAddressBookChanged();
+    return success;
+  }, []);
 
-  const toggleFavorite = useCallback(
-    async (id: string) => {
-      const isFavorite = await addressBookService.toggleFavorite(id);
-      await loadAddresses();
-      return isFavorite;
-    },
-    [loadAddresses],
-  );
+  const toggleFavorite = useCallback(async (id: string) => {
+    const isFavorite = await addressBookService.toggleFavorite(id);
+    // 즐겨찾기 탭(useFavoriteAddresses)도 함께 갱신된다.
+    await notifyAddressBookChanged();
+    return isFavorite;
+  }, []);
 
   return {
     addresses,
@@ -110,6 +124,8 @@ export function useFavoriteAddresses() {
     loadFavorites();
   }, [loadFavorites]);
 
+  useAddressBookChanges(loadFavorites);
+
   return {
     favorites,
     isLoading,
@@ -123,29 +139,38 @@ export function useFavoriteAddresses() {
 export function useAddressSearch(query: string) {
   const [results, setResults] = useState<AddressBookEntry[]>([]);
   const [isSearching, setIsSearching] = useState(false);
+  const [revision, setRevision] = useState(0);
+  const bump = useCallback(() => setRevision(value => value + 1), []);
+  useAddressBookChanges(bump);
 
   useEffect(() => {
-    if (!query.trim()) {
+    const trimmed = query.trim();
+    if (!trimmed) {
       setResults([]);
+      setIsSearching(false);
       return;
     }
 
+    let cancelled = false;
     const search = async () => {
       setIsSearching(true);
       try {
-        const searchResults = await addressBookService.search(query);
-        setResults(searchResults);
+        const searchResults = await addressBookService.search(trimmed);
+        if (!cancelled) setResults(searchResults);
       } catch {
-        setResults([]);
+        if (!cancelled) setResults([]);
       } finally {
-        setIsSearching(false);
+        if (!cancelled) setIsSearching(false);
       }
     };
 
     // 디바운스
     const timer = setTimeout(search, 300);
-    return () => clearTimeout(timer);
-  }, [query]);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [query, revision]);
 
   return { results, isSearching };
 }
@@ -156,6 +181,9 @@ export function useAddressSearch(query: string) {
 export function useAddressName(address: string | undefined) {
   const [name, setName] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [revision, setRevision] = useState(0);
+  const bump = useCallback(() => setRevision(value => value + 1), []);
+  useAddressBookChanges(bump);
 
   useEffect(() => {
     if (!address) {
@@ -163,20 +191,24 @@ export function useAddressName(address: string | undefined) {
       return;
     }
 
+    let cancelled = false;
     const fetchName = async () => {
       setIsLoading(true);
       try {
         const entry = await addressBookService.getByAddress(address);
-        setName(entry?.name ?? null);
+        if (!cancelled) setName(entry?.name ?? null);
       } catch {
-        setName(null);
+        if (!cancelled) setName(null);
       } finally {
-        setIsLoading(false);
+        if (!cancelled) setIsLoading(false);
       }
     };
 
     fetchName();
-  }, [address]);
+    return () => {
+      cancelled = true;
+    };
+  }, [address, revision]);
 
   return { name, isLoading };
 }

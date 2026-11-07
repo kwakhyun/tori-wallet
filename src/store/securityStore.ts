@@ -91,7 +91,12 @@ export const useSecurityStore = create<SecurityState>()(
       setRequirePinForTransaction: require =>
         set({ requirePinForTransaction: require }),
 
-      setTransactionLimit: limit => set({ transactionLimit: limit }),
+      setTransactionLimit: limit => {
+        if (limit !== null && (!Number.isFinite(limit) || limit < 0)) {
+          throw new Error('유효하지 않은 한도 금액입니다.');
+        }
+        set({ transactionLimit: limit });
+      },
 
       // 주소록 추가
       addAddressBookEntry: entry =>
@@ -183,6 +188,52 @@ export const useSecurityStore = create<SecurityState>()(
     },
   ),
 );
+
+/** PIN 없이 보낼 수 있는 한도의 상한 (USD) */
+export const MAX_TRANSACTION_LIMIT_USD = 1_000_000_000;
+
+/**
+ * 한도 변경이 보안을 약하게 만드는지 (PIN 재확인 필요 여부)
+ *
+ * PIN 항상 요구가 꺼져 있을 때 한도 없음(null)은 "모든 거래를 PIN 없이"를 뜻하므로
+ * 가장 약한 설정이다. 한도를 없애거나 올리는 변경만 약화로 본다.
+ */
+export function isTransactionLimitWeakening(
+  current: number | null,
+  next: number | null,
+): boolean {
+  if (current === null) return false;
+  if (next === null) return true;
+  return next > current;
+}
+
+/**
+ * 한도 입력값을 해석한다. 빈 값은 한도 없음(null).
+ * 0 이상의 숫자, 소수점 둘째 자리까지, 쉼표 허용.
+ */
+export function parseTransactionLimitInput(
+  input: string,
+): { ok: true; value: number | null } | { ok: false; error: string } {
+  const normalized = input.replace(/[,\s$]/g, '');
+  if (normalized === '') return { ok: true, value: null };
+  if (!/^\d+(\.\d{1,2})?$/.test(normalized)) {
+    return {
+      ok: false,
+      error: '0 이상의 숫자를 소수점 둘째 자리까지 입력해주세요.',
+    };
+  }
+  const value = Number(normalized);
+  if (!Number.isFinite(value) || value > MAX_TRANSACTION_LIMIT_USD) {
+    return { ok: false, error: '한도가 너무 큽니다.' };
+  }
+  return { ok: true, value };
+}
+
+/** 한도 표시: null은 "한도 없음", 0은 "$0"으로 표시한다(무제한이 아니다). */
+export function formatTransactionLimitUsd(limit: number | null): string {
+  if (limit === null) return '한도 없음';
+  return `$${limit.toLocaleString('en-US', { maximumFractionDigits: 2 })}`;
+}
 
 // 자동 잠금 타이머 레이블
 export const AUTO_LOCK_LABELS: Record<AutoLockOption, string> = {

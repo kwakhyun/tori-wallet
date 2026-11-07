@@ -2,13 +2,36 @@
  * 지갑 상태 및 액션 접근 훅
  */
 
-import { useCallback } from 'react';
+import { useCallback, useRef } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import { useWalletStore } from '../store/walletStore';
 import { walletService } from '../services/walletService';
 import { signerVault } from '../services/signerVault';
 import { walletResetService } from '../services/walletResetService';
 import { toAppError, logError } from '../utils/error';
+
+const ACCOUNT_PATH_PREFIX = "m/44'/60'/0'/0/";
+export const MAX_ACCOUNT_NAME_LENGTH = 24;
+
+/** m/44'/60'/0'/0/n 경로의 n (다른 형태면 null) */
+export function accountIndexOf(derivationPath?: string): number | null {
+  if (!derivationPath?.startsWith(ACCOUNT_PATH_PREFIX)) return null;
+  const tail = derivationPath.slice(ACCOUNT_PATH_PREFIX.length);
+  if (!/^\d+$/.test(tail)) return null;
+  const index = Number(tail);
+  return Number.isSafeInteger(index) ? index : null;
+}
+
+/** 이미 사용 중인 가장 큰 계정 인덱스 다음 번호 */
+export function nextAccountIndex(
+  paths: Array<string | undefined>,
+  fallback: number,
+): number {
+  const used = paths
+    .map(accountIndexOf)
+    .filter((index): index is number => index !== null);
+  return used.length > 0 ? Math.max(...used) + 1 : fallback;
+}
 
 export function useWallet() {
   const {
@@ -19,6 +42,7 @@ export function useWallet() {
     activeNetworkChainId,
     addWallet,
     setActiveWallet,
+    renameWallet,
     lock,
     unlock: unlockStore,
   } = useWalletStore(
@@ -30,6 +54,7 @@ export function useWallet() {
       activeNetworkChainId: state.activeNetworkChainId,
       addWallet: state.addWallet,
       setActiveWallet: state.setActiveWallet,
+      renameWallet: state.renameWallet,
       lock: state.lock,
       unlock: state.unlock,
     })),
@@ -149,46 +174,109 @@ export function useWallet() {
     [unlockStore],
   );
 
+  const addingAccount = useRef(false);
+
   /**
-   * 추가 계정 파생
+   * 추가 계정 파생 (m/44'/60'/0'/0/n, n = 사용 중인 최대 인덱스 + 1)
+   * 잠금 해제된 서명 세션이 있어야 한다. 계정은 암호화 저장소에 먼저 기록한 뒤
+   * 스토어에 추가하므로 signerVault.getAccount가 곧바로 새 계정으로 서명할 수 있다.
    */
   const addAccount = useCallback(
-    async (name: string) => {
+    async (name?: string) => {
+      if (addingAccount.current) {
+        throw toAppError(new Error('계정을 추가하는 중입니다.'));
+      }
+      addingAccount.current = true;
       try {
-        const newIndex = wallets.length;
-        const derivationPath = `m/44'/60'/0'/0/${newIndex}`;
-        const account = signerVault.deriveAccountAtPath(derivationPath);
-
         const storedAccounts = await walletService.retrieveAccounts();
-        const newStoredAccounts = [
-          ...storedAccounts,
-          {
+        const newIndex = nextAccountIndex(
+          [
+            ...storedAccounts.map(account => account.derivationPath),
+            ...wallets.map(wallet => wallet.derivationPath),
+          ],
+          wallets.length,
+        );
+        const derivationPath = `${ACCOUNT_PATH_PREFIX}${newIndex}`;
+        const account = signerVault.deriveAccountAtPath(derivationPath);
+        const accountName =
+          name?.trim().slice(0, MAX_ACCOUNT_NAME_LENGTH) ||
+          `Account ${newIndex + 1}`;
+
+        const alreadyStored = storedAccounts.some(
+          stored =>
+            stored.address.toLowerCase() === account.address.toLowerCase(),
+        );
+        if (!alreadyStored) {
+          await walletService.storeAccounts([
+            ...storedAccounts,
+            {
+              address: account.address,
+              derivationPath,
+              name: accountName,
+            },
+          ]);
+        }
+
+        if (
+          !wallets.some(
+            wallet =>
+              wallet.address.toLowerCase() === account.address.toLowerCase(),
+          )
+        ) {
+          addWallet({
             address: account.address,
+            name: accountName,
+            isHD: true,
             derivationPath,
-            name,
-          },
-        ];
-
-        await walletService.storeAccounts(newStoredAccounts);
-
-        addWallet({
-          address: account.address,
-          name,
-          isHD: true,
-          derivationPath,
-        });
+          });
+        }
 
         return account.address;
       } catch (error) {
         logError(error, 'addAccount');
         throw toAppError(error);
+      } finally {
+        addingAccount.current = false;
       }
     },
-    [wallets.length, addWallet],
+    [wallets, addWallet],
   );
 
   /**
-   * 활성 계정 전환
+   * 계정 이름 변경 (암호화 저장소와 스토어 모두 갱신)
+   */
+  const renameAccount = useCallback(
+    async (address: string, name: string) => {
+      const trimmed = name.trim();
+      if (!trimmed) throw toAppError(new Error('계정 이름을 입력해주세요.'));
+      if (trimmed.length > MAX_ACCOUNT_NAME_LENGTH) {
+        throw toAppError(
+          new Error(
+            `계정 이름은 ${MAX_ACCOUNT_NAME_LENGTH}자 이하로 입력해주세요.`,
+          ),
+        );
+      }
+      try {
+        const storedAccounts = await walletService.retrieveAccounts();
+        await walletService.storeAccounts(
+          storedAccounts.map(account =>
+            account.address.toLowerCase() === address.toLowerCase()
+              ? { ...account, name: trimmed }
+              : account,
+          ),
+        );
+        renameWallet(address, trimmed);
+      } catch (error) {
+        logError(error, 'renameAccount');
+        throw toAppError(error);
+      }
+    },
+    [renameWallet],
+  );
+
+  /**
+   * 활성 계정 전환. 송금/스왑/WalletConnect는 활성 계정 주소를 from으로 사용하고,
+   * 진행 중이던 서명 요청은 계정이 바뀌면 승인 검사에서 거부된다.
    */
   const switchAccount = useCallback(
     (index: number) => {
@@ -227,6 +315,7 @@ export function useWallet() {
     unlockWithPin,
     lock,
     addAccount,
+    renameAccount,
     switchAccount,
     resetWallet,
   };

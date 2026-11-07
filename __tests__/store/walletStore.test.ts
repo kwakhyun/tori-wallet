@@ -125,6 +125,33 @@ describe('WalletStore', () => {
     });
   });
 
+  describe('Account naming and selection', () => {
+    const first: Wallet = {
+      address: '0x1234567890123456789012345678901234567890',
+      name: 'Account 1',
+      isHD: true,
+      derivationPath: "m/44'/60'/0'/0/0",
+    };
+
+    it('renames an account by address', () => {
+      useWalletStore.getState().addWallet(first);
+      useWalletStore
+        .getState()
+        .renameWallet(first.address.toUpperCase(), ' 메인 ');
+      expect(useWalletStore.getState().wallets[0].name).toBe('메인');
+      expect(() =>
+        useWalletStore.getState().renameWallet(first.address, ' '),
+      ).toThrow();
+    });
+
+    it('ignores out-of-range active account indexes', () => {
+      useWalletStore.getState().addWallet(first);
+      useWalletStore.getState().setActiveWallet(5);
+      useWalletStore.getState().setActiveWallet(-1);
+      expect(useWalletStore.getState().activeWalletIndex).toBe(0);
+    });
+  });
+
   describe('Network Management', () => {
     it('should set active network', () => {
       const { setActiveNetwork } = useWalletStore.getState();
