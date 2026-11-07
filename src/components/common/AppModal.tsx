@@ -20,6 +20,8 @@
  *    따로 조정한다. 부모는 자식 모달이 모두 닫힌 뒤에 닫힌다 (UIKit은 다른 모달을 표시
  *    중인 VC를 닫으면 자식만 닫고 자신은 남긴다).
  *    Android의 Modal은 Dialog라서 겹쳐 표시되므로 조정하지 않는다.
+ *    대신 Android Dialog는 앱 루트의 토스트를 가리므로 모달 안에 토스트 표시 위치
+ *    (ModalToastSurface)를 둔다.
  *
  * 3) iOS fullScreen 금지: fullScreen 표시는 표시가 끝나면 루트 VC의 뷰(앱 화면 전체)를
  *    창에서 떼어 냈다가 닫을 때 다시 붙인다. 그 사이 앱 창에 직접 올린 잠금 오버레이
@@ -42,6 +44,7 @@ import React, {
 } from 'react';
 import { Modal, Platform, type ModalProps } from 'react-native';
 import { useWalletLocked } from '@/hooks/useWalletLocked';
+import { ModalToastSurface } from './ToastHost';
 import {
   createModalPresenceRegistry,
   MODAL_PRESENCE_FALLBACK_MS,
@@ -60,9 +63,15 @@ interface ModalScope {
   presence: ModalPresenceRegistry;
   /** 이 범위에서 모달을 띄워도 되는지 (부모 모달이 표시를 마쳤고 닫히는 중이 아님) */
   open: boolean;
+  /** 이 범위에서 띄우는 모달의 중첩 깊이 (루트 0) */
+  depth: number;
 }
 
-const ROOT_SCOPE: ModalScope = { presence: rootModalPresence, open: true };
+const ROOT_SCOPE: ModalScope = {
+  presence: rootModalPresence,
+  open: true,
+  depth: 0,
+};
 const ModalScopeContext = createContext<ModalScope>(ROOT_SCOPE);
 
 export interface AppModalProps extends ModalProps {
@@ -209,9 +218,10 @@ export function AppModal({
   const childOpen = coordinate
     ? presentation.shown && wantVisible && acked
     : wantVisible;
+  const childDepth = scope.depth + 1;
   const childScope = useMemo<ModalScope>(
-    () => ({ presence: childPresence, open: childOpen }),
-    [childPresence, childOpen],
+    () => ({ presence: childPresence, open: childOpen, depth: childDepth }),
+    [childPresence, childOpen, childDepth],
   );
 
   return (
@@ -225,6 +235,8 @@ export function AppModal({
     >
       <ModalScopeContext.Provider value={childScope}>
         {children}
+        {/* Android: 모달(Dialog)이 앱 루트의 토스트를 가리므로 모달 안에 토스트를 그린다. */}
+        {coordinate ? null : <ModalToastSurface depth={scope.depth} />}
       </ModalScopeContext.Provider>
     </Modal>
   );

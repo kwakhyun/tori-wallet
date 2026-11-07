@@ -6,6 +6,7 @@ import {
 import { realmDB } from '../../src/realm/database';
 import { useSecurityStore } from '../../src/store/securityStore';
 import { useSwapStore } from '../../src/store/swapStore';
+import { showToast, useToastStore } from '../../src/store/toastStore';
 import { useWalletStore } from '../../src/store/walletStore';
 import { walletService } from '../../src/services/walletService';
 import { wcService } from '../../src/services/wcService';
@@ -88,6 +89,35 @@ describe('walletResetService', () => {
 
     await expect(defaultWalletResetService.reset()).resolves.toBeUndefined();
     for (const spy of spies) expect(spy).toHaveBeenCalledTimes(1);
+    for (const spy of spies) spy.mockRestore();
+  });
+
+  it('drops toasts held while the wallet was locked so they cannot surface after a reset', async () => {
+    const spies = [
+      jest
+        .spyOn(wcService, 'disconnectAllSessions')
+        .mockResolvedValue(undefined),
+      jest.spyOn(walletService, 'clearAll').mockResolvedValue(undefined),
+      jest.spyOn(realmDB, 'deleteAll').mockResolvedValue(undefined),
+      jest
+        .spyOn(useWalletStore.persist, 'clearStorage')
+        .mockImplementation(() => undefined),
+      jest
+        .spyOn(useSecurityStore.persist, 'clearStorage')
+        .mockImplementation(() => undefined),
+      jest
+        .spyOn(useSwapStore.persist, 'clearStorage')
+        .mockImplementation(() => undefined),
+    ];
+    useToastStore.getState().reset();
+    // 잠금 화면 뒤에서 표시를 기다리던 이전 지갑의 거래 알림
+    showToast('거래가 완료되었습니다 · 0.5 ETH 전송', 'success');
+    showToast('거래가 실패했습니다 · 100 USDC 전송', 'error');
+
+    await expect(defaultWalletResetService.reset()).resolves.toBeUndefined();
+
+    expect(useToastStore.getState().current).toBeNull();
+    expect(useToastStore.getState().queue).toEqual([]);
     for (const spy of spies) spy.mockRestore();
   });
 });

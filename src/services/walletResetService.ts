@@ -7,6 +7,7 @@ import { portfolioAnalyticsService } from './portfolioAnalyticsService';
 import { realmDB } from '@/realm/database';
 import { useSecurityStore } from '@/store/securityStore';
 import { useSwapStore } from '@/store/swapStore';
+import { useToastStore } from '@/store/toastStore';
 import { useWalletStore } from '@/store/walletStore';
 import { walletService } from './walletService';
 import { wcService } from './wcService';
@@ -30,6 +31,9 @@ const defaultDependencies: WalletResetDependencies = {
     ]);
   },
   resetRuntimeStores: () => {
+    // 잠긴 동안 표시를 미뤄 둔 이전 지갑의 토스트(거래 금액 등)가 초기화 후 지갑이 없는
+    // 상태에서 나타나지 않게, 지갑 상태를 지우기 전에 먼저 비운다.
+    useToastStore.getState().reset();
     useWalletStore.getState().reset();
     useSecurityStore.getState().resetSecurityState();
     useSwapStore.getState().resetSwapState();
