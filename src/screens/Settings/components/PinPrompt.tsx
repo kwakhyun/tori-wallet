@@ -156,7 +156,8 @@ export function PinVerifyModal({
       onRequestClose={onCancel}
       onLock={onCancel}
     >
-      <Screen testID={testID}>
+      {/* PIN 확인은 네트워크와 무관하므로 오프라인 배너로 키패드 공간을 줄이지 않는다. */}
+      <Screen testID={testID} offlineBanner={false}>
         <ScreenHeader
           title={title}
           leftIcon="close"
