@@ -469,19 +469,18 @@ describe('PortfolioAnalyticsService', () => {
       AsyncStorage.getItem.mockResolvedValueOnce(JSON.stringify([]));
 
       // 가격 조회 실패(CoinGecko 429 등): ETH 1.5개, 가치 모름
+      const unpricedEth: Token = {
+        ...mockTokens[0],
+        price: 0,
+        value: 0,
+        usdValue: null,
+        priceAvailable: false,
+        hasPriceSource: true,
+      };
       const stats = await portfolioAnalyticsService.calculateStats(
         '0xd3d3567890123456789012345678901234567890',
         1,
-        [
-          {
-            ...mockTokens[0],
-            price: 0,
-            value: 0,
-            usdValue: null,
-            priceAvailable: false,
-            hasPriceSource: true,
-          },
-        ],
+        [unpricedEth],
       );
 
       expect(stats.highestValue).toBeNull();
