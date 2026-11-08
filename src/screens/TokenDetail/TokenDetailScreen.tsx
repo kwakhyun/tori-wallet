@@ -3,7 +3,10 @@
  *
  * - 네이티브/ERC-20 모두 이 화면에서 잔액을 다시 조회한다 (당겨서 새로고침 포함).
  * - 테스트넷 자산은 법정화폐 가치를 표시하지 않는다.
- * - 탐색기 링크는 현재 네트워크의 blockExplorerUrl을 사용한다.
+ * - 화면은 토큰 목록을 읽은 체인(route.params.chainId)에 고정된다. 잔액/시세/탐색기
+ *   링크는 모두 그 체인 기준이며, 보는 동안 활성 네트워크가 바뀌면(dApp의 체인 전환
+ *   승인 등) 안내를 띄우고 보내기/받기/스왑/구매를 막는다 — 다른 체인에서 같은
+ *   컨트랙트 주소/심볼로 동작하지 않게 한다.
  */
 
 import React, { useCallback, useMemo, useState } from 'react';
@@ -62,6 +65,8 @@ function TokenDetailScreen(): React.JSX.Element {
     coingeckoId,
     logoUrl,
   } = route.params;
+  // 체인 ID가 없는 과거 형식 파라미터(상태 복원 등)는 연 시점의 활성 네트워크로 고정
+  const paramChainId = route.params.chainId as number | undefined;
 
   const { wallets, activeWalletIndex, activeNetworkChainId, networks } =
     useWalletStore(
@@ -72,10 +77,12 @@ function TokenDetailScreen(): React.JSX.Element {
         networks: state.networks,
       })),
     );
+  const [chainId] = useState(() => paramChainId ?? activeNetworkChainId);
   const activeWallet = wallets[activeWalletIndex];
+  const network = networks.find(n => n.chainId === chainId);
   const activeNetwork = networks.find(n => n.chainId === activeNetworkChainId);
-  const isTestnet =
-    !!activeNetwork?.isTestnet || tokenService.isTestnet(activeNetworkChainId);
+  const networkChanged = activeNetworkChainId !== chainId;
+  const isTestnet = !!network?.isTestnet || tokenService.isTestnet(chainId);
   const hasMarketData = !!coingeckoId && !isTestnet;
 
   const [isPullRefreshing, setIsPullRefreshing] = useState(false);
@@ -83,19 +90,19 @@ function TokenDetailScreen(): React.JSX.Element {
   // 네이티브/ERC-20 중 하나만 활성화된다 (useTokenBalance는 주소가 없으면 비활성).
   const nativeBalance = useBalance(
     contractAddress ? undefined : activeWallet?.address,
-    activeNetworkChainId,
+    chainId,
   );
   const tokenBalance = useTokenBalance(
     contractAddress ? activeWallet?.address : undefined,
     contractAddress ?? '',
     decimals ?? 18,
-    activeNetworkChainId,
+    chainId,
   );
   const balanceQuery = contractAddress ? tokenBalance : nativeBalance;
 
   const priceQuery = useQuery({
-    queryKey: ['tokenPrice', coingeckoId, activeNetworkChainId],
-    queryFn: () => tokenService.getPrice(coingeckoId, activeNetworkChainId),
+    queryKey: ['tokenPrice', coingeckoId, chainId],
+    queryFn: () => tokenService.getPrice(coingeckoId, chainId),
     enabled: hasMarketData,
     staleTime: 60 * 1000,
   });
@@ -145,33 +152,37 @@ function TokenDetailScreen(): React.JSX.Element {
     }
   }, [balanceQuery, priceQuery, historyQuery, hasMarketData]);
 
+  // 아래 동작은 모두 활성 네트워크에서 실행되므로, 체인이 바뀌었으면 막는다.
   const handleSend = useCallback(() => {
+    if (networkChanged) return;
     navigation.navigate('SendTransaction', {
       tokenAddress: contractAddress,
     });
-  }, [navigation, contractAddress]);
+  }, [navigation, contractAddress, networkChanged]);
 
   const handleReceive = useCallback(() => {
+    if (networkChanged) return;
     if (contractAddress) {
       navigation.navigate('ReceiveToken', { tokenAddress: contractAddress });
     } else {
       navigation.navigate('ReceiveToken');
     }
-  }, [navigation, contractAddress]);
+  }, [navigation, contractAddress, networkChanged]);
 
   const handleSwap = useCallback(() => {
+    if (networkChanged) return;
     navigation.navigate('Swap');
-  }, [navigation]);
+  }, [navigation, networkChanged]);
 
   const handleBuy = useCallback(() => {
-    if (!activeWallet?.address) return;
+    if (networkChanged || !activeWallet?.address) return;
     showBuyProviderAlert(
       symbol.toLowerCase(),
       activeWallet.address,
       undefined,
-      activeNetworkChainId,
+      chainId,
     );
-  }, [activeWallet?.address, symbol, activeNetworkChainId]);
+  }, [activeWallet?.address, symbol, chainId, networkChanged]);
 
   const handleMarketInfo = useCallback(() => {
     if (!coingeckoId) return;
@@ -184,12 +195,12 @@ function TokenDetailScreen(): React.JSX.Element {
   }, [navigation, coingeckoId, name, symbol, logoUrl]);
 
   const explorerUrl = useMemo(() => {
-    const baseUrl = activeNetwork?.blockExplorerUrl?.replace(/\/+$/, '');
+    const baseUrl = network?.blockExplorerUrl?.replace(/\/+$/, '');
     if (!baseUrl || !activeWallet?.address) return null;
     return contractAddress
       ? `${baseUrl}/token/${contractAddress}?a=${activeWallet.address}`
       : `${baseUrl}/address/${activeWallet.address}`;
-  }, [activeNetwork?.blockExplorerUrl, activeWallet?.address, contractAddress]);
+  }, [network?.blockExplorerUrl, activeWallet?.address, contractAddress]);
 
   const handleViewExplorer = useCallback(async () => {
     if (!explorerUrl) return;
@@ -222,7 +233,7 @@ function TokenDetailScreen(): React.JSX.Element {
       <StatusBar barStyle={isDarkMode ? 'light-content' : 'dark-content'} />
       <ScreenHeader
         title={symbol}
-        subtitle={activeNetwork?.name}
+        subtitle={network?.name}
         testID="token-detail-header"
       />
 
@@ -275,18 +286,48 @@ function TokenDetailScreen(): React.JSX.Element {
             </BalanceFiat>
           </TokenHeader>
 
+          {/* 보는 동안 활성 네트워크가 바뀐 경우 */}
+          {networkChanged ? (
+            <NetworkNotice
+              testID="token-detail-network-changed"
+              accessibilityRole="alert"
+            >
+              <NetworkNoticeTitle>네트워크가 바뀌었습니다</NetworkNoticeTitle>
+              <NetworkNoticeText testID="token-detail-network-changed-text">
+                {`지금 네트워크는 ${
+                  activeNetwork?.name ?? '다른 네트워크'
+                }입니다. 이 화면의 ${symbol}은(는) ${
+                  network?.name ?? '이전 네트워크'
+                } 자산이라 보내기·받기·스왑·구매를 막았습니다.`}
+              </NetworkNoticeText>
+              <NetworkNoticeButton
+                onPress={() => navigation.goBack()}
+                testID="token-detail-network-back"
+                accessibilityRole="button"
+                accessibilityLabel="돌아가기"
+              >
+                <NetworkNoticeButtonText>돌아가기</NetworkNoticeButtonText>
+              </NetworkNoticeButton>
+            </NetworkNotice>
+          ) : null}
+
           {/* Action Buttons */}
           <ActionRow>
             {actions.map(action => (
               <ActionButton
                 key={action.key}
                 onPress={action.onPress}
+                disabled={networkChanged}
                 testID={`token-detail-${action.key}`}
                 accessibilityRole="button"
                 accessibilityLabel={`${symbol} ${action.label}`}
+                accessibilityState={{ disabled: networkChanged }}
               >
-                <ActionIcon>
-                  <ActionIconText importantForAccessibility="no">
+                <ActionIcon $disabled={networkChanged}>
+                  <ActionIconText
+                    importantForAccessibility="no"
+                    $disabled={networkChanged}
+                  >
                     {action.icon}
                   </ActionIconText>
                 </ActionIcon>
@@ -368,7 +409,7 @@ function TokenDetailScreen(): React.JSX.Element {
             <InfoCard>
               <InfoRow>
                 <InfoLabel>네트워크</InfoLabel>
-                <InfoValue>{activeNetwork?.name}</InfoValue>
+                <InfoValue>{network?.name ?? `체인 ID ${chainId}`}</InfoValue>
               </InfoRow>
               <InfoRow>
                 <InfoLabel>심볼</InfoLabel>
@@ -482,19 +523,55 @@ const ActionButton = styled.TouchableOpacity`
   min-height: 44px;
 `;
 
-const ActionIcon = styled.View`
+const ActionIcon = styled.View<{ $disabled?: boolean }>`
   width: 48px;
   height: 48px;
   border-radius: 24px;
-  background-color: ${({ theme }) => theme.colors.primary};
+  background-color: ${({ theme, $disabled }) =>
+    $disabled ? theme.colors.disabledBackground : theme.colors.primary};
   align-items: center;
   justify-content: center;
   margin-bottom: ${({ theme }) => theme.spacing.xs}px;
 `;
 
-const ActionIconText = styled.Text`
+const ActionIconText = styled.Text<{ $disabled?: boolean }>`
   font-size: 22px;
-  color: ${({ theme }) => theme.colors.onPrimary};
+  color: ${({ theme, $disabled }) =>
+    $disabled ? theme.colors.disabledText : theme.colors.onPrimary};
+`;
+
+const NetworkNotice = styled.View`
+  background-color: ${({ theme }) => theme.colors.warningSubtle};
+  border-radius: ${({ theme }) => theme.borderRadius.md}px;
+  border-left-width: 4px;
+  border-left-color: ${({ theme }) => theme.colors.warning};
+  padding: ${({ theme }) => theme.spacing.md}px;
+  margin-bottom: ${({ theme }) => theme.spacing.lg}px;
+`;
+
+const NetworkNoticeTitle = styled.Text`
+  color: ${({ theme }) => theme.colors.textPrimary};
+  font-size: ${({ theme }) => theme.typography.body.fontSize}px;
+  font-weight: 600;
+  margin-bottom: ${({ theme }) => theme.spacing.xs}px;
+`;
+
+const NetworkNoticeText = styled.Text`
+  color: ${({ theme }) => theme.colors.textSecondary};
+  font-size: ${({ theme }) => theme.typography.bodySmall.fontSize}px;
+  line-height: 20px;
+`;
+
+const NetworkNoticeButton = styled.TouchableOpacity`
+  min-height: 44px;
+  justify-content: center;
+  align-self: flex-start;
+`;
+
+const NetworkNoticeButtonText = styled.Text`
+  color: ${({ theme }) => theme.colors.primary};
+  font-size: ${({ theme }) => theme.typography.bodySmall.fontSize}px;
+  font-weight: 600;
 `;
 
 const ActionLabel = styled.Text`

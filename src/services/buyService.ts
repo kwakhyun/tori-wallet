@@ -4,6 +4,8 @@
 
 import { Alert, Linking } from 'react-native';
 import { createLogger } from '@/utils/logger';
+import { UNSUPPORTED_ON_NETWORK_MESSAGE } from './customNetworks';
+import { isTestnetChainId } from './tokenValuation';
 
 const logger = createLogger('BuyService');
 
@@ -45,9 +47,21 @@ const BANXA_BLOCKCHAIN: Record<number, string> = {
   137: 'MATIC',
 };
 
-/** 테스트넷은 법정화폐로 구매할 수 없다 */
+export type BuyAvailability = 'available' | 'testnet' | 'unsupported';
+
+/**
+ * 이 네트워크로 구매한 자산을 받을 수 있는지
+ * - chainId 없음: 네트워크를 지정하지 않고 결제 화면에서 고른다
+ * - 테스트넷(기본/커스텀): 실제 가치가 없어 구매할 수 없다
+ * - 그 밖에 결제 서비스가 모르는 네트워크(커스텀 메인넷 등): 지원하지 않음
+ */
+export function getBuyAvailability(chainId?: number): BuyAvailability {
+  if (chainId === undefined || chainId in BANXA_BLOCKCHAIN) return 'available';
+  return isTestnetChainId(chainId) ? 'testnet' : 'unsupported';
+}
+
 export function isBuyAvailableOnChain(chainId?: number): boolean {
-  return chainId === undefined || chainId in BANXA_BLOCKCHAIN;
+  return getBuyAvailability(chainId) === 'available';
 }
 
 /**
@@ -117,10 +131,18 @@ export function showBuyProviderAlert(
   onCancel?: () => void,
   chainId?: number,
 ): void {
-  if (!isBuyAvailableOnChain(chainId)) {
+  const availability = getBuyAvailability(chainId);
+  if (availability === 'testnet') {
     Alert.alert(
       '테스트넷에서는 구매할 수 없습니다',
       '테스트넷 토큰은 실제 가치가 없으며 Faucet에서 무료로 받을 수 있습니다.',
+    );
+    return;
+  }
+  if (availability === 'unsupported') {
+    Alert.alert(
+      UNSUPPORTED_ON_NETWORK_MESSAGE,
+      '외부 결제 서비스는 Ethereum, Polygon, Arbitrum, Optimism, Base 네트워크로만 보낼 수 있습니다. 네트워크를 바꾼 뒤 다시 시도해주세요.',
     );
     return;
   }
@@ -174,6 +196,7 @@ export function isBuySupported(symbol: string): boolean {
 
 export const buyService = {
   generateBuyUrl,
+  getBuyAvailability,
   isBuyAvailableOnChain,
   openBuyUrl,
   showBuyProviderAlert,

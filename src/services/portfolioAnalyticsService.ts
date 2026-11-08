@@ -4,6 +4,15 @@
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import type { Token } from './tokenService';
+import { isSnapshotReliable, tokenUsdValue } from './tokenValuation';
+
+// 합산 규칙은 홈/포트폴리오와 같은 tokenValuation 모듈을 쓴다 (기존 import 경로 호환).
+export {
+  isSnapshotReliable,
+  snapshotBlocker,
+  tokenUsdValue,
+} from './tokenValuation';
+export type { SnapshotBlocker } from './tokenValuation';
 
 // 포트폴리오 스냅샷
 export interface PortfolioSnapshot {
@@ -32,10 +41,13 @@ export interface PortfolioStats {
   changePercent7d: number | null;
   change30d: number | null;
   changePercent30d: number | null;
-  /** 기록된 총 자산액 중 최고/최저/평균 (토큰 가격이 아님) */
-  highestValue: number;
-  lowestValue: number;
-  averageValue: number;
+  /**
+   * 기록된 총 자산액 중 최고/최저/평균 (토큰 가격이 아님).
+   * 기록도 없고 지금 총액도 믿을 수 없으면 null('—', 요약 카드 숨김)이다.
+   */
+  highestValue: number | null;
+  lowestValue: number | null;
+  averageValue: number | null;
 }
 
 // 성과 지표
@@ -61,33 +73,10 @@ export type TokenLike = Pick<Token, 'symbol' | 'value' | 'balance'> &
       | 'isTestnet'
       | 'priceChange24h'
       | 'logoUrl'
+      | 'coingeckoId'
+      | 'hasPriceSource'
     >
   >;
-
-/** 토큰의 USD 가치 (모르면 null). usdValue가 없는 과거 형식은 value를 사용 */
-export function tokenUsdValue(token: TokenLike): number | null {
-  if (token.balanceError || token.isTestnet) return null;
-  if (token.usdValue !== undefined) return token.usdValue;
-  if (token.priceAvailable === false) return null;
-  return Number.isFinite(token.value) ? token.value : null;
-}
-
-function hasBalance(token: TokenLike): boolean {
-  const amount = Number(token.balanceRaw ?? token.balance);
-  return Number.isFinite(amount) ? amount > 0 : true;
-}
-
-/**
- * 스냅샷으로 저장해도 되는지: 조회 실패나 가격 미확인 때문에 0으로 계산된
- * 총액이 기록되면 차트와 변동률이 거짓이 되므로 저장하지 않는다.
- */
-export function isSnapshotReliable(tokens: TokenLike[]): boolean {
-  if (tokens.length === 0) return false;
-  return tokens.every(token => {
-    if (token.balanceError || token.isTestnet) return false;
-    return tokenUsdValue(token) !== null || !hasBalance(token);
-  });
-}
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -308,15 +297,15 @@ export class PortfolioAnalyticsService {
     const d7 = compare(7 * DAY_MS, 1.5 * DAY_MS);
     const d30 = compare(30 * DAY_MS, 4 * DAY_MS);
 
-    // 기록된 총 자산액의 최고/최저/평균
+    // 기록된 총 자산액의 최고/최저/평균 (믿을 수 없는 현재 값/부분합으로 채우지 않는다)
     const values = history.map(s => s.totalValue).filter(Number.isFinite);
     if (currentReliable) values.push(currentValue);
 
-    const highestValue = values.length ? Math.max(...values) : currentValue;
-    const lowestValue = values.length ? Math.min(...values) : currentValue;
+    const highestValue = values.length ? Math.max(...values) : null;
+    const lowestValue = values.length ? Math.min(...values) : null;
     const averageValue = values.length
       ? values.reduce((a, b) => a + b, 0) / values.length
-      : currentValue;
+      : null;
 
     return {
       totalValue: currentValue,

@@ -5,6 +5,9 @@
  * - 기간을 바꾸면 차트 영역에 로딩 표시를 한다.
  * - 현재 네트워크에서 이 자산을 보유 중이면 보유량과 보내기/스왑을 보여 준다.
  * - 조회 실패는 $0.00이 아니라 '—'와 다시 시도로 표시한다.
+ * - 구매: 이 코인이 현재 네트워크의 자산(같은 시세 ID의 토큰)일 때만 지갑 주소와
+ *   네트워크를 결제 화면에 넘긴다. 그 밖의 코인(BTC, SOL 등)은 EVM 주소나 현재
+ *   네트워크를 붙이지 않고 결제 화면에서 받을 주소를 직접 입력하게 한다.
  */
 
 import React, { useState, useCallback, useEffect, useMemo } from 'react';
@@ -55,6 +58,24 @@ function formatChartLabel(timestamp: number, range: TimeRange): string {
     return `${date.getHours()}:${String(date.getMinutes()).padStart(2, '0')}`;
   }
   return `${date.getMonth() + 1}/${date.getDate()}`;
+}
+
+/**
+ * 현재 네트워크로 받을 수 없는 코인을 살 때의 안내
+ * (테스트넷/직접 추가한 네트워크/그 밖의 네트워크를 구분해, 예컨대 BNB Chain의 BNB를
+ *  "BNB Chain의 자산이 아니다"라고 잘못 말하지 않는다)
+ */
+export function buyAddressHint(
+  network: { name: string; isTestnet?: boolean; isCustom?: boolean } | undefined,
+): string {
+  const name = network?.name ?? '현재 네트워크';
+  if (network?.isTestnet) {
+    return `${name}은(는) 테스트넷이라 구매한 자산을 받을 수 없습니다. 받을 주소와 네트워크를 결제 화면에서 직접 입력하세요.`;
+  }
+  if (network?.isCustom) {
+    return `직접 추가한 네트워크(${name})는 결제 서비스가 지원하지 않아, 받을 주소와 네트워크를 결제 화면에서 직접 입력해야 합니다.`;
+  }
+  return `${name}에서 받을 수 있는 자산으로 확인되지 않아, 받을 주소와 네트워크를 결제 화면에서 직접 입력해야 합니다.`;
 }
 
 function isHeld(token: Token): boolean {
@@ -125,6 +146,12 @@ function CoinDetailScreen(): React.JSX.Element {
     );
   }, [tokensQuery.data, coinId]);
 
+  // 현재 네트워크의 토큰 목록에 같은 시세 ID가 있으면(보유하지 않아도) 이 네트워크로 받을 수 있다.
+  const onActiveNetwork = useMemo(() => {
+    const list = Array.isArray(tokensQuery.data) ? tokensQuery.data : [];
+    return list.some(token => token.coingeckoId === coinId);
+  }, [tokensQuery.data, coinId]);
+
   const chart = useMemo(() => {
     const points = historyQuery.data?.prices ?? [];
     return {
@@ -149,13 +176,24 @@ function CoinDetailScreen(): React.JSX.Element {
   }, [detailQuery, historyQuery, tokensQuery, activeWallet?.address]);
 
   const handleBuy = useCallback(() => {
+    if (!onActiveNetwork || !activeWallet?.address) {
+      // 현재 네트워크의 자산이 아니면 EVM 주소/네트워크를 붙이지 않는다
+      // (다른 체인 코인에 0x 주소를 채우거나, 엉뚱한 네트워크로 보내지 않게).
+      showBuyProviderAlert(coinSymbol);
+      return;
+    }
     showBuyProviderAlert(
       coinSymbol,
-      activeWallet?.address,
+      activeWallet.address,
       undefined,
       activeNetworkChainId,
     );
-  }, [coinSymbol, activeWallet?.address, activeNetworkChainId]);
+  }, [
+    coinSymbol,
+    activeWallet?.address,
+    activeNetworkChainId,
+    onActiveNetwork,
+  ]);
 
   const handleSend = useCallback(() => {
     if (!holding) return;
@@ -389,6 +427,11 @@ function CoinDetailScreen(): React.JSX.Element {
           >
             <BuyButtonText>{coinSymbol.toUpperCase()} 구매하기</BuyButtonText>
           </BuyButton>
+          {!onActiveNetwork && tokensQuery.data ? (
+            <BuyHint testID="coin-detail-buy-hint">
+              {buyAddressHint(activeNetwork)}
+            </BuyHint>
+          ) : null}
 
           {/* 시장 정보 */}
           <Section>
@@ -568,6 +611,14 @@ const BuyButtonText = styled.Text`
   color: ${({ theme }) => theme.colors.onPrimary};
   font-size: ${({ theme }) => theme.typography.button.fontSize}px;
   font-weight: 600;
+`;
+
+const BuyHint = styled.Text`
+  color: ${({ theme }) => theme.colors.textSecondary};
+  font-size: ${({ theme }) => theme.typography.caption.fontSize}px;
+  text-align: center;
+  margin-top: -${({ theme }) => theme.spacing.sm}px;
+  margin-bottom: ${({ theme }) => theme.spacing.lg}px;
 `;
 
 const Section = styled.View`

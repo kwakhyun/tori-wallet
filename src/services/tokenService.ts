@@ -2,13 +2,19 @@
  * ERC-20 토큰 잔액 및 가격 조회 서비스
  *
  * 조회 실패를 0으로 위장하지 않는다.
- *  - 잔액 조회 실패: balanceError = true, balance = '—', usdValue = null
+ *  - 잔액 조회 실패: balanceError = true, balance/balanceRaw = '—', value = NaN,
+ *    usdValue = null (숫자로 해석하면 NaN이라 어디서도 0으로 보이지 않는다)
  *  - 가격 조회 실패/테스트넷: priceAvailable = false, usdValue = null
- * 기존 호출부 호환을 위해 price/value 숫자 필드는 유지하되 모르면 0이다.
+ *  - 시세 출처가 없는 토큰(사용자 토큰, 커스텀 네트워크 기본 자산): hasPriceSource = false
+ * 기존 호출부 호환을 위해 price 숫자 필드는 유지하되 가격을 모르면 0이다.
  * 가치를 표시할 때는 반드시 usdValue(또는 priceAvailable)를 확인한다.
+ *
+ * 기본 체인 6개 외에 사용자가 추가한 커스텀 네트워크도 지원한다
+ * (기본 자산 = 네트워크 통화, RPC = 등록된 RPC, 시세 없음).
  */
 
 import { createPublicClient, http, formatUnits, isAddress } from 'viem';
+import type { Chain, PublicClient } from 'viem';
 import {
   mainnet,
   sepolia,
@@ -20,6 +26,14 @@ import {
 import { tokenListService } from '@/realm/services';
 import { createLogger } from '@/utils/logger';
 import { formatDisplayAmount } from '@/utils/format';
+import { chainClient } from './chainClient';
+import { customNetworkRegistry } from './customNetworks';
+import {
+  isTestnetChainId,
+  summarizeTokenTotal,
+  tokenUsdValue,
+  type TotalSummary,
+} from './tokenValuation';
 
 const logger = createLogger('TokenService');
 
@@ -30,13 +44,18 @@ export interface Token {
   decimals: number;
   /** 화면 표시용 수량 (잔액 조회 실패 시 '—') */
   balance: string;
-  /** 소수 단위 전체 정밀도 수량 문자열 (예: "1.234567890123456789"). 실패 시 '0' */
+  /**
+   * 소수 단위 전체 정밀도 수량 문자열 (예: "1.234567890123456789").
+   * 잔액 조회 실패 시 숫자가 아닌 '—' — 계산 전에 balanceError를 확인한다.
+   */
   balanceRaw: string;
   /** USD 가격. 모르면 0 — priceAvailable 확인 */
   price: number;
   /** 24시간 변동률(%). 모르면 0 — priceAvailable 확인 */
   priceChange24h: number;
-  /** USD 가치. 모르면 0 — usdValue 확인 */
+  /**
+   * USD 가치 (과거 형식). 가격을 모르면 0, 잔액 조회 실패 시 NaN — usdValue를 사용한다.
+   */
   value: number;
   logoUrl?: string;
   // ── 아래 필드는 getTokens가 항상 채운다 (직접 만든 객체 호환을 위해 선택 필드) ──
@@ -51,6 +70,11 @@ export interface Token {
   isCustom?: boolean;
   /** 테스트넷 자산 (실제 가치 없음) */
   isTestnet?: boolean;
+  /**
+   * 시세 출처(coingeckoId)가 있는지. false면 가격을 처음부터 알 수 없어
+   * 합계에서 빠진다 (조회 실패와 구분). 테스트넷은 항상 false.
+   */
+  hasPriceSource?: boolean;
 }
 
 export interface TokenConfig {
@@ -172,14 +196,9 @@ export const DEFAULT_TOKENS: Record<number, TokenConfig[]> = {
   ],
 };
 
-/** 실제 가치가 없는 테스트넷 체인 */
-const TESTNET_CHAIN_IDS = new Set<number>([11155111, 5, 17000, 80002, 84532]);
-
+/** 실제 가치가 없는 테스트넷 체인 (테스트넷으로 등록한 커스텀 네트워크 포함) */
 export function isTestnetChain(chainId: number): boolean {
-  return (
-    TESTNET_CHAIN_IDS.has(chainId) ||
-    (CHAINS[chainId] as { testnet?: boolean } | undefined)?.testnet === true
-  );
+  return isTestnetChainId(chainId) || CHAINS[chainId]?.testnet === true;
 }
 
 const ERC20_ABI = [
@@ -214,15 +233,7 @@ const ERC20_ABI = [
 ] as const;
 
 // 체인 설정
-const CHAINS: Record<
-  number,
-  | typeof mainnet
-  | typeof sepolia
-  | typeof polygon
-  | typeof arbitrum
-  | typeof optimism
-  | typeof base
-> = {
+const CHAINS: Record<number, Chain> = {
   1: mainnet,
   11155111: sepolia,
   137: polygon,
@@ -270,20 +281,44 @@ class TokenService {
   > = new Map();
   private priceCacheDuration = 60000; // 1분
 
-  /** 체인의 기본 토큰 목록 (토큰 관리 화면용) */
+  /**
+   * 체인의 기본 토큰 목록 (토큰 관리 화면용)
+   * 커스텀 네트워크는 네트워크 통화 하나(시세 출처 없음)를 기본 자산으로 둔다.
+   */
   getDefaultTokens(chainId: number): TokenConfig[] {
-    return (DEFAULT_TOKENS[chainId] || []).map(config => ({ ...config }));
+    const defaults = DEFAULT_TOKENS[chainId];
+    if (defaults) return defaults.map(config => ({ ...config }));
+    const custom = customNetworkRegistry.get(chainId);
+    if (!custom) return [];
+    return [
+      {
+        symbol: custom.symbol,
+        name: custom.name,
+        address: 'native',
+        decimals: 18,
+      },
+    ];
   }
 
   isTestnet(chainId: number): boolean {
     return isTestnetChain(chainId);
   }
 
-  private getClient(chainId: number) {
+  /** 기본 체인은 전용 RPC, 커스텀 네트워크는 chainClient(등록된 RPC)를 쓴다. */
+  private getClient(chainId: number): PublicClient | null {
     const chain = CHAINS[chainId];
     const rpcUrl = RPC_URLS[chainId];
-    if (!chain || !rpcUrl) return null;
-    return createPublicClient({ chain, transport: http(rpcUrl) });
+    if (chain && rpcUrl) {
+      return createPublicClient({ chain, transport: http(rpcUrl) });
+    }
+    try {
+      return chainClient.isSupportedChain(chainId)
+        ? chainClient.getClient(chainId)
+        : null;
+    } catch (error) {
+      logger.warn(`No RPC client for chain ${chainId}`, error);
+      return null;
+    }
   }
 
   /**
@@ -376,8 +411,10 @@ class TokenService {
     prices: Record<string, TokenPrice>,
     testnet: boolean,
   ): Token {
-    const priceInfo =
-      !testnet && config.coingeckoId ? prices[config.coingeckoId] : undefined;
+    const hasPriceSource = !testnet && !!config.coingeckoId;
+    const priceInfo = hasPriceSource
+      ? prices[config.coingeckoId as string]
+      : undefined;
     const priceAvailable = !!priceInfo;
     const balanceError = balance === null;
     const balanceNum = balanceError ? 0 : Number(balance);
@@ -392,13 +429,15 @@ class TokenService {
       address: config.address,
       decimals: config.decimals,
       balance: balanceError ? '—' : formatDisplayAmount(balance),
-      balanceRaw: balanceError ? '0' : balance,
+      // 실패를 '0'/0으로 위장하지 않는다 (Number('—') = NaN → 표시 '—').
+      balanceRaw: balanceError ? '—' : balance,
       price: priceInfo?.price ?? 0,
       priceChange24h: priceInfo?.change24h ?? 0,
-      value: usdValue ?? 0,
+      value: balanceError ? Number.NaN : usdValue ?? 0,
       usdValue,
       priceAvailable,
       balanceError,
+      hasPriceSource,
       logoUrl: config.logoUrl,
       coingeckoId: config.coingeckoId,
       isCustom: !!config.isCustom,
@@ -556,31 +595,33 @@ class TokenService {
   }
 
   /**
-   * 총 자산 가치 계산 (가치를 아는 토큰만 합산)
+   * 가치를 아는 토큰의 합 (모르는 토큰은 건너뛴다)
+   * 화면에 총 자산을 표시할 때는 getDisplayTotal을 쓴다 — 아무것도 모르면 0이 아니라 null이다.
    */
   getTotalValue(tokens: Token[]): number {
-    return tokens.reduce((sum, token) => {
-      if (token.usdValue === null || token.balanceError) return sum;
-      return sum + (token.usdValue ?? token.value ?? 0);
-    }, 0);
+    return tokens.reduce((sum, token) => sum + (tokenUsdValue(token) ?? 0), 0);
   }
 
   /**
-   * 총 자산 가치를 확정할 수 있는지 (잔액이 있는데 가치를 모르는 토큰이 없을 때)
+   * 화면에 표시할 총 자산과 합계에서 빠진 자산 종류 (홈/포트폴리오 공통 규칙)
+   * - 목록이 비었거나, 가치를 아는 토큰 없이 가치를 모르는 보유 토큰만 있으면 total = null
+   */
+  getDisplayTotal(tokens: Token[]): TotalSummary {
+    return summarizeTokenTotal(tokens);
+  }
+
+  /**
+   * 총 자산 가치를 확정할 수 있는지: 조회 실패로 빠진 보유 자산이 없을 때
+   * (시세 출처가 없는 자산은 처음부터 합계 대상이 아니므로 확정을 막지 않는다)
    */
   isTotalComplete(tokens: Token[]): boolean {
-    return tokens.every(
-      token =>
-        !token.balanceError &&
-        (token.usdValue !== null || Number(token.balanceRaw) === 0),
-    );
+    const summary = summarizeTokenTotal(tokens);
+    return summary.total !== null && !summary.partial;
   }
 
   /** 토큰의 USD 가치 (모르면 null) */
   getUsdValue(token: Token): number | null {
-    if (token.balanceError || token.isTestnet) return null;
-    if (token.usdValue !== undefined) return token.usdValue;
-    return token.priceAvailable === false ? null : token.value;
+    return tokenUsdValue(token);
   }
 
   /**

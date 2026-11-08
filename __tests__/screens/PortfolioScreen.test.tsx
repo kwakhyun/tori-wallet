@@ -195,8 +195,100 @@ describe('PortfolioScreen', () => {
         contractAddress: USDC,
         decimals: 6,
         usdValue: 500,
+        chainId: 1,
       }),
     );
+  });
+
+  describe('unknown values', () => {
+    const NULL_STATS = {
+      totalValue: 0,
+      change24h: null,
+      changePercent24h: null,
+      change7d: null,
+      changePercent7d: null,
+      change30d: null,
+      changePercent30d: null,
+      highestValue: null,
+      lowestValue: null,
+      averageValue: null,
+    };
+
+    it('shows a dash (not $0.00) and hides the recorded summary when prices fail', async () => {
+      mockGetTokens.mockResolvedValue([
+        {
+          ...TOKENS[0],
+          price: 0,
+          priceChange24h: 0,
+          value: 0,
+          usdValue: null,
+          priceAvailable: false,
+          hasPriceSource: true,
+        },
+      ]);
+      mockCalculateStats.mockResolvedValue(NULL_STATS);
+      render(<PortfolioScreen />);
+      await waitFor(() => {
+        expect(screen.getByTestId('portfolio-total-value')).toHaveTextContent(
+          '—',
+        );
+      });
+      expect(screen.getByTestId('portfolio-total-lookupFailed')).toBeTruthy();
+      await waitFor(() => screen.getByText('성과 지표'));
+      expect(screen.queryByText('기록된 총 자산 요약')).toBeNull();
+      expect(screen.queryByText('$0.00')).toBeNull();
+      // 차트는 "하루 한 번 기록" 대신 기록하지 못한 이유를 보여 준다
+      expect(
+        screen.getByText(
+          '잔액이나 시세를 불러오지 못해 기록하지 않았습니다. 아래로 당겨 다시 시도하세요.',
+        ),
+      ).toBeTruthy();
+      expect(
+        screen.queryByText('포트폴리오 탭을 열 때마다 하루 한 번 기록됩니다.'),
+      ).toBeNull();
+    });
+
+    it('shows a dash for an empty token list', async () => {
+      mockGetTokens.mockResolvedValue([]);
+      mockCalculateStats.mockResolvedValue(NULL_STATS);
+      render(<PortfolioScreen />);
+      await waitFor(() => {
+        expect(screen.getByTestId('portfolio-total-value')).toHaveTextContent(
+          '—',
+        );
+      });
+    });
+
+    it('separates assets without a price source from failed lookups', async () => {
+      mockGetTokens.mockResolvedValue([
+        { ...TOKENS[0], hasPriceSource: true },
+        {
+          ...TOKENS[1],
+          symbol: 'MYTOKEN',
+          name: 'My Token',
+          price: 0,
+          value: 0,
+          usdValue: null,
+          priceAvailable: false,
+          coingeckoId: undefined,
+          isCustom: true,
+          hasPriceSource: false,
+        },
+      ]);
+      render(<PortfolioScreen />);
+      await waitFor(() => {
+        expect(screen.getByTestId('portfolio-total-value')).toHaveTextContent(
+          '$3,000.00',
+        );
+      });
+      expect(
+        screen.getByTestId('portfolio-total-unpriceable'),
+      ).toHaveTextContent('시세 정보가 없는 자산은 합계에서 제외됩니다');
+      expect(screen.queryByTestId('portfolio-total-partial')).toBeNull();
+      expect(
+        screen.getByText('포트폴리오 탭을 열 때마다 하루 한 번 기록됩니다.'),
+      ).toBeTruthy();
+    });
   });
 
   it('supports pull to refresh on the overview tab', async () => {

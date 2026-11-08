@@ -4,6 +4,8 @@
  * - 네이티브 잔액(useBalance)과 토큰 목록(tokenService)을 따로 불러와
  *   시세 조회가 느려도 잔액은 먼저 보여 준다.
  * - 조회 실패는 0이 아니라 '—'와 다시 시도 버튼으로 표시한다.
+ * - 총 자산은 포트폴리오와 같은 규칙(tokenValuation)으로 계산한다: 가치를 아는 자산이
+ *   없으면 '—', 조회 실패/시세 정보 없음으로 빠진 자산은 아래에 안내한다.
  * - 테스트넷 자산은 법정화폐 가치를 표시하지 않는다.
  */
 
@@ -28,6 +30,11 @@ import { useWalletStore } from '@/store/walletStore';
 import { useBalance } from '@/hooks/useBalance';
 import { useFiat } from '@/hooks/useFiat';
 import { tokenService, type Token } from '@/services/tokenService';
+import {
+  summarizeTokenTotal,
+  totalNoteKind,
+  TOTAL_NOTES,
+} from '@/services/tokenValuation';
 import { showBuyProviderAlert } from '@/services/buyService';
 import { showToast } from '@/store/toastStore';
 import { formatDisplayAmount } from '@/utils/format';
@@ -137,17 +144,9 @@ function HomeScreen(): React.JSX.Element {
 
   const visibleTokens = useMemo(() => selectHomeTokens(tokens), [tokens]);
 
-  const totals = useMemo(() => {
-    const total = tokens.reduce((sum, t) => sum + (t.usdValue ?? 0), 0);
-    const unpriced = tokens.filter(
-      t => t.usdValue == null && (t.balanceError || hasPositiveBalance(t)),
-    );
-    const anyPriced = tokens.some(t => t.usdValue != null);
-    return {
-      total: unpriced.length > 0 && !anyPriced ? null : total,
-      partial: unpriced.length > 0 && anyPriced,
-    };
-  }, [tokens]);
+  // 포트폴리오와 같은 합산 규칙 (빈 목록/가치를 아는 자산이 없으면 null → '—')
+  const totals = useMemo(() => summarizeTokenTotal(tokens), [tokens]);
+  const totalNote = totalNoteKind(totals);
 
   const handleRefresh = useCallback(async () => {
     setIsPullRefreshing(true);
@@ -219,9 +218,12 @@ function HomeScreen(): React.JSX.Element {
 
   const handleTokenPress = useCallback(
     (token: Token) => {
-      navigation.navigate('TokenDetail', tokenDetailParams(token));
+      navigation.navigate(
+        'TokenDetail',
+        tokenDetailParams(token, activeNetworkChainId),
+      );
     },
-    [navigation],
+    [navigation, activeNetworkChainId],
   );
 
   if (!activeWallet) {
@@ -298,9 +300,9 @@ function HomeScreen(): React.JSX.Element {
         <BalanceLabel testID="home-balance-value">
           {mask(nativeBalanceText)}
         </BalanceLabel>
-        {totals.partial && !hideBalances ? (
-          <BalanceNote testID="home-total-partial">
-            일부 자산은 시세를 불러오지 못해 제외했습니다
+        {totalNote && tokenData && !hideBalances ? (
+          <BalanceNote testID={`home-total-${totalNote}`}>
+            {TOTAL_NOTES[totalNote]}
           </BalanceNote>
         ) : null}
       </>

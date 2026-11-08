@@ -7,20 +7,20 @@ import { render, screen, fireEvent, waitFor } from '../test-utils';
 import { usePreferencesStore } from '../../src/store/preferencesStore';
 
 const mockNavigate = jest.fn();
+const ETH_PARAMS = {
+  coinId: 'ethereum',
+  coinName: 'Ethereum',
+  coinSymbol: 'eth',
+  coinImage: 'https://example.com/eth.png',
+};
+let mockRouteParams: Record<string, string> = ETH_PARAMS;
 jest.mock('@react-navigation/native', () => ({
   useNavigation: () => ({
     navigate: mockNavigate,
     goBack: jest.fn(),
     canGoBack: () => true,
   }),
-  useRoute: () => ({
-    params: {
-      coinId: 'ethereum',
-      coinName: 'Ethereum',
-      coinSymbol: 'eth',
-      coinImage: 'https://example.com/eth.png',
-    },
-  }),
+  useRoute: () => ({ params: mockRouteParams }),
 }));
 
 const ADDRESS = '0x1234567890123456789012345678901234567890';
@@ -74,7 +74,9 @@ jest.mock('react-native-svg', () => {
   };
 });
 
-import CoinDetailScreen from '../../src/screens/CoinDetail/CoinDetailScreen';
+import CoinDetailScreen, {
+  buyAddressHint,
+} from '../../src/screens/CoinDetail/CoinDetailScreen';
 
 const DETAIL = {
   id: 'ethereum',
@@ -107,6 +109,7 @@ const history = (base: number) => ({
 describe('CoinDetailScreen', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    mockRouteParams = ETH_PARAMS;
     mockGetCoinDetail.mockResolvedValue(DETAIL);
     mockGetPriceHistory.mockImplementation((_id: string, days: string) =>
       Promise.resolve(history(days === '1' ? 2900 : 3000)),
@@ -183,8 +186,9 @@ describe('CoinDetailScreen', () => {
     expect(screen.queryByTestId('coin-detail-holding')).toBeNull();
   });
 
-  it('passes the wallet address and chain id to the buy flow', async () => {
+  it('passes the wallet address and chain id when the coin is on the active network', async () => {
     render(<CoinDetailScreen />);
+    await waitFor(() => screen.getByTestId('coin-detail-holding'));
     fireEvent.press(screen.getByTestId('coin-detail-buy'));
     expect(mockShowBuyProviderAlert).toHaveBeenCalledWith(
       'eth',
@@ -192,6 +196,48 @@ describe('CoinDetailScreen', () => {
       undefined,
       42161,
     );
+    expect(screen.queryByTestId('coin-detail-buy-hint')).toBeNull();
+  });
+
+  it('opens the buy flow for another chain coin without an EVM address or network', async () => {
+    mockRouteParams = {
+      coinId: 'bitcoin',
+      coinName: 'Bitcoin',
+      coinSymbol: 'btc',
+      coinImage: '',
+    };
+    mockGetCoinDetail.mockResolvedValue({ ...DETAIL, id: 'bitcoin' });
+    render(<CoinDetailScreen />);
+    await waitFor(() => screen.getByTestId('coin-detail-buy-hint'));
+    expect(screen.getByTestId('coin-detail-buy-hint')).toHaveTextContent(
+      'Arbitrum One에서 받을 수 있는 자산으로 확인되지 않아, 받을 주소와 네트워크를 결제 화면에서 직접 입력해야 합니다.',
+    );
+    fireEvent.press(screen.getByTestId('coin-detail-buy'));
+    expect(mockShowBuyProviderAlert).toHaveBeenCalledWith('btc');
+  });
+
+  it('does not tell a custom-network user that its own coin is not on that network', () => {
+    // 직접 추가한 BNB Chain에서 BNB를 볼 때 "BNB Chain의 자산이 아니라"라고 하지 않는다
+    const custom = buyAddressHint({
+      name: 'BNB Chain',
+      isCustom: true,
+      isTestnet: false,
+    });
+    expect(custom).toBe(
+      '직접 추가한 네트워크(BNB Chain)는 결제 서비스가 지원하지 않아, 받을 주소와 네트워크를 결제 화면에서 직접 입력해야 합니다.',
+    );
+    expect(custom).not.toContain('자산이 아니라');
+    // 테스트넷에서는 구매한 자산을 이 네트워크로 받을 수 없다고 분명히 알린다
+    expect(buyAddressHint({ name: 'Sepolia', isTestnet: true })).toBe(
+      'Sepolia은(는) 테스트넷이라 구매한 자산을 받을 수 없습니다. 받을 주소와 네트워크를 결제 화면에서 직접 입력하세요.',
+    );
+  });
+
+  it('does not prefill the address before the token list has loaded', () => {
+    mockGetTokens.mockReturnValue(new Promise(() => undefined));
+    render(<CoinDetailScreen />);
+    fireEvent.press(screen.getByTestId('coin-detail-buy'));
+    expect(mockShowBuyProviderAlert).toHaveBeenCalledWith('eth');
   });
 
   it('shows an error with retry instead of $0.00 when details fail', async () => {
