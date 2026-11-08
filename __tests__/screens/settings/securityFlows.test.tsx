@@ -310,9 +310,13 @@ describe('PinPrompt lockout UX', () => {
 
     await enterPin(getByTestId, 'prompt', '000000');
 
-    expect(getByTestId('prompt-error').props.children).toBe(
-      'PIN 입력이 제한되었습니다. 00:30 후 다시 시도해주세요.',
-    );
+    // 바뀌지 않는 안내만 라이브 영역으로 한 번 낭독하고, 남은 시간은 낭독 영역 밖에 둔다.
+    const notice = getByTestId('prompt-error');
+    expect(notice.props.children).toBe('PIN 입력이 제한되었습니다.');
+    expect(notice.props.accessibilityLiveRegion).toBe('polite');
+    const countdown = getByTestId('prompt-lockout-countdown');
+    expect(countdown.props.children).toBe('00:30 후 다시 시도해주세요.');
+    expect(countdown.props.accessibilityLiveRegion).toBeUndefined();
     expect(getByTestId('prompt-key-1').props.accessibilityState.disabled).toBe(
       true,
     );
@@ -321,8 +325,8 @@ describe('PinPrompt lockout UX', () => {
     await act(async () => {
       jest.advanceTimersByTime(1000);
     });
-    expect(getByTestId('prompt-error').props.children).toBe(
-      'PIN 입력이 제한되었습니다. 00:29 후 다시 시도해주세요.',
+    expect(getByTestId('prompt-lockout-countdown').props.children).toBe(
+      '00:29 후 다시 시도해주세요.',
     );
 
     // 제한 중에는 입력을 받지 않는다.
@@ -342,8 +346,33 @@ describe('PinPrompt lockout UX', () => {
       '다시 틀리면 PIN 입력이 1분 동안 제한됩니다.',
     );
     expect(queryByTestId('prompt-error')).toBeNull();
+    expect(queryByTestId('prompt-lockout')).toBeNull();
 
     await enterPin(getByTestId, 'prompt', CORRECT_PIN);
     expect(onVerified).toHaveBeenCalledWith(MNEMONIC, CORRECT_PIN);
+  });
+
+  it('shows a lockout that started elsewhere as soon as the prompt opens', async () => {
+    // 예: 잠금 해제 화면에서 시작된 제한이 남아 있는 상태로 복구 구문 보기를 연다.
+    jest
+      .spyOn(pinAttemptService, 'getStatus')
+      .mockResolvedValue({ failures: 6, blockedUntil: Date.now() + 90_000 });
+    const { getByTestId, findByTestId } = wrap(
+      <PinPrompt
+        description="PIN을 입력하세요."
+        onVerified={jest.fn()}
+        testIDPrefix="prompt"
+      />,
+    );
+
+    await findByTestId('prompt-lockout');
+    expect(getByTestId('prompt-lockout-countdown').props.children).toMatch(
+      /^01:(30|29) 후 다시 시도해주세요\.$/,
+    );
+    expect(getByTestId('prompt-key-1').props.accessibilityState.disabled).toBe(
+      true,
+    );
+    fireEvent.press(getByTestId('prompt-key-1'));
+    expect(mockRetrieveMnemonicWithPin).not.toHaveBeenCalled();
   });
 });

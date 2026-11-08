@@ -148,13 +148,17 @@ export function ForgotPinPanel({
             testID="forgot-pin-reset"
             onPress={handleReset}
             disabled={!canReset}
-            $enabled={canReset}
+            // 초기화 중에는 누를 수 없지만 활성 배경을 유지해 흰 스피너가 보이게 한다.
+            $enabled={canReset || isResetting}
             accessibilityRole="button"
             accessibilityLabel="지갑 초기화"
             accessibilityState={{ disabled: !canReset, busy: isResetting }}
           >
             {isResetting ? (
-              <ActivityIndicator color={theme.colors.onError} />
+              <ActivityIndicator
+                color={theme.colors.onError}
+                testID="forgot-pin-reset-spinner"
+              />
             ) : (
               <ResetButtonText $enabled={canReset}>지갑 초기화</ResetButtonText>
             )}

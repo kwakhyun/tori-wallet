@@ -95,10 +95,16 @@ export function PinPrompt({
     <Wrapper testID={`${testIDPrefix}-prompt`}>
       <Description>{description}</Description>
       {lockout.isLocked ? (
-        // 1초마다 바뀌는 문구라 라이브 영역으로 두지 않는다 (매초 낭독 방지).
-        <LockoutText testID={`${testIDPrefix}-error`} accessibilityRole="alert">
-          {`PIN 입력이 제한되었습니다. ${lockout.countdown} 후 다시 시도해주세요.`}
-        </LockoutText>
+        <LockoutBox testID={`${testIDPrefix}-lockout`}>
+          {/* 바뀌지 않는 안내만 라이브 영역에 두어 제한이 시작될 때 한 번 낭독한다. */}
+          <ErrorMessage testID={`${testIDPrefix}-error`}>
+            PIN 입력이 제한되었습니다.
+          </ErrorMessage>
+          {/* 1초마다 바뀌는 남은 시간은 라이브 영역으로 두지 않는다 (매초 낭독 방지). */}
+          <LockoutCountdown testID={`${testIDPrefix}-lockout-countdown`}>
+            {`${lockout.countdown} 후 다시 시도해주세요.`}
+          </LockoutCountdown>
+        </LockoutBox>
       ) : error ? (
         <ErrorMessage testID={`${testIDPrefix}-error`}>{error}</ErrorMessage>
       ) : null}
@@ -191,11 +197,16 @@ const Description = styled.Text`
   margin-bottom: ${({ theme }) => theme.spacing.md}px;
 `;
 
-const LockoutText = styled.Text`
+const LockoutBox = styled.View`
+  align-items: center;
+  margin-bottom: ${({ theme }) => theme.spacing.sm}px;
+`;
+
+const LockoutCountdown = styled.Text`
   color: ${({ theme }) => theme.colors.error};
   font-size: 14px;
+  font-variant: tabular-nums;
   text-align: center;
-  margin: ${({ theme }) => theme.spacing.sm}px 0;
 `;
 
 // 잠금 해제 화면과 같은 표현: 제한이 가까우면 경고색으로 강조한다.
