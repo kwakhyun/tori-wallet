@@ -11,7 +11,8 @@ import {
 } from '@/services/txService';
 
 const SPEED_HINTS: Record<FeeSpeed, string> = {
-  slow: '수수료가 낮지만 처리가 늦어질 수 있습니다',
+  // 우선 수수료는 권장값 그대로 두고 최대 수수료 상한만 낮춘다 (txService.applyFeeSpeed).
+  slow: '최대 수수료를 낮게 잡아 네트워크가 붐비면 처리가 늦어질 수 있습니다',
   normal: '네트워크 권장 수수료',
   fast: '수수료를 더 내고 빠르게 처리합니다',
 };

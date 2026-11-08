@@ -26,7 +26,7 @@ import {
 import { useQuery } from '@tanstack/react-query';
 import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
-import { formatUnits, getAddress, isAddress } from 'viem';
+import { formatEther, formatUnits, getAddress, isAddress } from 'viem';
 import type { RootStackParamList } from '@/navigation/RootNavigator';
 import { useWalletStore } from '@/store/walletStore';
 import { useSecurityStore } from '@/store/securityStore';
@@ -1082,6 +1082,9 @@ function SendTransactionScreen(): React.JSX.Element {
             <GasFiat>
               ≈ {formatFiat(feeUsd(preview.fee), { ignoreHidden: true })}
             </GasFiat>
+            {preview.l1FeeWei > 0n ? (
+              <GasFiat testID="send-fee-l1-note">L1 데이터 수수료 포함</GasFiat>
+            ) : null}
           </GasValueColumn>
         </GasEstimate>
       )}
@@ -1168,13 +1171,9 @@ function SendTransactionScreen(): React.JSX.Element {
           </ConfirmValue>
         </ConfirmRow>
         <ConfirmRow>
-          <ConfirmLabel>
-            {[10, 8453, 42161].includes(plan?.chainId || 0)
-              ? '최대 실행 수수료 (L1 비용 별도)'
-              : '최대 수수료'}
-          </ConfirmLabel>
+          <ConfirmLabel>최대 수수료</ConfirmLabel>
           <ConfirmValueColumn>
-            <ConfirmValue>
+            <ConfirmValue testID="send-confirm-fee">
               {plan?.fee || '0'} {planFeeSymbol}
             </ConfirmValue>
             <ConfirmSub>
@@ -1183,6 +1182,12 @@ function SendTransactionScreen(): React.JSX.Element {
                 ? ` · ≈ ${formatFiat(feeUsd(plan.fee), { ignoreHidden: true })}`
                 : ''}
             </ConfirmSub>
+            {plan && plan.l1FeeWei > 0n ? (
+              <ConfirmSub testID="send-confirm-l1-fee">
+                L1 데이터 수수료 최대 {formatDisplayAmount(formatEther(plan.l1FeeWei))}{' '}
+                {planFeeSymbol} 포함
+              </ConfirmSub>
+            ) : null}
           </ConfirmValueColumn>
         </ConfirmRow>
       </ConfirmCard>

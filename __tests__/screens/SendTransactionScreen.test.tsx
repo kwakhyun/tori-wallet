@@ -21,6 +21,7 @@ let mockPinProps: any;
 let mockQrProps: any;
 let mockAddressBookProps: any;
 let mockRecentAddresses: { address: string; lastUsed: number }[];
+let mockActiveChainId = 1;
 const mockWallet = { address: mockAddress };
 const mockRefetch = jest.fn();
 const mockReadContract = jest.fn();
@@ -53,7 +54,7 @@ jest.mock('../../src/store/walletStore', () => ({
   useWalletStore: () => ({
     wallets: [mockWallet],
     activeWalletIndex: 0,
-    activeNetworkChainId: 1,
+    activeNetworkChainId: mockActiveChainId,
     networks: [
       {
         chainId: 1,
@@ -63,6 +64,7 @@ jest.mock('../../src/store/walletStore', () => ({
         blockExplorerUrl: 'https://etherscan.io',
       },
       { chainId: 137, name: 'Polygon', symbol: 'MATIC' },
+      { chainId: 8453, name: 'Base', symbol: 'ETH', isTestnet: false },
     ],
   }),
 }));
@@ -166,6 +168,7 @@ beforeEach(() => {
   ensService.clearCache();
   mockRouteParams = {};
   mockRecentAddresses = [];
+  mockActiveChainId = 1;
   mockRequiresPin.mockReturnValue(true);
   mockNativeBalance.mockResolvedValue(parseEther('10'));
   mockReadContract.mockImplementation(async ({ address, functionName }) => {
@@ -458,6 +461,49 @@ it('calculates native MAX before a recipient is entered and reserves the fee', a
   expect(
     BigInt(transaction.value) + BigInt(transaction.gas) * 1_000_000_000n,
   ).toBe(parseEther('10'));
+});
+
+it('reserves the L1 data fee for native MAX on Base and shows it in review', async () => {
+  mockActiveChainId = 8453;
+  const l1Fee = 1_000_000_000_000n;
+  mockReadContract.mockImplementation(async ({ functionName }) =>
+    functionName === 'getL1Fee' ? l1Fee : undefined,
+  );
+  const view = mount();
+  fireEvent.press(view.getByTestId('send-max-button'));
+  await flush(10);
+
+  const executionFee = 25_200n * 1_000_000_000n;
+  const l1Reserve = l1Fee * 2n;
+  expect(view.getByTestId('send-amount-input').props.value).toBe(
+    formatEther(parseEther('10') - executionFee - l1Reserve),
+  );
+
+  fireEvent.changeText(view.getByTestId('send-address-input'), recipient);
+  await flush();
+  expect(view.getByTestId('send-fee-l1-note')).toHaveTextContent(
+    'L1 데이터 수수료 포함',
+  );
+  await review(view);
+  expect(view.getByText('최대 수수료')).toBeTruthy();
+  expect(view.queryByText(/L1 비용 별도/)).toBeNull();
+  expect(view.getByTestId('send-confirm-l1-fee')).toHaveTextContent(
+    /L1 데이터 수수료 최대 0\.000002 ETH 포함/,
+  );
+  await confirmWithPin(view);
+  const transaction = (signingService.sendTransaction as jest.Mock).mock
+    .calls[0][0];
+  // 노드의 잔액 검사(value + gas × 가스 가격 + L1 비용)를 통과할 여유가 남는다.
+  expect(
+    BigInt(transaction.value) +
+      BigInt(transaction.gas) * 1_000_000_000n +
+      l1Reserve,
+  ).toBe(parseEther('10'));
+  expect(signingService.sendTransaction).toHaveBeenCalledWith(
+    expect.anything(),
+    8453,
+    expect.any(Function),
+  );
 });
 
 it('passes the USD value of the transfer to the PIN policy', async () => {

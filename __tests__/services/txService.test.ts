@@ -5,9 +5,10 @@
 import {
   txService,
   applyFeeSpeed,
+  chargesL1DataFee,
   getAddressFormatIssue,
 } from '../../src/services/txService';
-import { parseEther } from 'viem';
+import { formatEther, parseEther } from 'viem';
 
 // chainClient 모킹
 jest.mock('../../src/services/chainClient', () => ({
@@ -327,7 +328,40 @@ describe('TxService - Error Handling', () => {
       };
 
       await expect(txService.estimateTransaction(request)).rejects.toThrow(
-        '가스 비용을 추정할 수 없습니다. 수동으로 가스를 입력해주세요.',
+        '수수료를 추정하지 못했습니다. 받는 주소가 이 전송을 거부하거나 네트워크 오류일 수 있습니다.',
+      );
+      // 없는 수동 가스 입력란을 안내하지 않는다.
+      chainClient.estimateGas.mockRejectedValueOnce(new Error('RPC timeout'));
+      await expect(
+        txService.estimateTransaction(request),
+      ).rejects.not.toThrow('수동');
+    });
+
+    it('says the recipient rejected the transfer and quotes the revert reason', async () => {
+      const { chainClient } = require('../../src/services/chainClient');
+      const { BaseError, ExecutionRevertedError } = require('viem');
+      const request = {
+        from: '0x1234567890123456789012345678901234567890' as `0x${string}`,
+        to: '0x0987654321098765432109876543210987654321' as `0x${string}`,
+        value: '1.0',
+        chainId: 1,
+      };
+      chainClient.estimateGas.mockRejectedValueOnce(
+        new BaseError('Execution reverted.', {
+          cause: new ExecutionRevertedError({
+            message: 'execution reverted: Cannot receive ETH',
+          }),
+        }),
+      );
+      await expect(txService.estimateTransaction(request)).rejects.toThrow(
+        '수수료를 추정하지 못했습니다. 받는 주소가 이 전송을 거부했습니다. (컨트랙트 응답: "Cannot receive ETH")',
+      );
+
+      chainClient.estimateGas.mockRejectedValueOnce(
+        new ExecutionRevertedError({ message: 'execution reverted' }),
+      );
+      await expect(txService.estimateTransaction(request)).rejects.toThrow(
+        /^수수료를 추정하지 못했습니다\. 받는 주소가 이 전송을 거부했습니다\.$/,
       );
     });
   });
@@ -465,6 +499,49 @@ describe('TxService - Error Handling', () => {
         expect.anything(),
       );
     });
+
+    it('also reserves the OP Stack L1 data fee on Base', async () => {
+      const { chainClient } = require('../../src/services/chainClient');
+      const readContract = jest.fn().mockResolvedValue(1_000_000_000_000n);
+      const l2Client = {
+        estimateFeesPerGas: jest.fn().mockRejectedValue(new Error('no 1559')),
+        readContract,
+      };
+      // 수수료 조회와 L1 수수료 조회가 각각 클라이언트를 가져온다.
+      chainClient.getClient
+        .mockReturnValueOnce(l2Client)
+        .mockReturnValueOnce(l2Client);
+      chainClient.getBalance.mockResolvedValueOnce({
+        wei: 10_000_000_000_000_000n,
+        formatted: '0.01',
+      });
+      const result = await txService.calculateMaxSendable(
+        '0x1234567890123456789012345678901234567890' as `0x${string}`,
+        '0x0987654321098765432109876543210987654321' as `0x${string}`,
+        8453,
+      );
+      const executionFee = 25_200n * 20_000_000_000n;
+      const l1Reserve = 2_000_000_000_000n; // 조회값 × 2
+      expect(result.maxWei).toBe(
+        10_000_000_000_000_000n - executionFee - l1Reserve,
+      );
+      expect(result.fee).toBe(formatEther(executionFee + l1Reserve));
+      expect(readContract).toHaveBeenCalledWith(
+        expect.objectContaining({ functionName: 'getL1Fee' }),
+      );
+    });
+
+    it('does not query an L1 fee on chains without one', async () => {
+      await expect(
+        txService.estimateL1DataFee(
+          { to: '0x0987654321098765432109876543210987654321', value: 1n },
+          1,
+        ),
+      ).resolves.toBe(0n);
+      expect(chargesL1DataFee(42161)).toBe(false);
+      expect(chargesL1DataFee(10)).toBe(true);
+      expect(chargesL1DataFee(8453)).toBe(true);
+    });
   });
 });
 
@@ -494,10 +571,11 @@ describe('TxService - fee speeds', () => {
       maxFeePerGas: 30n,
       maxPriorityFeePerGas: 10n,
     };
+    // 느림: 우선 수수료는 그대로, 기본 수수료 여유분(20)만 90%
     expect(applyFeeSpeed(base, 'slow')).toEqual({
       type: 'eip1559',
       maxFeePerGas: 28n,
-      maxPriorityFeePerGas: 8n,
+      maxPriorityFeePerGas: 10n,
     });
     expect(applyFeeSpeed(base, 'normal')).toEqual(base);
     expect(applyFeeSpeed(base, 'fast')).toEqual({
@@ -509,14 +587,33 @@ describe('TxService - fee speeds', () => {
 
   it('scales legacy gas price per speed', () => {
     const base = { type: 'legacy' as const, gasPrice: 100n };
+    // 느림도 노드가 제안한 가스 가격 아래로 내리지 않는다 (최소 가격 체인에서 거절 방지).
     expect(applyFeeSpeed(base, 'slow')).toEqual({
       type: 'legacy',
-      gasPrice: 90n,
+      gasPrice: 100n,
     });
     expect(applyFeeSpeed(base, 'fast')).toEqual({
       type: 'legacy',
       gasPrice: 125n,
     });
+  });
+
+  it('never drops the slow priority fee below the suggested Polygon minimum tip', async () => {
+    const { chainClient } = require('../../src/services/chainClient');
+    const minTip = 25_000_000_000n; // Polygon PoS 최소 팁 25 gwei
+    chainClient.getClient.mockReturnValueOnce({
+      estimateFeesPerGas: jest.fn().mockResolvedValue({
+        maxFeePerGas: 85_000_000_000n,
+        maxPriorityFeePerGas: minTip,
+      }),
+    });
+    const slow = await txService.getFeeData(137, 'slow');
+    expect(slow.type).toBe('eip1559');
+    if (slow.type !== 'eip1559') return;
+    expect(slow.maxPriorityFeePerGas).toBeGreaterThanOrEqual(minTip);
+    expect(slow.maxFeePerGas).toBeGreaterThanOrEqual(slow.maxPriorityFeePerGas);
+    // 대신 최대 수수료 상한은 보통보다 낮다.
+    expect(slow.maxFeePerGas).toBeLessThan(85_000_000_000n);
   });
 
   it('uses estimateFeesPerGas when available and falls back to gasPrice', async () => {

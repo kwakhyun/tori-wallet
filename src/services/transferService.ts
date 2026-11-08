@@ -22,21 +22,28 @@ interface TransferInput {
   /** 수수료 속도 (기본: 보통) */
   feeSpeed?: FeeSpeed;
   /**
-   * 전체 잔액 전송. 네이티브는 잔액 − 최대 수수료, 토큰은 전체 토큰 잔액을
-   * 같은 추정값으로 계산해 계획에 고정한다 (amount는 무시).
+   * 전체 잔액 전송. 네이티브는 잔액 − 최대 수수료(L1 데이터 수수료 확보분 포함),
+   * 토큰은 전체 토큰 잔액을 같은 추정값으로 계산해 계획에 고정한다 (amount는 무시).
    */
   sendMax?: boolean;
   /** 표시 전용: 수신자를 ENS 이름으로 입력한 경우 그 이름 */
   ensName?: string;
+  /**
+   * 표시 전용: ENS 주소 기록의 출처. 'default'는 다른 네트워크에서 이더리움 메인넷
+   * 기록으로 대신 해석한 경우다.
+   */
+  ensSource?: 'chain' | 'default';
 }
 
 export interface TransferPlan extends TransferInput {
   transaction: TransactionParams;
   units: bigint;
   decimals: number;
-  /** 최대 수수료 (네이티브 단위 문자열) */
+  /** 최대 수수료 (네이티브 단위 문자열, L1 데이터 수수료 확보분 포함) */
   fee: string;
   feeWei: bigint;
+  /** OP Stack L1 데이터 수수료 확보분 (feeWei에 포함, 해당 없는 체인은 0n) */
+  l1FeeWei: bigint;
   feeSpeed: FeeSpeed;
   feeType: 'eip1559' | 'legacy';
   symbol?: string;
@@ -63,6 +70,8 @@ function planFingerprint(
         plan.tokenAddress?.toLowerCase() ?? null,
         plan.units.toString(),
         plan.feeSpeed,
+        plan.feeWei.toString(),
+        plan.l1FeeWei.toString(),
         tx.from.toLowerCase(),
         tx.to?.toLowerCase() ?? null,
         tx.data ?? null,
@@ -175,7 +184,8 @@ export const transferService = {
         feeSpeed,
       );
     } else if (input.sendMax) {
-      // 같은 추정값으로 수수료를 먼저 확보하고 남는 잔액을 보낸다 (bigint).
+      // 같은 추정값으로 수수료(OP Stack은 L1 데이터 수수료 확보분 포함)를 먼저
+      // 확보하고 남는 잔액을 보낸다 (bigint).
       estimate = await txService.estimateTransaction(
         {
           from: input.from,
@@ -229,6 +239,7 @@ export const transferService = {
       symbol: token?.symbol,
       fee: estimate.estimatedFee,
       feeWei: estimate.estimatedFeeWei,
+      l1FeeWei: estimate.l1FeeWei,
       feeSpeed,
       feeType: feeFields.maxFeePerGas !== undefined ? 'eip1559' : 'legacy',
       expiresAt: Date.now() + TRANSFER_PLAN_TTL_MS,
