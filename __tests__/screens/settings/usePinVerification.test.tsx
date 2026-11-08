@@ -81,6 +81,7 @@ describe('usePinVerification', () => {
       status: 'failed',
       reason: 'locked',
       message: lock.message,
+      retryAt: lock.retryAt,
     });
     expect(result.current.error).toContain('PIN 입력이 제한되었습니다');
   });

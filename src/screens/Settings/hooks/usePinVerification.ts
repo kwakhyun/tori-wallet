@@ -21,7 +21,13 @@ export type PinFailureReason = 'format' | 'invalid' | 'locked' | 'error';
 
 export type PinVerificationResult =
   | { status: 'verified'; mnemonic: string }
-  | { status: 'failed'; reason: PinFailureReason; message: string }
+  | {
+      status: 'failed';
+      reason: PinFailureReason;
+      message: string;
+      /** reason이 'locked'일 때 입력 제한이 풀리는 시각 (카운트다운 표시용) */
+      retryAt?: number;
+    }
   /** 취소/화면 종료/백그라운드/잠금으로 결과를 폐기함 (안내 불필요) */
   | { status: 'cancelled' };
 
@@ -115,6 +121,7 @@ export function usePinVerification(): UsePinVerificationResult {
             status: 'failed',
             reason: 'locked',
             message: reason.message,
+            retryAt: reason.retryAt,
           };
         } else {
           result = {

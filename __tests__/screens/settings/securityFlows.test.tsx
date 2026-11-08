@@ -11,14 +11,20 @@ import { DeleteWalletModal } from '../../../src/screens/Settings/components/Dele
 import { RecoveryPhraseModal } from '../../../src/screens/Settings/components/RecoveryPhraseModal';
 import { ChangePinModal } from '../../../src/screens/Settings/components/ChangePinModal';
 import { useWalletStore } from '../../../src/store/walletStore';
-import { WEAK_PIN_MESSAGE } from '../../../src/services/pinAttemptService';
+import { PinPrompt } from '../../../src/screens/Settings/components/PinPrompt';
+import {
+  PinLockedError,
+  WEAK_PIN_MESSAGE,
+  pinAttemptService,
+} from '../../../src/services/pinAttemptService';
 
 const MNEMONIC =
   'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about';
 const CORRECT_PIN = '135790';
 
-const mockRetrieveMnemonicWithPin = jest.fn(async (pin: string) =>
-  pin === CORRECT_PIN ? MNEMONIC : null,
+const mockRetrieveMnemonicWithPin = jest.fn(
+  async (pin: string): Promise<string | null> =>
+    pin === CORRECT_PIN ? MNEMONIC : null,
 );
 const mockStoreMnemonic = jest.fn(
   async (_mnemonic: string, _pin: string) => undefined,
@@ -244,5 +250,100 @@ describe('ChangePinModal', () => {
       expect(getByTestId('change-pin-current-error')).toBeTruthy(),
     );
     expect(mockStoreMnemonic).not.toHaveBeenCalled();
+  });
+});
+
+describe('PinPrompt lockout UX', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    useWalletStore.setState({ isLocked: false });
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+    jest.useRealTimers();
+  });
+
+  it('warns how many attempts remain after a wrong PIN', async () => {
+    jest
+      .spyOn(pinAttemptService, 'getStatus')
+      .mockResolvedValue({ failures: 4, blockedUntil: 0 });
+    const { getByTestId } = wrap(
+      <PinPrompt
+        description="PIN을 입력하세요."
+        onVerified={jest.fn()}
+        testIDPrefix="prompt"
+      />,
+    );
+
+    await enterPin(getByTestId, 'prompt', '000000');
+
+    await waitFor(() =>
+      expect(getByTestId('prompt-error').props.children).toBe(
+        'PIN이 올바르지 않습니다.',
+      ),
+    );
+    expect(getByTestId('prompt-attempts-warning').props.children).toBe(
+      '1번 더 틀리면 PIN 입력이 30초 동안 제한됩니다.',
+    );
+  });
+
+  it('counts down the lockout, disables the keypad and re-enables it afterwards', async () => {
+    jest.useFakeTimers({ now: new Date('2026-01-01T00:00:00Z') });
+    const retryAt = Date.now() + 30_000;
+    const getStatus = jest
+      .spyOn(pinAttemptService, 'getStatus')
+      .mockResolvedValue({ failures: 4, blockedUntil: 0 });
+    // 다섯 번째 실패로 제한이 시작된다.
+    mockRetrieveMnemonicWithPin.mockImplementationOnce(async () => {
+      getStatus.mockResolvedValue({ failures: 5, blockedUntil: retryAt });
+      throw new PinLockedError(retryAt);
+    });
+    const onVerified = jest.fn();
+    const { getByTestId, queryByTestId } = wrap(
+      <PinPrompt
+        description="PIN을 입력하세요."
+        onVerified={onVerified}
+        testIDPrefix="prompt"
+      />,
+    );
+
+    await enterPin(getByTestId, 'prompt', '000000');
+
+    expect(getByTestId('prompt-error').props.children).toBe(
+      'PIN 입력이 제한되었습니다. 00:30 후 다시 시도해주세요.',
+    );
+    expect(getByTestId('prompt-key-1').props.accessibilityState.disabled).toBe(
+      true,
+    );
+
+    // 남은 시간이 1초마다 갱신된다.
+    await act(async () => {
+      jest.advanceTimersByTime(1000);
+    });
+    expect(getByTestId('prompt-error').props.children).toBe(
+      'PIN 입력이 제한되었습니다. 00:29 후 다시 시도해주세요.',
+    );
+
+    // 제한 중에는 입력을 받지 않는다.
+    fireEvent.press(getByTestId('prompt-key-1'));
+    expect(mockRetrieveMnemonicWithPin).toHaveBeenCalledTimes(1);
+
+    getStatus.mockResolvedValue({ failures: 5, blockedUntil: 0 });
+    await act(async () => {
+      jest.advanceTimersByTime(30_000);
+    });
+
+    // 제한이 풀리면 고정된 오류 문구 대신 다음 실패 경고만 남고 키패드가 다시 열린다.
+    expect(getByTestId('prompt-key-1').props.accessibilityState.disabled).toBe(
+      false,
+    );
+    expect(getByTestId('prompt-attempts-warning').props.children).toBe(
+      '다시 틀리면 PIN 입력이 1분 동안 제한됩니다.',
+    );
+    expect(queryByTestId('prompt-error')).toBeNull();
+
+    await enterPin(getByTestId, 'prompt', CORRECT_PIN);
+    expect(onVerified).toHaveBeenCalledWith(MNEMONIC, CORRECT_PIN);
   });
 });

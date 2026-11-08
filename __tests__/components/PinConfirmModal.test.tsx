@@ -182,6 +182,45 @@ describe('biometric approval', () => {
     expect(props.onConfirm).not.toHaveBeenCalled();
   });
 
+  it('can retry biometrics during a PIN lockout after the first prompt failed', async () => {
+    jest
+      .spyOn(pinAttemptService, 'getStatus')
+      .mockResolvedValue({ failures: 7, blockedUntil: Date.now() + 8 * 60_000 });
+    retrieveBiometric.mockResolvedValueOnce(null);
+    const view = render(element());
+    await act(async () => {});
+
+    // 자동 프롬프트가 실패했고 PIN 키패드(🔐 키 포함)는 제한으로 막혀 있다.
+    expect(retrieveBiometric).toHaveBeenCalledTimes(1);
+    expect(view.getByTestId('pin-confirm-error').props.children).toContain(
+      'PIN 입력이 제한',
+    );
+    expect(view.getByTestId('pin-key-1').props.accessibilityState.disabled).toBe(
+      true,
+    );
+
+    const retry = view.getByTestId('pin-confirm-biometric-during-lockout');
+    expect(retry.props.accessibilityState.disabled).toBe(false);
+
+    retrieveBiometric.mockResolvedValueOnce(mnemonic);
+    fireEvent.press(retry);
+    await act(async () => {});
+
+    expect(retrieveBiometric).toHaveBeenCalledTimes(2);
+    expect(retrieve).not.toHaveBeenCalled();
+    expect(signerVault.isUnlocked()).toBe(true);
+    expect(props.onConfirm).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not offer the lockout retry button without a lockout', async () => {
+    retrieveBiometric.mockResolvedValueOnce(null);
+    const view = render(element());
+    await act(async () => {});
+    expect(
+      view.queryByTestId('pin-confirm-biometric-during-lockout'),
+    ).toBeNull();
+  });
+
   it('can be turned off by the caller', async () => {
     const view = render(element(true, { allowBiometric: false }));
     await act(async () => {});

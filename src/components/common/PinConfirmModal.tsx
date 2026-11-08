@@ -38,7 +38,8 @@ interface Props {
   /**
    * 생체인증이 설정·지원되는 기기에서 생체인증 승인을 허용할지 (기본값 true).
    * 허용되면 모달을 열 때 한 번 자동으로 프롬프트를 띄우고, 키패드의 🔐 키로
-   * 다시 시도할 수 있다.
+   * 다시 시도할 수 있다. PIN 입력 제한 중에는 별도의 '생체인증으로 승인' 버튼으로
+   * 다시 시도한다.
    */
   allowBiometric?: boolean;
 }
@@ -242,6 +243,23 @@ export function PinConfirmModal({
             />
           </KeypadArea>
 
+          {/* 입력 제한 중에는 키패드(🔐 키 포함)가 막히므로 잠금 해제 화면처럼 생체인증을
+              다시 시도할 별도 버튼을 둔다. 생체인증은 PIN 실패 제한을 거치지 않는다. */}
+          {lockout.isLocked && biometricAvailable ? (
+            <SecondaryButton
+              testID="pin-confirm-biometric-during-lockout"
+              onPress={() => {
+                confirmWithBiometric();
+              }}
+              disabled={isLoading || !visible}
+              accessibilityRole="button"
+              accessibilityLabel="생체인증으로 승인"
+              accessibilityState={{ disabled: isLoading || !visible }}
+            >
+              <SecondaryButtonText>생체인증으로 승인</SecondaryButtonText>
+            </SecondaryButton>
+          ) : null}
+
           <CancelButton
             onPress={handleCancel}
             testID="pin-confirm-cancel"
@@ -328,6 +346,22 @@ const LoadingText = styled.Text`
 
 const KeypadArea = styled.View`
   width: 100%;
+`;
+
+const SecondaryButton = styled.TouchableOpacity`
+  min-height: ${({ theme }) => theme.touchTarget}px;
+  padding: 0 ${({ theme }) => theme.spacing.lg}px;
+  border-radius: ${({ theme }) => theme.borderRadius.md}px;
+  border: 1px solid ${({ theme }) => theme.colors.primary};
+  align-items: center;
+  justify-content: center;
+  margin-top: ${({ theme }) => theme.spacing.xs}px;
+`;
+
+const SecondaryButtonText = styled.Text`
+  color: ${({ theme }) => theme.colors.textPrimary};
+  font-size: 15px;
+  font-weight: 600;
 `;
 
 const CancelButton = styled.TouchableOpacity`
