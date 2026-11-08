@@ -7,20 +7,20 @@ import { render, screen, fireEvent, waitFor } from '../test-utils';
 import { usePreferencesStore } from '../../src/store/preferencesStore';
 
 const mockNavigate = jest.fn();
+const ETH_PARAMS = {
+  coinId: 'ethereum',
+  coinName: 'Ethereum',
+  coinSymbol: 'eth',
+  coinImage: 'https://example.com/eth.png',
+};
+let mockRouteParams: Record<string, string> = ETH_PARAMS;
 jest.mock('@react-navigation/native', () => ({
   useNavigation: () => ({
     navigate: mockNavigate,
     goBack: jest.fn(),
     canGoBack: () => true,
   }),
-  useRoute: () => ({
-    params: {
-      coinId: 'ethereum',
-      coinName: 'Ethereum',
-      coinSymbol: 'eth',
-      coinImage: 'https://example.com/eth.png',
-    },
-  }),
+  useRoute: () => ({ params: mockRouteParams }),
 }));
 
 const ADDRESS = '0x1234567890123456789012345678901234567890';
@@ -107,6 +107,7 @@ const history = (base: number) => ({
 describe('CoinDetailScreen', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    mockRouteParams = ETH_PARAMS;
     mockGetCoinDetail.mockResolvedValue(DETAIL);
     mockGetPriceHistory.mockImplementation((_id: string, days: string) =>
       Promise.resolve(history(days === '1' ? 2900 : 3000)),
@@ -183,8 +184,9 @@ describe('CoinDetailScreen', () => {
     expect(screen.queryByTestId('coin-detail-holding')).toBeNull();
   });
 
-  it('passes the wallet address and chain id to the buy flow', async () => {
+  it('passes the wallet address and chain id when the coin is on the active network', async () => {
     render(<CoinDetailScreen />);
+    await waitFor(() => screen.getByTestId('coin-detail-holding'));
     fireEvent.press(screen.getByTestId('coin-detail-buy'));
     expect(mockShowBuyProviderAlert).toHaveBeenCalledWith(
       'eth',
@@ -192,6 +194,31 @@ describe('CoinDetailScreen', () => {
       undefined,
       42161,
     );
+    expect(screen.queryByTestId('coin-detail-buy-hint')).toBeNull();
+  });
+
+  it('opens the buy flow for another chain coin without an EVM address or network', async () => {
+    mockRouteParams = {
+      coinId: 'bitcoin',
+      coinName: 'Bitcoin',
+      coinSymbol: 'btc',
+      coinImage: '',
+    };
+    mockGetCoinDetail.mockResolvedValue({ ...DETAIL, id: 'bitcoin' });
+    render(<CoinDetailScreen />);
+    await waitFor(() => screen.getByTestId('coin-detail-buy-hint'));
+    expect(screen.getByTestId('coin-detail-buy-hint')).toHaveTextContent(
+      'Arbitrum One의 자산이 아니라 받을 주소를 결제 화면에서 직접 입력해야 합니다.',
+    );
+    fireEvent.press(screen.getByTestId('coin-detail-buy'));
+    expect(mockShowBuyProviderAlert).toHaveBeenCalledWith('btc');
+  });
+
+  it('does not prefill the address before the token list has loaded', () => {
+    mockGetTokens.mockReturnValue(new Promise(() => undefined));
+    render(<CoinDetailScreen />);
+    fireEvent.press(screen.getByTestId('coin-detail-buy'));
+    expect(mockShowBuyProviderAlert).toHaveBeenCalledWith('eth');
   });
 
   it('shows an error with retry instead of $0.00 when details fail', async () => {

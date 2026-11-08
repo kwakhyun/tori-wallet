@@ -5,6 +5,9 @@
  * - 기간을 바꾸면 차트 영역에 로딩 표시를 한다.
  * - 현재 네트워크에서 이 자산을 보유 중이면 보유량과 보내기/스왑을 보여 준다.
  * - 조회 실패는 $0.00이 아니라 '—'와 다시 시도로 표시한다.
+ * - 구매: 이 코인이 현재 네트워크의 자산(같은 시세 ID의 토큰)일 때만 지갑 주소와
+ *   네트워크를 결제 화면에 넘긴다. 그 밖의 코인(BTC, SOL 등)은 EVM 주소나 현재
+ *   네트워크를 붙이지 않고 결제 화면에서 받을 주소를 직접 입력하게 한다.
  */
 
 import React, { useState, useCallback, useEffect, useMemo } from 'react';
@@ -125,6 +128,12 @@ function CoinDetailScreen(): React.JSX.Element {
     );
   }, [tokensQuery.data, coinId]);
 
+  // 현재 네트워크의 토큰 목록에 같은 시세 ID가 있으면(보유하지 않아도) 이 네트워크로 받을 수 있다.
+  const onActiveNetwork = useMemo(() => {
+    const list = Array.isArray(tokensQuery.data) ? tokensQuery.data : [];
+    return list.some(token => token.coingeckoId === coinId);
+  }, [tokensQuery.data, coinId]);
+
   const chart = useMemo(() => {
     const points = historyQuery.data?.prices ?? [];
     return {
@@ -149,13 +158,24 @@ function CoinDetailScreen(): React.JSX.Element {
   }, [detailQuery, historyQuery, tokensQuery, activeWallet?.address]);
 
   const handleBuy = useCallback(() => {
+    if (!onActiveNetwork || !activeWallet?.address) {
+      // 현재 네트워크의 자산이 아니면 EVM 주소/네트워크를 붙이지 않는다
+      // (다른 체인 코인에 0x 주소를 채우거나, 엉뚱한 네트워크로 보내지 않게).
+      showBuyProviderAlert(coinSymbol);
+      return;
+    }
     showBuyProviderAlert(
       coinSymbol,
-      activeWallet?.address,
+      activeWallet.address,
       undefined,
       activeNetworkChainId,
     );
-  }, [coinSymbol, activeWallet?.address, activeNetworkChainId]);
+  }, [
+    coinSymbol,
+    activeWallet?.address,
+    activeNetworkChainId,
+    onActiveNetwork,
+  ]);
 
   const handleSend = useCallback(() => {
     if (!holding) return;
@@ -389,6 +409,13 @@ function CoinDetailScreen(): React.JSX.Element {
           >
             <BuyButtonText>{coinSymbol.toUpperCase()} 구매하기</BuyButtonText>
           </BuyButton>
+          {!onActiveNetwork && tokensQuery.data ? (
+            <BuyHint testID="coin-detail-buy-hint">
+              {`${
+                activeNetwork?.name ?? '현재 네트워크'
+              }의 자산이 아니라 받을 주소를 결제 화면에서 직접 입력해야 합니다.`}
+            </BuyHint>
+          ) : null}
 
           {/* 시장 정보 */}
           <Section>
@@ -568,6 +595,14 @@ const BuyButtonText = styled.Text`
   color: ${({ theme }) => theme.colors.onPrimary};
   font-size: ${({ theme }) => theme.typography.button.fontSize}px;
   font-weight: 600;
+`;
+
+const BuyHint = styled.Text`
+  color: ${({ theme }) => theme.colors.textSecondary};
+  font-size: ${({ theme }) => theme.typography.caption.fontSize}px;
+  text-align: center;
+  margin-top: -${({ theme }) => theme.spacing.sm}px;
+  margin-bottom: ${({ theme }) => theme.spacing.lg}px;
 `;
 
 const Section = styled.View`

@@ -5,6 +5,7 @@
 import { Linking, Alert } from 'react-native';
 import {
   generateBuyUrl,
+  getBuyAvailability,
   openBuyUrl,
   showBuyProviderAlert,
   isBuySupported,
@@ -12,6 +13,10 @@ import {
   BuyProvider,
   buyService,
 } from '../../src/services/buyService';
+import {
+  customNetworkRegistry,
+  UNSUPPORTED_ON_NETWORK_MESSAGE,
+} from '../../src/services/customNetworks';
 
 // React Native 모킹
 jest.mock('react-native', () => ({
@@ -214,6 +219,56 @@ describe('BuyService', () => {
         '테스트넷에서는 구매할 수 없습니다',
         expect.any(String),
       );
+    });
+
+    describe('custom networks', () => {
+      beforeEach(() => {
+        customNetworkRegistry.set([
+          {
+            chainId: 56,
+            name: 'BNB Chain',
+            rpcUrl: 'https://bsc.example.com',
+            symbol: 'BNB',
+            isTestnet: false,
+          },
+          {
+            chainId: 97,
+            name: 'BSC Testnet',
+            rpcUrl: 'https://bsc-testnet.example.com',
+            symbol: 'TBNB',
+            isTestnet: true,
+          },
+        ]);
+      });
+      afterEach(() => customNetworkRegistry.set([]));
+
+      it('does not call a custom mainnet a testnet', () => {
+        expect(getBuyAvailability(56)).toBe('unsupported');
+        showBuyProviderAlert('BNB', '0xabc', undefined, 56);
+
+        const [title, message, buttons] = (Alert.alert as jest.Mock).mock
+          .calls[0];
+        expect(title).toBe(UNSUPPORTED_ON_NETWORK_MESSAGE);
+        expect(title).not.toContain('테스트넷');
+        expect(message).toContain('네트워크를 바꾼 뒤');
+        // 결제 화면으로 넘어가는 버튼이 없다
+        expect(buttons).toBeUndefined();
+      });
+
+      it('still explains testnets for a custom network marked as testnet', () => {
+        expect(getBuyAvailability(97)).toBe('testnet');
+        showBuyProviderAlert('TBNB', '0xabc', undefined, 97);
+        expect(Alert.alert).toHaveBeenCalledWith(
+          '테스트넷에서는 구매할 수 없습니다',
+          expect.any(String),
+        );
+      });
+
+      it('allows buying without a network (address entered at checkout)', () => {
+        expect(getBuyAvailability(undefined)).toBe('available');
+        expect(getBuyAvailability(1)).toBe('available');
+        expect(getBuyAvailability(11155111)).toBe('testnet');
+      });
     });
 
     it('should pass wallet address to provider', () => {
