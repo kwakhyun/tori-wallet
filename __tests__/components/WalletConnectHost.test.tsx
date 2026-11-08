@@ -494,6 +494,30 @@ describe('global request handling', () => {
     ).not.toHaveBeenCalled();
   });
 
+  it('shows a short Korean reason instead of a viem dump when sending fails', async () => {
+    const { TransactionExecutionError, InsufficientFundsError } =
+      jest.requireActual('viem');
+    mockRequiresPin.mockImplementation(() => false);
+    mockHandleRequest.mockRejectedValueOnce(
+      new TransactionExecutionError(new InsufficientFundsError({}), {
+        account: { address: ADDRESS },
+        to: USDC,
+        data: `0x${'ab'.repeat(200)}`,
+      }),
+    );
+    await mount();
+    await emit(
+      'session_request',
+      sendTransactionRequest(27, { to: USDC, data: '0x12345678' }),
+    );
+    await act(async () => {
+      mockSignProps.onApprove();
+      await flush();
+    });
+    expect(rejectedIds()).toContain(27);
+    expect(Alert.alert).toHaveBeenCalledWith('서명 실패', '잔액이 부족합니다');
+  });
+
   it('shows a failure that finishes after an auto-lock as a held toast, not an Alert over the lock screen', async () => {
     mockRequiresPin.mockImplementation(() => false);
     let fail: ((error: Error) => void) | undefined;

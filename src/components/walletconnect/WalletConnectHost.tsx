@@ -855,9 +855,10 @@ export function WalletConnectHost(): React.JSX.Element | null {
           await wcService
             .rejectRequest(snapshot.topic, snapshot.id)
             .catch(reason => logger.warn('Request rejection failed', reason));
+          // viem 전송 오류의 긴 영문 메시지(호출 인자, calldata)는 짧은 한국어 사유로 바꾼다.
           notifyFailure(
             '서명 실패',
-            errorMessage(error) || '서명 처리에 실패했습니다.',
+            describeReviewError(error) || '서명 처리에 실패했습니다.',
           );
           return;
         }
