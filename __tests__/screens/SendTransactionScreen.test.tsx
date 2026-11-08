@@ -4,11 +4,15 @@ import { render, fireEvent, act, waitFor } from '@testing-library/react-native';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ThemeProvider } from 'styled-components/native';
 import { decodeFunctionData, erc20Abi, formatEther, parseEther } from 'viem';
+import { toCoinType } from 'viem/ens';
 import { darkTheme } from '../../src/styles/theme';
 import SendTransactionScreen from '../../src/screens/Send/SendTransactionScreen';
 import { signingService } from '../../src/services/signingService';
 import { chainClient } from '../../src/services/chainClient';
 import { ensService } from '../../src/services/ensService';
+import { transferService } from '../../src/services/transferService';
+import { tokenService } from '../../src/services/tokenService';
+import { useToastStore } from '../../src/store/toastStore';
 
 const mockAddress = '0x1234567890123456789012345678901234567890';
 const recipient = '0x0987654321098765432109876543210987654321';
@@ -21,6 +25,8 @@ let mockPinProps: any;
 let mockQrProps: any;
 let mockAddressBookProps: any;
 let mockRecentAddresses: { address: string; lastUsed: number }[];
+let mockActiveChainId = 1;
+let mockIsLocked = false;
 const mockWallet = { address: mockAddress };
 const mockRefetch = jest.fn();
 const mockReadContract = jest.fn();
@@ -50,21 +56,26 @@ jest.mock('../../src/hooks/useFiat', () => ({
   }),
 }));
 jest.mock('../../src/store/walletStore', () => ({
-  useWalletStore: () => ({
-    wallets: [mockWallet],
-    activeWalletIndex: 0,
-    activeNetworkChainId: 1,
-    networks: [
-      {
-        chainId: 1,
-        name: 'Ethereum',
-        symbol: 'ETH',
-        isTestnet: false,
-        blockExplorerUrl: 'https://etherscan.io',
-      },
-      { chainId: 137, name: 'Polygon', symbol: 'MATIC' },
-    ],
-  }),
+  useWalletStore: Object.assign(
+    () => ({
+      wallets: [mockWallet],
+      activeWalletIndex: 0,
+      activeNetworkChainId: mockActiveChainId,
+      networks: [
+        {
+          chainId: 1,
+          name: 'Ethereum',
+          symbol: 'ETH',
+          isTestnet: false,
+          blockExplorerUrl: 'https://etherscan.io',
+        },
+        { chainId: 137, name: 'Polygon', symbol: 'MATIC' },
+        { chainId: 8453, name: 'Base', symbol: 'ETH', isTestnet: false },
+      ],
+    }),
+    // 비동기 흐름은 스토어의 현재 잠금 상태를 읽는다.
+    { getState: () => ({ isLocked: mockIsLocked }) },
+  ),
 }));
 jest.mock('../../src/store/securityStore', () => ({
   useSecurityStore: () => ({
@@ -151,8 +162,9 @@ jest.mock('../../src/components/common', () => ({
 jest.mock(
   '../../src/screens/Settings/AddressBookScreen',
   () => (props: any) => {
+    const { View } = require('react-native');
     mockAddressBookProps = props;
-    return null;
+    return <View testID="mock-address-book" />;
   },
 );
 jest.mock('../../src/components/common/PinConfirmModal', () => (props: any) => {
@@ -166,6 +178,9 @@ beforeEach(() => {
   ensService.clearCache();
   mockRouteParams = {};
   mockRecentAddresses = [];
+  mockActiveChainId = 1;
+  mockIsLocked = false;
+  useToastStore.getState().reset();
   mockRequiresPin.mockReturnValue(true);
   mockNativeBalance.mockResolvedValue(parseEther('10'));
   mockReadContract.mockImplementation(async ({ address, functionName }) => {
@@ -175,6 +190,8 @@ beforeEach(() => {
         decimals: isUsdc ? 6 : 18,
         symbol: isUsdc ? 'USDC' : 'TEST',
         balanceOf: isUsdc ? 5_000_000n : 9007199254740993123456789n,
+        // OP Stack GasPriceOracle (Base 테스트)
+        getL1Fee: 1_000_000_000_000n,
       } as Record<string, unknown>
     )[functionName as string];
   });
@@ -191,10 +208,12 @@ beforeEach(() => {
 });
 afterEach(() => jest.useRealTimers());
 
+let queryClient: QueryClient;
 function mount() {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false, gcTime: 0 } },
   });
+  queryClient = client;
   return render(
     <QueryClientProvider client={client}>
       <ThemeProvider theme={darkTheme}>
@@ -401,6 +420,50 @@ it('resolves an ENS name, sends to the resolved address and shows the name in re
   );
 });
 
+describe('ENS on other networks', () => {
+  const baseAddress = '0x00000000219ab540356cBB839Cbe05303d7705Fa';
+
+  it('uses the Base-specific ENS record when the send is on Base', async () => {
+    mockActiveChainId = 8453;
+    mockGetEnsAddress.mockImplementation(async ({ coinType }) =>
+      coinType === toCoinType(8453) ? baseAddress : ensAddress,
+    );
+    const view = mount();
+    await fill(view, '0.001', 'treasury.eth');
+    expect(view.getByTestId('send-ens-resolved')).toHaveTextContent(
+      new RegExp(`→ 아래 주소로 보냅니다${baseAddress}$`),
+    );
+    expect(view.queryByTestId('send-ens-mainnet-record')).toBeNull();
+    await review(view);
+    expect(view.queryByTestId('send-confirm-ens-mainnet-record')).toBeNull();
+    await confirmWithPin(view);
+    expect(signingService.sendTransaction).toHaveBeenCalledWith(
+      expect.objectContaining({ to: baseAddress }),
+      8453,
+      expect.any(Function),
+    );
+  });
+
+  it('warns when only the Ethereum mainnet record exists', async () => {
+    mockActiveChainId = 8453;
+    mockGetEnsAddress.mockImplementation(async ({ coinType }) =>
+      coinType === undefined ? ensAddress : null,
+    );
+    const view = mount();
+    await fill(view, '0.001', 'treasury.eth');
+    expect(view.getByTestId('send-ens-resolved')).toHaveTextContent(
+      new RegExp(`→ 아래 주소로 보냅니다${ensAddress}$`),
+    );
+    expect(view.getByTestId('send-ens-mainnet-record')).toHaveTextContent(
+      /이더리움 메인넷 기록의 주소입니다/,
+    );
+    await review(view);
+    expect(
+      view.getByTestId('send-confirm-ens-mainnet-record'),
+    ).toHaveTextContent(/이 네트워크에서도 이 주소를 쓰는지 확인하세요/);
+  });
+});
+
 it('shows an error for an ENS name without an address', async () => {
   mockGetEnsAddress.mockResolvedValue(null);
   const view = mount();
@@ -460,6 +523,81 @@ it('calculates native MAX before a recipient is entered and reserves the fee', a
   ).toBe(parseEther('10'));
 });
 
+it('discards a slow native MAX result after the user switches to a token', async () => {
+  const prepare = jest.spyOn(transferService, 'prepare');
+  let resolveBalance!: (value: { wei: bigint; formatted: string }) => void;
+  (chainClient.getBalance as jest.Mock).mockReturnValueOnce(
+    new Promise(resolve => {
+      resolveBalance = resolve;
+    }),
+  );
+  const view = mount();
+  await flush(10);
+  fireEvent.press(view.getByTestId('send-max-button'));
+  expect(view.getByTestId('send-max-button')).toHaveTextContent('계산중...');
+
+  fireEvent.press(view.getByTestId('send-asset-button'));
+  fireEvent.press(view.getByTestId('send-token-picker-item-USDC'));
+  // 선택을 바꾸면 계산 표시도 바로 풀린다.
+  expect(view.getByTestId('send-max-button')).toHaveTextContent('최대');
+  await act(async () => {
+    resolveBalance({ wei: parseEther('10'), formatted: '10' });
+  });
+  await flush(10);
+
+  expect(view.getByTestId('send-asset-button')).toHaveTextContent(/USDC/);
+  expect(view.getByTestId('send-amount-input').props.value).toBe('');
+  fireEvent.changeText(view.getByTestId('send-address-input'), recipient);
+  await flush();
+  expect(prepare).not.toHaveBeenCalledWith(
+    expect.objectContaining({ sendMax: true }),
+  );
+  prepare.mockRestore();
+});
+
+it('reserves the L1 data fee for native MAX on Base and shows it in review', async () => {
+  mockActiveChainId = 8453;
+  const l1Fee = 1_000_000_000_000n;
+  mockReadContract.mockImplementation(async ({ functionName }) =>
+    functionName === 'getL1Fee' ? l1Fee : undefined,
+  );
+  const view = mount();
+  fireEvent.press(view.getByTestId('send-max-button'));
+  await flush(10);
+
+  const executionFee = 25_200n * 1_000_000_000n;
+  const l1Reserve = l1Fee * 2n;
+  expect(view.getByTestId('send-amount-input').props.value).toBe(
+    formatEther(parseEther('10') - executionFee - l1Reserve),
+  );
+
+  fireEvent.changeText(view.getByTestId('send-address-input'), recipient);
+  await flush();
+  expect(view.getByTestId('send-fee-l1-note')).toHaveTextContent(
+    'L1 데이터 수수료 포함',
+  );
+  await review(view);
+  expect(view.getByText('최대 수수료')).toBeTruthy();
+  expect(view.queryByText(/L1 비용 별도/)).toBeNull();
+  expect(view.getByTestId('send-confirm-l1-fee')).toHaveTextContent(
+    /L1 데이터 수수료 최대 0\.000002 ETH 포함/,
+  );
+  await confirmWithPin(view);
+  const transaction = (signingService.sendTransaction as jest.Mock).mock
+    .calls[0][0];
+  // 노드의 잔액 검사(value + gas × 가스 가격 + L1 비용)를 통과할 여유가 남는다.
+  expect(
+    BigInt(transaction.value) +
+      BigInt(transaction.gas) * 1_000_000_000n +
+      l1Reserve,
+  ).toBe(parseEther('10'));
+  expect(signingService.sendTransaction).toHaveBeenCalledWith(
+    expect.anything(),
+    8453,
+    expect.any(Function),
+  );
+});
+
 it('passes the USD value of the transfer to the PIN policy', async () => {
   mockRequiresPin.mockReturnValue(false);
   const view = mount();
@@ -491,6 +629,36 @@ describe('QR payment requests', () => {
     });
     expect(view.getByTestId('send-address-input').props.value).toBe(recipient);
     expect(view.getByTestId('send-amount-input').props.value).toBe('1.5');
+  });
+
+  it('clears the previous token amount and MAX when a native request has no amount', async () => {
+    const prepare = jest.spyOn(transferService, 'prepare');
+    const view = mount();
+    await flush(10);
+    fireEvent.press(view.getByTestId('send-asset-button'));
+    fireEvent.press(view.getByTestId('send-token-picker-item-USDC'));
+    await flush(10);
+    fireEvent.press(view.getByTestId('send-max-button'));
+    expect(view.getByTestId('send-amount-input').props.value).toBe('5');
+
+    await act(async () => {
+      await mockQrProps.onScan({
+        kind: 'payment',
+        recipient,
+        chainId: 1,
+        raw: `ethereum:${recipient}@1`,
+      });
+    });
+    expect(view.getByTestId('send-asset-button')).toHaveTextContent(/ETH/);
+    expect(view.getByTestId('send-address-input').props.value).toBe(recipient);
+    expect(view.getByTestId('send-amount-input').props.value).toBe('');
+    await flush();
+    // 이전 USDC의 MAX가 네이티브 전체 잔액 전송으로 이어지지 않는다.
+    expect(prepare).not.toHaveBeenCalledWith(
+      expect.objectContaining({ sendMax: true }),
+    );
+    expect(view.queryByText('수수료를 뺀 전체 잔액을 보냅니다.')).toBeNull();
+    prepare.mockRestore();
   });
 
   it('selects a known token and formats the amount with its decimals', async () => {
@@ -537,6 +705,43 @@ describe('QR payment requests', () => {
     });
     expect(view.getByTestId('send-amount-input').props.value).toBe('3');
     expect(view.getByTestId('send-address-input').props.value).toBe(recipient);
+    alert.mockRestore();
+  });
+
+  it('does not raise the unknown-token Alert over the lock screen when the lookup finishes after auto-lock', async () => {
+    const alert = jest.spyOn(Alert, 'alert').mockImplementation();
+    const view = mount();
+    await flush(10);
+    let resolveSymbol!: (value: string) => void;
+    mockReadContract.mockImplementation(async ({ functionName }) => {
+      if (functionName === 'symbol')
+        return new Promise(resolve => {
+          resolveSymbol = resolve;
+        });
+      return functionName === 'decimals' ? 18 : 0n;
+    });
+    let scan!: Promise<void>;
+    act(() => {
+      scan = mockQrProps.onScan({
+        kind: 'payment',
+        recipient,
+        chainId: 1,
+        tokenAddress: contract,
+        amountRaw: 3n * 10n ** 18n,
+        raw: '',
+      });
+    });
+    // 토큰 조회 중에 자동 잠금
+    mockIsLocked = true;
+    await act(async () => {
+      resolveSymbol('FAKE');
+      await scan;
+    });
+    expect(alert).not.toHaveBeenCalled();
+    expect(useToastStore.getState().current?.message).toMatch(
+      /지갑이 잠겨 결제 요청을 적용하지 않았습니다/,
+    );
+    expect(view.getByTestId('send-address-input').props.value).toBe('');
     alert.mockRestore();
   });
 
@@ -602,15 +807,155 @@ it('lets the user pick an ERC-20 token from the active chain list', async () => 
   ).toEqual([recipient, 1_000_000n]);
 });
 
+describe('token picker and balances', () => {
+  const token = (overrides: Record<string, unknown>) => ({
+    name: 'Token',
+    decimals: 18,
+    priceChange24h: 0,
+    ...overrides,
+  });
+
+  it("shows unknown balances as '—' without a fiat value instead of 0", async () => {
+    (tokenService.getTokens as jest.Mock).mockResolvedValueOnce([
+      token({
+        symbol: 'ETH',
+        name: 'Ethereum',
+        address: 'native',
+        balance: '10',
+        balanceRaw: '10',
+        price: 2000,
+        value: 20000,
+        usdValue: 20000,
+        priceAvailable: true,
+        balanceError: false,
+      }),
+      // 잔액 조회 실패: tokenService는 예전 필드에 '0'/0을 남긴다.
+      token({
+        symbol: 'USDC',
+        name: 'USD Coin',
+        address: USDC,
+        decimals: 6,
+        balance: '—',
+        balanceRaw: '0',
+        price: 1,
+        value: 0,
+        usdValue: null,
+        priceAvailable: true,
+        balanceError: true,
+      }),
+      // 새 형태: 실패 시 balanceRaw가 null
+      token({
+        symbol: 'DAI',
+        address: '0x6B175474E89094C44Da98b954EedeAC495271d0F',
+        balance: '—',
+        balanceRaw: null,
+        price: 1,
+        value: 0,
+        usdValue: null,
+        priceAvailable: true,
+        balanceError: true,
+      }),
+      // 잔액은 알지만 시세를 모름
+      token({
+        symbol: 'NEW',
+        address: '0x2222222222222222222222222222222222222222',
+        balance: '3',
+        balanceRaw: '3',
+        price: 0,
+        value: 0,
+        usdValue: null,
+        priceAvailable: false,
+        balanceError: false,
+      }),
+    ]);
+    const view = mount();
+    await flush(10);
+    fireEvent.press(view.getByTestId('send-asset-button'));
+
+    // 행 텍스트: 로고 대체 글자 + 심볼 + 이름 + 잔액 + 법정화폐 가치 (+ 선택 표시)
+    expect(view.getByTestId('send-token-picker-item-ETH')).toHaveTextContent(
+      /^EETHEthereum10\$20000\.00✓$/,
+    );
+    expect(view.getByTestId('send-token-picker-item-USDC')).toHaveTextContent(
+      /^UUSDCUSD Coin—$/,
+    );
+    expect(view.getByTestId('send-token-picker-item-DAI')).toHaveTextContent(
+      /^DDAIToken—$/,
+    );
+    expect(view.getByTestId('send-token-picker-item-NEW')).toHaveTextContent(
+      /^NNEWToken3$/,
+    );
+  });
+
+  it("shows the form balance as '—' while it is unknown", async () => {
+    mockRouteParams = { tokenAddress: contract };
+    mockReadContract.mockRejectedValue(new Error('metadata unavailable'));
+    const view = mount();
+    await flush(10);
+    expect(view.getByTestId('send-balance-text').props.children.join('')).toBe(
+      '잔액: — 토큰',
+    );
+  });
+
+  it('shows the token list error with retry next to the native entry', async () => {
+    (tokenService.getTokens as jest.Mock).mockRejectedValueOnce(
+      new Error('잔액을 불러오지 못했습니다.'),
+    );
+    const view = mount();
+    await flush(10);
+    fireEvent.press(view.getByTestId('send-asset-button'));
+    expect(view.getByTestId('send-token-picker-item-ETH')).toBeTruthy();
+    expect(
+      view.getByTestId('send-token-picker-error-inline'),
+    ).toHaveTextContent(/잔액을 불러오지 못했습니다/);
+
+    fireEvent.press(view.getByTestId('send-token-picker-retry-inline'));
+    await flush(10);
+    expect(tokenService.getTokens).toHaveBeenCalledTimes(2);
+    expect(view.getByTestId('send-token-picker-item-USDC')).toBeTruthy();
+    expect(view.queryByTestId('send-token-picker-error-inline')).toBeNull();
+  });
+
+  it('shares the token list cache that Token Management invalidates', async () => {
+    mount();
+    await flush(10);
+    expect(tokenService.getTokens).toHaveBeenCalledTimes(1);
+    expect(queryClient.getQueryData(['tokens', mockAddress, 1])).toBeDefined();
+    await act(async () => {
+      await queryClient.invalidateQueries({ queryKey: ['tokens'] });
+    });
+    expect(tokenService.getTokens).toHaveBeenCalledTimes(2);
+  });
+});
+
 it('shows the active network on the input step', () => {
   const view = mount();
   expect(view.getByTestId('send-network-badge')).toHaveTextContent(/Ethereum/);
 });
 
+it('embeds the address book with its own close header instead of a second title bar', async () => {
+  const view = mount();
+  expect(view.queryByTestId('mock-address-book')).toBeNull();
+  fireEvent.press(view.getByTestId('send-address-book-button'));
+  expect(view.getByTestId('mock-address-book')).toBeTruthy();
+  expect(mockAddressBookProps).toMatchObject({
+    selectionMode: true,
+    onSelectAddress: expect.any(Function),
+    onClose: expect.any(Function),
+  });
+  // Send는 별도의 래퍼 헤더를 그리지 않는다 (AddressBookScreen 헤더 하나만).
+  expect(view.queryByTestId('send-address-book-close')).toBeNull();
+  expect(view.queryByText('받는 주소 선택')).toBeNull();
+  await act(async () => {
+    mockAddressBookProps.onClose();
+  });
+  expect(view.queryByTestId('mock-address-book')).toBeNull();
+});
+
 it('ignores the placeholder name for recent addresses from the address book', async () => {
   const view = mount();
   fireEvent.press(view.getByTestId('send-address-book-button'));
-  expect(view.getByTestId('send-address-book-close')).toBeTruthy();
+  expect(view.getByTestId('mock-address-book')).toBeTruthy();
   await act(async () => {
     mockAddressBookProps.onSelectAddress(recipient, '최근 주소');
   });
@@ -645,4 +990,63 @@ it('offers explorer, hash copy, detail and a real way home after submitting', as
   fireEvent.press(view.getByTestId('send-success-primary'));
   expect(mockNavigate).toHaveBeenCalledWith('Main', { screen: 'Home' });
   openURL.mockRestore();
+});
+
+describe('auto-lock during async work', () => {
+  it('turns a send failure caused by auto-lock into a held toast instead of an Alert over the lock screen', async () => {
+    const alert = jest.spyOn(Alert, 'alert').mockImplementation();
+    const view = mount();
+    await fill(view, '1');
+    await review(view);
+    (signingService.sendTransaction as jest.Mock).mockImplementationOnce(
+      async () => {
+        // 서명 직전에 자동 잠금 → signerVault가 서명을 막는다.
+        mockIsLocked = true;
+        throw new Error('Wallet signing session expired');
+      },
+    );
+    await confirmWithPin(view);
+    expect(alert).not.toHaveBeenCalled();
+    expect(useToastStore.getState().current).toMatchObject({
+      type: 'error',
+      message:
+        '지갑이 잠겨 전송하지 않았습니다. 잠금을 해제한 뒤 다시 시도해주세요.',
+    });
+    expect(view.queryByText('전송 제출 완료')).toBeNull();
+    alert.mockRestore();
+  });
+
+  it('still shows the send failure Alert while the wallet stays unlocked', async () => {
+    const alert = jest.spyOn(Alert, 'alert').mockImplementation();
+    const view = mount();
+    await fill(view, '1');
+    await review(view);
+    (signingService.sendTransaction as jest.Mock).mockRejectedValueOnce(
+      new Error('nonce too low'),
+    );
+    await confirmWithPin(view);
+    expect(alert).toHaveBeenCalledWith('전송 실패', 'nonce too low');
+    alert.mockRestore();
+  });
+
+  it('does not raise the review error Alert after an auto-lock', async () => {
+    const alert = jest.spyOn(Alert, 'alert').mockImplementation();
+    const view = mount();
+    await fill(view, '1');
+    await waitFor(() =>
+      expect(view.getByTestId('send-continue-button')).toBeEnabled(),
+    );
+    mockNativeBalance.mockImplementationOnce(async () => {
+      mockIsLocked = true;
+      throw new Error('RPC 서버 응답 시간 초과');
+    });
+    await act(async () => {
+      fireEvent.press(view.getByTestId('send-continue-button'));
+    });
+    expect(alert).not.toHaveBeenCalled();
+    expect(useToastStore.getState().current?.message).toBe(
+      'RPC 서버 응답 시간 초과',
+    );
+    alert.mockRestore();
+  });
 });

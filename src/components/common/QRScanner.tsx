@@ -232,6 +232,8 @@ export function QRScanner({
                           lastRejectedRef.current = null;
                         }}
                         accessibilityRole="button"
+                        accessibilityHint="안내를 지우고 같은 QR 코드도 다시 스캔합니다"
+                        hitSlop={RETRY_HIT_SLOP}
                         testID="qr-scanner-retry"
                       >
                         <RetryLinkText>다시 스캔</RetryLinkText>
@@ -439,12 +441,17 @@ const ErrorText = styled.Text`
   line-height: 20px;
 `;
 
+// 최소 44pt 터치 영역 (어두운 오버레이 위의 유일한 재시도 버튼)
 const RetryLink = styled.TouchableOpacity`
   margin-top: 8px;
-  min-height: 36px;
+  min-height: 44px;
+  min-width: 88px;
   padding: 8px 16px;
+  align-items: center;
   justify-content: center;
 `;
+
+const RETRY_HIT_SLOP = { top: 6, bottom: 6, left: 8, right: 8 };
 
 const RetryLinkText = styled.Text`
   color: ${palette.white};

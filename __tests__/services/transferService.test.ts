@@ -1,4 +1,4 @@
-import { decodeFunctionData, erc20Abi, parseEther } from 'viem';
+import { decodeFunctionData, erc20Abi, formatEther, parseEther } from 'viem';
 import { transferService } from '../../src/services/transferService';
 import { parseTransferAmount, txService } from '../../src/services/txService';
 import { chainClient } from '../../src/services/chainClient';
@@ -184,8 +184,10 @@ describe('EIP-1559 fees and speed options', () => {
         }),
       ),
     );
-    expect(slow.transaction.maxPriorityFeePerGas).toBe('1600000000');
-    expect(slow.transaction.maxFeePerGas).toBe('29600000000');
+    // 느림은 제안된 우선 수수료를 낮추지 않고 기본 수수료 여유분만 줄인다:
+    // (30 − 2) × 90% + 2 = 27.2 gwei
+    expect(slow.transaction.maxPriorityFeePerGas).toBe('2000000000');
+    expect(slow.transaction.maxFeePerGas).toBe('27200000000');
     expect(normal.transaction.maxPriorityFeePerGas).toBe('2000000000');
     expect(fast.transaction.maxPriorityFeePerGas).toBe('3000000000');
     // (30 − 2) × 125% + 3 = 38 gwei
@@ -235,6 +237,108 @@ describe('EIP-1559 fees and speed options', () => {
         sendMax: true,
       }),
     ).rejects.toThrow('수수료를 제외하면');
+  });
+
+  describe('OP Stack L1 data fee (Base/Optimism)', () => {
+    const l1Fee = 3_000_000_000_000n; // 0.000003 ETH
+    const l1Reserve = l1Fee * 2n; // 여유분 2배
+    const executionFee = 60_000n * 30_000_000_000n;
+    beforeEach(() => {
+      readContract.mockImplementation(
+        async ({ functionName }) =>
+          ({
+            decimals: 18,
+            symbol: 'TEST',
+            balanceOf: 100000000000000000000n,
+            getL1Fee: l1Fee,
+          }[functionName as string]),
+      );
+    });
+
+    it('reserves the L1 fee when sending the whole native balance on Base', async () => {
+      const balance = parseEther('0.01');
+      getBalance.mockResolvedValue(balance);
+      const plan = await transferService.prepare({
+        from,
+        to,
+        amount: '',
+        chainId: 8453,
+        sendMax: true,
+      });
+      expect(plan.l1FeeWei).toBe(l1Reserve);
+      expect(plan.feeWei).toBe(executionFee + l1Reserve);
+      expect(plan.units).toBe(balance - executionFee - l1Reserve);
+      expect(plan.transaction.value).toBe(plan.units.toString());
+      // 노드의 잔액 검사(value + gas × maxFee + L1 비용)를 통과할 여유가 남는다.
+      expect(
+        BigInt(plan.transaction.value!) +
+          BigInt(plan.transaction.gas!) *
+            BigInt(plan.transaction.maxFeePerGas!) +
+          l1Fee,
+      ).toBeLessThan(balance);
+      // GasPriceOracle.getL1Fee를 직렬화한 트랜잭션으로 조회한다.
+      expect(readContract).toHaveBeenCalledWith(
+        expect.objectContaining({
+          address: '0x420000000000000000000000000000000000000F',
+          functionName: 'getL1Fee',
+          args: [expect.stringMatching(/^0x02/)],
+        }),
+      );
+    });
+
+    it('rejects a manual amount that leaves nothing for the L1 fee', async () => {
+      const balance = parseEther('0.01');
+      getBalance.mockResolvedValue(balance);
+      const amount = formatEther(balance - executionFee);
+      await expect(
+        transferService.prepare({ from, to, amount, chainId: 8453 }),
+      ).rejects.toThrow('수수료');
+      // 같은 금액이라도 L1 수수료가 없는 체인에서는 통과한다.
+      await expect(
+        transferService.prepare({ from, to, amount, chainId: 1 }),
+      ).resolves.toMatchObject({ l1FeeWei: 0n });
+    });
+
+    it('reserves the L1 fee for token transfers on Optimism', async () => {
+      const plan = await transferService.prepare({
+        from,
+        to,
+        tokenAddress,
+        amount: '1',
+        chainId: 10,
+      });
+      expect(plan.l1FeeWei).toBe(l1Reserve);
+      expect(plan.feeWei).toBe(65_000n * 30_000_000_000n + l1Reserve);
+    });
+
+    it('blocks the transfer instead of assuming a zero L1 fee when the oracle fails', async () => {
+      readContract.mockImplementation(async ({ functionName }) => {
+        if (functionName === 'getL1Fee') throw new Error('oracle offline');
+        return undefined;
+      });
+      await expect(
+        transferService.prepare({
+          from,
+          to,
+          amount: '',
+          chainId: 8453,
+          sendMax: true,
+        }),
+      ).rejects.toThrow('수수료를 추정하지 못했습니다');
+    });
+
+    it('includes the L1 reserve in the plan fingerprint', async () => {
+      const plan = await transferService.prepare({
+        from,
+        to,
+        amount: '0.001',
+        chainId: 8453,
+      });
+      expect(() => transferService.assertPlanIntact(plan)).not.toThrow();
+      expect(() =>
+        transferService.assertPlanIntact({ ...plan, l1FeeWei: 0n }),
+      ).toThrow('변경되어 차단');
+    });
   });
 
   it('detects tampering with a reviewed plan before signing', async () => {

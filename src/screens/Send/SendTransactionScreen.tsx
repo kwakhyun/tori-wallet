@@ -26,7 +26,7 @@ import {
 import { useQuery } from '@tanstack/react-query';
 import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
-import { formatUnits, getAddress, isAddress } from 'viem';
+import { formatEther, formatUnits, getAddress, isAddress } from 'viem';
 import type { RootStackParamList } from '@/navigation/RootNavigator';
 import { useWalletStore } from '@/store/walletStore';
 import { useSecurityStore } from '@/store/securityStore';
@@ -46,8 +46,13 @@ import {
   type TransferPlan,
   type RecipientKind,
 } from '@/services/transferService';
-import { ensService, isEnsName, normalizeEnsName } from '@/services/ensService';
-import { tokenService } from '@/services/tokenService';
+import {
+  ensService,
+  isEnsName,
+  normalizeEnsName,
+  type EnsRecordSource,
+} from '@/services/ensService';
+import { tokenService, type Token } from '@/services/tokenService';
 import { enhancedSwapService } from '@/services/enhancedSwapService';
 import { NATIVE_TOKEN_ADDRESS } from '@/services/swapService';
 import { transactionTracker } from '@/services/transactionTracker';
@@ -76,11 +81,45 @@ type NavigationProp = NativeStackNavigationProp<
 /** AddressBookScreen '최근' 탭이 실제 이름 대신 붙이는 임시 이름 */
 const RECENT_PLACEHOLDER_NAME = '최근 주소';
 
+/** 메인넷이 아닌 네트워크에서 ENS 이름을 메인넷 기록으로 대신 해석했을 때의 경고 */
+const ENS_MAINNET_RECORD_WARNING =
+  '이더리움 메인넷 기록의 주소입니다. 받는 사람이 이 네트워크에서도 이 주소를 쓰는지 확인하세요.';
+
+/** 서명 직전에 지갑이 잠겨 signerVault가 서명을 막은 경우 */
+const LOCKED_BEFORE_SEND_MESSAGE =
+  '지갑이 잠겨 전송하지 않았습니다. 잠금을 해제한 뒤 다시 시도해주세요.';
+const LOCKED_QR_REQUEST_MESSAGE =
+  '지갑이 잠겨 결제 요청을 적용하지 않았습니다. 잠금을 해제한 뒤 다시 스캔해주세요.';
+
+/**
+ * 비동기 흐름에서 읽는 현재 잠금 상태 (렌더 시점 값이 아닌 스토어 값).
+ * Alert은 잠금 화면 위에 뜨므로 잠겼으면 토스트(잠긴 동안 보류)로 바꾼다.
+ */
+function isWalletLockedNow(): boolean {
+  return useWalletStore.getState().isLocked !== false;
+}
+
+/** signerVault가 잠금 때문에 서명을 막았을 때의 오류인지 */
+function isLockedSigningError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    /Wallet signing session expired|Wallet is locked/.test(error.message)
+  );
+}
+
+/** ENS 해석 상태. 입력과 네트워크가 모두 같을 때만 현재 결과로 쓴다. */
 type EnsState =
   | { status: 'idle' }
-  | { status: 'resolving'; input: string }
-  | { status: 'resolved'; input: string; name: string; address: `0x${string}` }
-  | { status: 'error'; input: string; message: string };
+  | { status: 'resolving'; input: string; chainId: number }
+  | {
+      status: 'resolved';
+      input: string;
+      chainId: number;
+      name: string;
+      address: `0x${string}`;
+      source: EnsRecordSource;
+    }
+  | { status: 'error'; input: string; chainId: number; message: string };
 
 function parseAmountRaw(value: string | undefined): bigint | null {
   if (!value || !/^\d+$/.test(value)) return null;
@@ -93,6 +132,33 @@ function parseAmountRaw(value: string | undefined): bigint | null {
 
 function shortAddress(address: string): string {
   return `${address.slice(0, 8)}…${address.slice(-6)}`;
+}
+
+/**
+ * 선택 모달에 보여 줄 잔액. 조회에 실패했거나 모르는 잔액은 null('—')로 두고
+ * 0으로 꾸미지 않는다. tokenService의 예전 형태(실패 시 balanceRaw '0')와 새 형태를
+ * 모두 처리한다.
+ */
+function pickerBalanceOf(token: Token): string | null {
+  if (token.balanceError) return null;
+  const raw: unknown = token.balanceRaw;
+  if (typeof raw !== 'string' || !raw.trim() || token.balance === '—')
+    return null;
+  const display = formatDisplayAmount(raw);
+  return display === '—' ? null : display;
+}
+
+/** 선택 모달에 보여 줄 USD 가치. 가격이나 잔액을 모르면 null */
+function pickerUsdValueOf(token: Token): number | null {
+  if (token.balanceError) return null;
+  if (token.usdValue !== undefined) {
+    return typeof token.usdValue === 'number' && Number.isFinite(token.usdValue)
+      ? token.usdValue
+      : null;
+  }
+  // usdValue가 없는 예전 형태: 가격을 알 때만 value를 쓴다.
+  const priceKnown = token.priceAvailable ?? token.price > 0;
+  return priceKnown && Number.isFinite(token.value) ? token.value : null;
 }
 
 function SendTransactionScreen(): React.JSX.Element {
@@ -168,19 +234,21 @@ function SendTransactionScreen(): React.JSX.Element {
     enabled: !!activeAddress && !!tokenAddress,
   });
 
-  // 토큰 목록 (선택 모달, QR 토큰 확인용)
+  // 토큰 목록 (선택 모달, QR 토큰 확인용). 홈/포트폴리오와 같은 캐시 키를 써서
+  // 토큰 관리에서 숨기거나 추가한 토큰(['tokens'] 무효화)이 바로 반영되게 한다.
   const {
-    data: tokenList,
-    isLoading: tokensLoading,
+    data: tokenData,
+    isFetching: tokensFetching,
     error: tokensError,
     refetch: refetchTokens,
   } = useQuery({
-    queryKey: ['sendTokens', activeAddress, activeNetworkChainId],
+    queryKey: ['tokens', activeAddress, activeNetworkChainId],
     queryFn: () =>
-      tokenService.getTokens(activeAddress as string, activeNetworkChainId),
+      tokenService.getTokens(activeAddress || '', activeNetworkChainId),
     enabled: !!activeAddress,
     staleTime: 30_000,
   });
+  const tokenList = Array.isArray(tokenData) ? tokenData : undefined;
 
   // 시세 (테스트넷/조회 실패 시 null → '—')
   const { data: assetPriceUsd = null } = useQuery({
@@ -231,6 +299,23 @@ function SendTransactionScreen(): React.JSX.Element {
     [],
   );
 
+  /**
+   * 비동기 작업이 끝난 뒤의 실패 안내. 그 사이 자동 잠금되었으면 잠금 화면 위에
+   * Alert을 띄우지 않고 토스트로 바꾼다 (잠금 해제 후 표시된다). 화면을 떠났으면
+   * notifyIfLeft일 때만 토스트로 알린다.
+   */
+  const alertUnlessLocked = useCallback(
+    (title: string, message: string, notifyIfLeft = false) => {
+      if (!mounted.current && !notifyIfLeft) return;
+      if (!mounted.current || isWalletLockedNow()) {
+        showToast(message, 'error');
+        return;
+      }
+      Alert.alert(title, message);
+    },
+    [],
+  );
+
   const [toAddressName, setToAddressName] = useState<string | null>(null);
   const [amount, setAmount] = useState('');
   const [amountIsMax, setAmountIsMax] = useState(false);
@@ -247,6 +332,14 @@ function SendTransactionScreen(): React.JSX.Element {
   const [showTokenPicker, setShowTokenPicker] = useState(false);
   const [estimateError, setEstimateError] = useState<string | null>(null);
 
+  // 최대 금액 계산 요청 번호. 자산·금액·네트워크가 바뀌면 올려서 늦게 도착한
+  // 이전 결과(다른 자산의 최대 금액)가 새 입력을 덮어쓰지 않게 한다.
+  const maxRequestId = useRef(0);
+  const cancelMaxRequest = useCallback(() => {
+    maxRequestId.current += 1;
+    setIsCalculatingMax(false);
+  }, []);
+
   // 라우트로 받은 최소 단위 수량은 소수 자릿수를 알게 된 뒤 한 번만 적용한다.
   useEffect(() => {
     if (pendingAmountRaw.current === null) return;
@@ -261,12 +354,13 @@ function SendTransactionScreen(): React.JSX.Element {
   useEffect(() => {
     if (previousChain.current === activeNetworkChainId) return;
     previousChain.current = activeNetworkChainId;
+    cancelMaxRequest();
     setTokenAddress(undefined);
     setAmount('');
     setAmountIsMax(false);
     setPlan(null);
     setStep(current => (current === 'success' ? current : 'input'));
-  }, [activeNetworkChainId]);
+  }, [activeNetworkChainId, cancelMaxRequest]);
 
   // ── 수신자 해석/검증 ─────────────────────────────────────────
   const trimmedInput = recipientInput.trim();
@@ -278,12 +372,14 @@ function SendTransactionScreen(): React.JSX.Element {
       setEns({ status: 'idle' });
       return;
     }
+    const chainId = activeNetworkChainId;
     try {
       normalizeEnsName(trimmedInput);
     } catch (error) {
       setEns({
         status: 'error',
         input: trimmedInput,
+        chainId,
         message:
           error instanceof Error
             ? error.message
@@ -292,17 +388,20 @@ function SendTransactionScreen(): React.JSX.Element {
       return;
     }
     let cancelled = false;
-    setEns({ status: 'resolving', input: trimmedInput });
+    setEns({ status: 'resolving', input: trimmedInput, chainId });
     const timer = setTimeout(() => {
+      // 보낼 네트워크의 주소 기록을 찾는다 (없으면 메인넷 기록 + 경고).
       ensService
-        .resolve(trimmedInput)
+        .resolve(trimmedInput, chainId)
         .then(result => {
           if (!cancelled)
             setEns({
               status: 'resolved',
               input: trimmedInput,
+              chainId,
               name: result.name,
               address: result.address,
+              source: result.source,
             });
         })
         .catch(error => {
@@ -310,6 +409,7 @@ function SendTransactionScreen(): React.JSX.Element {
             setEns({
               status: 'error',
               input: trimmedInput,
+              chainId,
               message:
                 error instanceof Error
                   ? error.message
@@ -321,12 +421,22 @@ function SendTransactionScreen(): React.JSX.Element {
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [isEns, trimmedInput]);
+  }, [isEns, trimmedInput, activeNetworkChainId]);
 
   const formatIssue =
     !trimmedInput || isEns ? null : getAddressFormatIssue(trimmedInput);
   const ensCurrent =
-    isEns && ens.status !== 'idle' && ens.input === trimmedInput ? ens : null;
+    isEns &&
+    ens.status !== 'idle' &&
+    ens.input === trimmedInput &&
+    ens.chainId === activeNetworkChainId
+      ? ens
+      : null;
+  // 다른 네트워크에서 이더리움 메인넷 기록으로 대신 해석한 주소
+  const ensFromMainnetRecord =
+    ensCurrent?.status === 'resolved' &&
+    ensCurrent.source === 'default' &&
+    activeNetworkChainId !== 1;
   const resolvedRecipient: `0x${string}` | null = isEns
     ? ensCurrent?.status === 'resolved'
       ? ensCurrent.address
@@ -404,6 +514,8 @@ function SendTransactionScreen(): React.JSX.Element {
   const prepareAmount = amountIsMax ? '' : amount;
   const ensName =
     ensCurrent?.status === 'resolved' ? ensCurrent.name : undefined;
+  const ensSource =
+    ensCurrent?.status === 'resolved' ? ensCurrent.source : undefined;
   const prepareTransfer = useCallback(async () => {
     if (!activeAddress) throw new Error('활성 계정을 찾을 수 없습니다.');
     if (!resolvedRecipient) throw new Error('유효하지 않은 주소입니다.');
@@ -416,6 +528,7 @@ function SendTransactionScreen(): React.JSX.Element {
       feeSpeed,
       sendMax: amountIsMax,
       ensName,
+      ensSource,
     });
   }, [
     activeAddress,
@@ -426,6 +539,7 @@ function SendTransactionScreen(): React.JSX.Element {
     feeSpeed,
     amountIsMax,
     ensName,
+    ensSource,
   ]);
 
   const hasAmount = amountIsMax || !!amount;
@@ -480,6 +594,8 @@ function SendTransactionScreen(): React.JSX.Element {
     setRecipientInput(text);
     setToAddressName(null);
   }, []);
+
+  const closeAddressBook = useCallback(() => setShowAddressBook(false), []);
 
   // 주소록에서 주소 선택
   const handleSelectAddressFromBook = useCallback(
@@ -568,13 +684,21 @@ function SendTransactionScreen(): React.JSX.Element {
                 activeNetworkChainId,
               );
         } catch {
-          Alert.alert(
+          alertUnlessLocked(
             '토큰을 확인할 수 없습니다',
             '결제 요청의 토큰 계약을 현재 네트워크에서 찾을 수 없습니다. 요청을 다시 확인해주세요.',
           );
           return;
         }
+        // 토큰 조회 중에 자동 잠금되었거나 화면을 떠났으면 확인 Alert을 잠금 화면
+        // 위에 띄우지 않는다.
+        if (!mounted.current) return;
+        if (!known && isWalletLockedNow()) {
+          showToast(LOCKED_QR_REQUEST_MESSAGE, 'warning');
+          return;
+        }
         const apply = () => {
+          cancelMaxRequest();
           setTokenAddress(requestedToken);
           handleRecipientChange(result.recipient);
           setAmountIsMax(false);
@@ -600,12 +724,15 @@ function SendTransactionScreen(): React.JSX.Element {
         return;
       }
 
+      // 결제 요청이 자산과 금액을 정한다. 금액이 없는 요청도 이전 자산의 금액이나
+      // 최대 금액(MAX)을 네이티브 금액으로 이어받지 않게 비운다.
+      cancelMaxRequest();
       setTokenAddress(undefined);
       handleRecipientChange(result.recipient);
-      if (result.amountRaw !== undefined) {
-        setAmountIsMax(false);
-        setAmount(formatUnits(result.amountRaw, 18));
-      }
+      setAmountIsMax(false);
+      setAmount(
+        result.amountRaw !== undefined ? formatUnits(result.amountRaw, 18) : '',
+      );
       showToast('결제 요청을 적용했습니다. 내용을 확인해주세요.', 'info');
     },
     [
@@ -615,17 +742,23 @@ function SendTransactionScreen(): React.JSX.Element {
       tokenList,
       activeAddress,
       handleRecipientChange,
+      cancelMaxRequest,
+      alertUnlessLocked,
     ],
   );
 
-  const handleSelectToken = useCallback((token: PickerToken) => {
-    setTokenAddress(
-      token.id === 'native' ? undefined : (token.id as `0x${string}`),
-    );
-    setAmount('');
-    setAmountIsMax(false);
-    setShowTokenPicker(false);
-  }, []);
+  const handleSelectToken = useCallback(
+    (token: PickerToken) => {
+      cancelMaxRequest();
+      setTokenAddress(
+        token.id === 'native' ? undefined : (token.id as `0x${string}`),
+      );
+      setAmount('');
+      setAmountIsMax(false);
+      setShowTokenPicker(false);
+    },
+    [cancelMaxRequest],
+  );
 
   const handleContinue = useCallback(async () => {
     Keyboard.dismiss();
@@ -636,14 +769,14 @@ function SendTransactionScreen(): React.JSX.Element {
       setPlan(next);
       setStep('confirm');
     } catch (error) {
-      Alert.alert(
+      alertUnlessLocked(
         '오류',
         error instanceof Error ? error.message : '전송을 확인할 수 없습니다.',
       );
     } finally {
       if (mounted.current) setIsEstimating(false);
     }
-  }, [prepareTransfer]);
+  }, [prepareTransfer, alertUnlessLocked]);
 
   const handleSendTransaction = useCallback(async () => {
     if (!plan || sending.current) return;
@@ -700,11 +833,17 @@ function SendTransactionScreen(): React.JSX.Element {
       refetchBalance();
       if (snapshot.tokenAddress) refetchToken();
     } catch (error) {
-      if (mounted.current)
-        Alert.alert(
-          '전송 실패',
-          error instanceof Error ? error.message : '전송에 실패했습니다.',
-        );
+      // 잠금으로 서명이 막혔으면 아무것도 보내지 않았다는 사실을 분명히 알린다.
+      // 잠금 화면 위에는 Alert을 띄우지 않는다 (alertUnlessLocked).
+      alertUnlessLocked(
+        '전송 실패',
+        isWalletLockedNow() && isLockedSigningError(error)
+          ? LOCKED_BEFORE_SEND_MESSAGE
+          : error instanceof Error
+          ? error.message
+          : '전송에 실패했습니다.',
+        true,
+      );
     } finally {
       sending.current = false;
       if (mounted.current) setIsSending(false);
@@ -715,6 +854,7 @@ function SendTransactionScreen(): React.JSX.Element {
     addRecentAddress,
     refetchBalance,
     refetchToken,
+    alertUnlessLocked,
   ]);
 
   // 거래의 USD 가치 (모르면 undefined → 한도 설정 시 PIN 필요)
@@ -739,7 +879,9 @@ function SendTransactionScreen(): React.JSX.Element {
    * 받는 주소가 아직 없으면 내 주소로 가스를 추정한다.
    */
   const handleMaxAmount = useCallback(async () => {
+    const requestId = ++maxRequestId.current;
     if (tokenAddress) {
+      setIsCalculatingMax(false);
       if (tokenBalance) {
         setAmount(tokenBalance.formatted);
         setAmountIsMax(true);
@@ -747,6 +889,13 @@ function SendTransactionScreen(): React.JSX.Element {
       return;
     }
     if (!activeAddress) return;
+    const chainId = activeNetworkChainId;
+    // 계산 중에 자산·금액·네트워크·계정이 바뀌었으면 결과를 버린다.
+    const isCurrent = () =>
+      mounted.current &&
+      maxRequestId.current === requestId &&
+      currentChain.current === chainId &&
+      currentAccount.current === activeAddress;
     setIsCalculatingMax(true);
     try {
       const estimateTo =
@@ -754,11 +903,11 @@ function SendTransactionScreen(): React.JSX.Element {
       const result = await txService.calculateMaxSendable(
         activeAddress,
         estimateTo,
-        activeNetworkChainId,
+        chainId,
         undefined,
         feeSpeed,
       );
-      if (!mounted.current) return;
+      if (!isCurrent()) return;
       if (result.maxWei <= 0n) {
         showToast('수수료를 제외하면 보낼 수 있는 잔액이 없습니다.', 'warning');
         return;
@@ -766,12 +915,14 @@ function SendTransactionScreen(): React.JSX.Element {
       setAmount(result.maxAmount);
       setAmountIsMax(true);
     } catch {
+      if (!isCurrent()) return;
       showToast(
         '최대 금액을 계산하지 못했습니다. 네트워크를 확인해주세요.',
         'error',
       );
     } finally {
-      if (mounted.current) setIsCalculatingMax(false);
+      if (mounted.current && maxRequestId.current === requestId)
+        setIsCalculatingMax(false);
     }
   }, [
     tokenAddress,
@@ -783,10 +934,14 @@ function SendTransactionScreen(): React.JSX.Element {
     feeSpeed,
   ]);
 
-  const handleAmountChange = useCallback((text: string) => {
-    setAmount(text.replace(',', '.'));
-    setAmountIsMax(false);
-  }, []);
+  const handleAmountChange = useCallback(
+    (text: string) => {
+      cancelMaxRequest();
+      setAmount(text.replace(',', '.'));
+      setAmountIsMax(false);
+    },
+    [cancelMaxRequest],
+  );
 
   // ── 표시용 값 ─────────────────────────────────────────────
   const amountNumber = Number(amount);
@@ -801,24 +956,27 @@ function SendTransactionScreen(): React.JSX.Element {
   };
 
   const pickerTokens = useMemo<PickerToken[]>(() => {
-    const items: PickerToken[] = (tokenList ?? []).map(token => ({
-      id: token.address,
-      symbol: token.symbol,
-      name: token.name,
-      address: token.address === 'native' ? undefined : token.address,
-      logoUrl: token.logoUrl,
-      balance: formatDisplayAmount(token.balanceRaw),
-      fiatValue:
-        !activeNetwork?.isTestnet && token.price > 0
-          ? formatFiat(token.value)
-          : undefined,
-    }));
+    const items: PickerToken[] = (tokenList ?? []).map(token => {
+      const usdValue =
+        activeNetwork?.isTestnet || token.isTestnet
+          ? null
+          : pickerUsdValueOf(token);
+      return {
+        id: token.address,
+        symbol: token.symbol,
+        name: token.name,
+        address: token.address === 'native' ? undefined : token.address,
+        logoUrl: token.logoUrl,
+        balance: pickerBalanceOf(token),
+        fiatValue: usdValue !== null ? formatFiat(usdValue) : undefined,
+      };
+    });
     if (!items.some(item => item.id === 'native')) {
       items.unshift({
         id: 'native',
         symbol: nativeSymbol,
         name: activeNetwork?.name,
-        balance: balance ? formatDisplayAmount(balance.formatted) : undefined,
+        balance: balance ? formatDisplayAmount(balance.formatted) : null,
       });
     }
     if (
@@ -831,7 +989,7 @@ function SendTransactionScreen(): React.JSX.Element {
         address: tokenAddress,
         balance: tokenBalance
           ? formatDisplayAmount(tokenBalance.formatted)
-          : undefined,
+          : null,
       });
     }
     return items;
@@ -890,6 +1048,15 @@ function SendTransactionScreen(): React.JSX.Element {
               {ensCurrent.name} → 아래 주소로 보냅니다
             </InlineMessageText>
             <MonoText selectable>{ensCurrent.address}</MonoText>
+          </InlineMessage>
+        ) : null}
+        {ensFromMainnetRecord ? (
+          <InlineMessage
+            $tone="warning"
+            accessibilityRole="alert"
+            testID="send-ens-mainnet-record"
+          >
+            <InlineMessageText>{ENS_MAINNET_RECORD_WARNING}</InlineMessageText>
           </InlineMessage>
         ) : null}
         {knownName ? (
@@ -1036,7 +1203,8 @@ function SendTransactionScreen(): React.JSX.Element {
         />
         <AmountMetaRow>
           <BalanceText testID="send-balance-text">
-            잔액: {assetBalance?.formatted || '0'} {assetSymbol}
+            {/* 불러오는 중이거나 조회에 실패한 잔액은 0이 아니라 '—'로 표시한다. */}
+            잔액: {assetBalance ? assetBalance.formatted : '—'} {assetSymbol}
           </BalanceText>
           {amount ? (
             <FiatText testID="send-amount-fiat">
@@ -1082,6 +1250,9 @@ function SendTransactionScreen(): React.JSX.Element {
             <GasFiat>
               ≈ {formatFiat(feeUsd(preview.fee), { ignoreHidden: true })}
             </GasFiat>
+            {preview.l1FeeWei > 0n ? (
+              <GasFiat testID="send-fee-l1-note">L1 데이터 수수료 포함</GasFiat>
+            ) : null}
           </GasValueColumn>
         </GasEstimate>
       )}
@@ -1151,6 +1322,15 @@ function SendTransactionScreen(): React.JSX.Element {
             </ConfirmValue>
           </ConfirmRow>
         ) : null}
+        {plan?.ensName && plan.ensSource === 'default' && plan.chainId !== 1 ? (
+          <InlineMessage
+            $tone="warning"
+            accessibilityRole="alert"
+            testID="send-confirm-ens-mainnet-record"
+          >
+            <InlineMessageText>{ENS_MAINNET_RECORD_WARNING}</InlineMessageText>
+          </InlineMessage>
+        ) : null}
         <ConfirmRow>
           <ConfirmLabel>받는 주소</ConfirmLabel>
           <ConfirmAddress selectable>{plan?.to}</ConfirmAddress>
@@ -1168,13 +1348,9 @@ function SendTransactionScreen(): React.JSX.Element {
           </ConfirmValue>
         </ConfirmRow>
         <ConfirmRow>
-          <ConfirmLabel>
-            {[10, 8453, 42161].includes(plan?.chainId || 0)
-              ? '최대 실행 수수료 (L1 비용 별도)'
-              : '최대 수수료'}
-          </ConfirmLabel>
+          <ConfirmLabel>최대 수수료</ConfirmLabel>
           <ConfirmValueColumn>
-            <ConfirmValue>
+            <ConfirmValue testID="send-confirm-fee">
               {plan?.fee || '0'} {planFeeSymbol}
             </ConfirmValue>
             <ConfirmSub>
@@ -1183,6 +1359,13 @@ function SendTransactionScreen(): React.JSX.Element {
                 ? ` · ≈ ${formatFiat(feeUsd(plan.fee), { ignoreHidden: true })}`
                 : ''}
             </ConfirmSub>
+            {plan && plan.l1FeeWei > 0n ? (
+              <ConfirmSub testID="send-confirm-l1-fee">
+                L1 데이터 수수료 최대{' '}
+                {formatDisplayAmount(formatEther(plan.l1FeeWei))}{' '}
+                {planFeeSymbol} 포함
+              </ConfirmSub>
+            ) : null}
           </ConfirmValueColumn>
         </ConfirmRow>
       </ConfirmCard>
@@ -1281,26 +1464,20 @@ function SendTransactionScreen(): React.JSX.Element {
         message="송금을 진행하려면 PIN을 입력하세요."
       />
 
-      {/* 주소록 모달 */}
+      {/* 주소록 모달: AddressBookScreen이 자체 헤더(주소 선택 + 닫기)를 그린다. */}
       <AppModal
         visible={showAddressBook}
         animationType="slide"
         presentationStyle="pageSheet"
-        onRequestClose={() => setShowAddressBook(false)}
-        onLock={() => setShowAddressBook(false)}
+        onRequestClose={closeAddressBook}
+        onLock={closeAddressBook}
+        testID="send-address-book-modal"
       >
-        <Screen testID="send-address-book-modal">
-          <ScreenHeader
-            title="받는 주소 선택"
-            leftIcon="close"
-            onBack={() => setShowAddressBook(false)}
-            backTestID="send-address-book-close"
-          />
-          <AddressBookScreen
-            selectionMode
-            onSelectAddress={handleSelectAddressFromBook}
-          />
-        </Screen>
+        <AddressBookScreen
+          selectionMode
+          onSelectAddress={handleSelectAddressFromBook}
+          onClose={closeAddressBook}
+        />
       </AppModal>
 
       <TokenPickerModal
@@ -1308,7 +1485,8 @@ function SendTransactionScreen(): React.JSX.Element {
         title="보낼 자산 선택"
         tokens={pickerTokens}
         selectedId={tokenAddress ?? 'native'}
-        isLoading={tokensLoading}
+        // 다시 시도 중에도 표시되도록 isLoading 대신 '목록 없이 불러오는 중'을 넘긴다.
+        isLoading={tokensFetching && !tokenList}
         error={
           tokensError
             ? tokensError instanceof Error

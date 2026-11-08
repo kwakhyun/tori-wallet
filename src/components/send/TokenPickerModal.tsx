@@ -138,6 +138,53 @@ export function TokenPickerModal({
     );
   };
 
+  /**
+   * 일부 항목(예: 화면이 직접 넣은 네이티브 자산)만 있는 상태에서도 목록을
+   * 불러오는 중이거나 실패했다는 사실을 숨기지 않는다. 그렇지 않으면 보유
+   * 토큰이 없는 것처럼 보인다.
+   */
+  const renderInlineStatus = () => {
+    if (isLoading) {
+      return (
+        <InlineStatus
+          $tone="info"
+          accessibilityLiveRegion="polite"
+          testID={`${testID}-loading-inline`}
+        >
+          <ActivityIndicator size="small" color={theme.colors.primary} />
+          <InlineStatusText>토큰 목록 불러오는 중...</InlineStatusText>
+        </InlineStatus>
+      );
+    }
+    if (!error) return null;
+    return (
+      <InlineStatus
+        $tone="error"
+        accessibilityRole="alert"
+        testID={`${testID}-error-inline`}
+      >
+        <InlineStatusBody>
+          <InlineStatusText>
+            토큰 목록을 불러오지 못했습니다. 보유한 토큰이 더 있을 수
+            있습니다.
+          </InlineStatusText>
+          <InlineStatusDetail>{error}</InlineStatusDetail>
+        </InlineStatusBody>
+        {onRetry ? (
+          <InlineRetry
+            onPress={onRetry}
+            accessibilityRole="button"
+            accessibilityLabel="토큰 목록 다시 불러오기"
+            hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+            testID={`${testID}-retry-inline`}
+          >
+            <InlineRetryText>다시 시도</InlineRetryText>
+          </InlineRetry>
+        ) : null}
+      </InlineStatus>
+    );
+  };
+
   const renderBody = () => {
     if (isLoading && tokens.length === 0) {
       return (
@@ -157,19 +204,22 @@ export function TokenPickerModal({
       );
     }
     return (
-      <FlatList
-        data={filtered}
-        keyExtractor={item => item.id}
-        renderItem={renderItem}
-        keyboardShouldPersistTaps="handled"
-        ListEmptyComponent={
-          <EmptyState
-            title="검색 결과가 없습니다"
-            message="토큰 이름, 심볼 또는 계약 주소로 검색해주세요."
-            testID={`${testID}-empty`}
-          />
-        }
-      />
+      <>
+        {renderInlineStatus()}
+        <FlatList
+          data={filtered}
+          keyExtractor={item => item.id}
+          renderItem={renderItem}
+          keyboardShouldPersistTaps="handled"
+          ListEmptyComponent={
+            <EmptyState
+              title="검색 결과가 없습니다"
+              message="토큰 이름, 심볼 또는 계약 주소로 검색해주세요."
+              testID={`${testID}-empty`}
+            />
+          }
+        />
+      </>
     );
   };
 
@@ -270,6 +320,56 @@ const RecentChipText = styled.Text`
 const Centered = styled.View`
   padding: 40px;
   align-items: center;
+`;
+
+const InlineStatus = styled.View<{ $tone: 'info' | 'error' }>`
+  flex-direction: row;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0 ${({ theme }) => theme.spacing.md}px
+    ${({ theme }) => theme.spacing.sm}px;
+  padding: ${({ theme }) => theme.spacing.sm}px
+    ${({ theme }) => theme.spacing.md}px;
+  border-radius: ${({ theme }) => theme.borderRadius.sm}px;
+  border-left-width: 3px;
+  border-left-color: ${({ theme, $tone }) =>
+    $tone === 'error' ? theme.colors.error : theme.colors.primary};
+  background-color: ${({ theme, $tone }) =>
+    $tone === 'error' ? theme.colors.errorSubtle : theme.colors.primarySubtle};
+`;
+
+const InlineStatusBody = styled.View`
+  flex: 1;
+  min-width: 160px;
+`;
+
+const InlineStatusText = styled.Text`
+  flex-shrink: 1;
+  font-size: 13px;
+  line-height: 19px;
+  color: ${({ theme }) => theme.colors.textPrimary};
+`;
+
+const InlineStatusDetail = styled.Text`
+  font-size: 12px;
+  line-height: 17px;
+  margin-top: 2px;
+  color: ${({ theme }) => theme.colors.textSecondary};
+`;
+
+const InlineRetry = styled.TouchableOpacity`
+  min-height: 36px;
+  justify-content: center;
+  padding: 0 ${({ theme }) => theme.spacing.md}px;
+  border-radius: ${({ theme }) => theme.borderRadius.full}px;
+  border: 1px solid ${({ theme }) => theme.colors.error};
+`;
+
+const InlineRetryText = styled.Text`
+  font-size: 13px;
+  font-weight: 600;
+  color: ${({ theme }) => theme.colors.textPrimary};
 `;
 
 const TokenRow = styled.TouchableOpacity<{ $selected: boolean }>`
