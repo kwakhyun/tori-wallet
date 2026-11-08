@@ -108,7 +108,11 @@ let captureStarted = false;
 let initialUrlRequested = false;
 let activeHandler: LinkHandler | null = null;
 const pendingLinks: string[] = [];
-/** 페어링 URI는 일회용이므로 같은 링크가 두 번 전달되어도 한 번만 처리한다. */
+/**
+ * 페어링 URI는 일회용이므로 같은 링크가 두 번 전달되어도 한 번만 처리한다.
+ * 진행 중이거나 성공한 페어링만 기억한다. 실패하면 지워서, dApp이 같은 링크를 다시
+ * 열 때(AppKit은 만료 전까지 같은 URI를 재사용한다) 다시 시도되게 한다.
+ */
 const handledPairUris = new Set<string>();
 
 function deliver(url: string | null | undefined): void {
@@ -153,10 +157,11 @@ export function getPendingDeepLinkCount(): number {
 /**
  * enabled인 동안 WalletConnect 딥링크를 onLink로 전달한다. 비활성(잠금, 메인 스택 없음)
  * 동안 도착한 링크는 보관했다가 활성화되면 전달한다. 같은 페어링 URI는 한 번만 전달한다.
+ * onLink가 거부되는 promise를 돌려주면(페어링 실패) 그 URI는 다시 전달될 수 있다.
  */
 export function useDeepLinks(
   enabled: boolean,
-  onLink: (action: DeepLinkAction, url: string) => void,
+  onLink: (action: DeepLinkAction, url: string) => Promise<void> | void,
 ): void {
   const onLinkRef = useRef(onLink);
   onLinkRef.current = onLink;
@@ -170,11 +175,24 @@ export function useDeepLinks(
     const handler: LinkHandler = url => {
       const action = parseDeepLink(url);
       if (!action) return;
-      if (action.kind === 'pair') {
-        if (handledPairUris.has(action.uri)) return;
-        handledPairUris.add(action.uri);
+      if (action.kind !== 'pair') {
+        onLinkRef.current(action, url);
+        return;
       }
-      onLinkRef.current(action, url);
+      const pairUri = action.uri;
+      if (handledPairUris.has(pairUri)) return;
+      handledPairUris.add(pairUri);
+      const release = () => {
+        handledPairUris.delete(pairUri);
+      };
+      try {
+        const outcome = onLinkRef.current(action, url);
+        if (outcome && typeof outcome.then === 'function') {
+          outcome.then(undefined, release);
+        }
+      } catch {
+        release();
+      }
     };
     activeHandler = handler;
     pendingLinks.splice(0).forEach(handler);

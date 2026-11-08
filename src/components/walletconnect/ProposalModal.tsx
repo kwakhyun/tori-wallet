@@ -65,7 +65,8 @@ export function ProposalModal({
       visible={visible}
       transparent
       animationType="fade"
-      onRequestClose={onReject}
+      // 연결 승인 처리 중에는 Android 뒤로 가기로 거부하지 않는다.
+      onRequestClose={isProcessing ? () => undefined : onReject}
     >
       <Overlay>
         <Card accessibilityViewIsModal testID="wc-proposal-modal">

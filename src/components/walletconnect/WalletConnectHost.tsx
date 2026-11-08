@@ -57,10 +57,12 @@ import { ChainSwitchModal } from './ChainSwitchModal';
 import {
   computeExpiresAt,
   describeMethods,
+  describeReviewError,
   describeUnsupported,
   estimateUsdValue,
   getRequestAccount,
   parseRequestedChainId,
+  recordDAppTransaction,
   MAX_QUEUED_REQUESTS,
   REVIEW_WINDOW_MS,
   type DAppInfo,
@@ -70,6 +72,25 @@ import {
 } from './requestReview';
 
 const logger = createLogger('WalletConnect');
+
+/**
+ * 지금 지갑이 잠겨 있는지 스토어에서 바로 읽는다. 자동 잠금은 호스트가 다시 렌더링되기
+ * 전에 일어날 수 있으므로, 비동기 작업이 끝난 뒤의 알림은 이 값으로 확인한다.
+ */
+function isWalletLockedNow(): boolean {
+  const { hasWallet, isLocked } = useWalletStore.getState();
+  return !hasWallet || isLocked !== false;
+}
+
+function shortAddress(address: string): string {
+  return address.length > 14
+    ? `${address.slice(0, 6)}…${address.slice(-4)}`
+    : address;
+}
+
+function sameAddress(a: string | undefined, b: string | undefined): boolean {
+  return !!a && !!b && a.toLowerCase() === b.toLowerCase();
+}
 
 // 메인 스택이 마운트되기 전(콜드 스타트 잠금 화면)에 도착한 딥링크도 보관한다.
 startDeepLinkCapture();
@@ -102,6 +123,7 @@ export function WalletConnectHost(): React.JSX.Element | null {
     activeNetworkChainId,
     networks,
     setActiveNetwork,
+    setActiveWallet,
   } = useWalletStore(
     useShallow(state => ({
       hasWallet: state.hasWallet,
@@ -111,6 +133,7 @@ export function WalletConnectHost(): React.JSX.Element | null {
       activeNetworkChainId: state.activeNetworkChainId,
       networks: state.networks,
       setActiveNetwork: state.setActiveNetwork,
+      setActiveWallet: state.setActiveWallet,
     })),
   );
   const { requiresTransactionPin } = useSecurityStore(
@@ -134,6 +157,8 @@ export function WalletConnectHost(): React.JSX.Element | null {
   activeChainRef.current = activeNetworkChainId;
   const setActiveNetworkRef = useRef(setActiveNetwork);
   setActiveNetworkRef.current = setActiveNetwork;
+  const walletsRef = useRef(walletList);
+  walletsRef.current = walletList;
 
   const alive = useRef(true);
   const [queue, setQueue] = useState<QueuedItem[]>([]);
@@ -146,6 +171,30 @@ export function WalletConnectHost(): React.JSX.Element | null {
   const [showSignPinConfirm, setShowSignPinConfirm] = useState(false);
   const [isApprovingSession, setIsApprovingSession] = useState(false);
   const [isSwitchingChain, setIsSwitchingChain] = useState(false);
+  // 승인 처리 중에는 (Android 뒤로 가기 등으로) 같은 항목을 거부하지 않는다.
+  const approvingSession = useRef(false);
+  const switchingChain = useRef(false);
+
+  /** 앱 계정 이름 (없으면 축약 주소) */
+  const accountLabel = useCallback((address: string) => {
+    const wallet = walletsRef.current.find(item =>
+      sameAddress(item.address, address),
+    );
+    return wallet?.name || shortAddress(address);
+  }, []);
+
+  /**
+   * 실패/차단 알림. Alert는 잠금 오버레이 위에 뜨므로, 비동기 작업이 끝난 시점에 지갑이
+   * 잠겨 있으면 잠금 해제 후 표시되는 토스트로 대신 알린다.
+   */
+  const notifyFailure = useCallback((title: string, message: string) => {
+    if (!alive.current) return;
+    if (lockedRef.current || isWalletLockedNow()) {
+      showToast(`${title}: ${message}`, 'error', 6000);
+      return;
+    }
+    Alert.alert(title, message);
+  }, []);
 
   const updateQueue = useCallback((next: QueuedItem[]) => {
     queueRef.current = next;
@@ -239,7 +288,8 @@ export function WalletConnectHost(): React.JSX.Element | null {
       .rejectRequest(request.topic, request.id)
       .catch(reason => logger.warn('Request rejection failed', reason));
     logger.warn('Rejected request that could not be safely reviewed', error);
-    const reason = errorMessage(error);
+    // viem 오류의 긴 영문 메시지(호출 인자, calldata)는 짧은 한국어 사유로 바꾼다.
+    const reason = describeReviewError(error);
     showToast(
       `${dAppName} 요청을 안전하게 확인할 수 없어 자동으로 거부했습니다.${
         reason ? ` (${reason})` : ''
@@ -287,7 +337,7 @@ export function WalletConnectHost(): React.JSX.Element | null {
         .catch(reason => logger.warn('Request rejection failed', reason));
       showToast(
         method === 'wallet_addEthereumChain'
-          ? `${dApp.name}의 네트워크 추가 요청을 거부했습니다. 토리월렛은 기본 제공 네트워크만 지원합니다.`
+          ? `${dApp.name}의 네트워크 추가 요청을 거부했습니다. 필요한 네트워크는 설정 > 네트워크에서 직접 추가할 수 있습니다.`
           : `${dApp.name}이(가) 지원하지 않는 네트워크(체인 ${target})로 전환을 요청해 거부했습니다.`,
         'warning',
         5000,
@@ -475,7 +525,7 @@ export function WalletConnectHost(): React.JSX.Element | null {
       await wcService
         .rejectSession(proposal)
         .catch(reason => logger.warn('Proposal rejection failed', reason));
-      Alert.alert(
+      notifyFailure(
         '위험한 연결 차단',
         verification.isScam
           ? 'WalletConnect가 피싱 또는 사기 사이트로 식별했습니다.'
@@ -497,6 +547,28 @@ export function WalletConnectHost(): React.JSX.Element | null {
             : 'UNSUPPORTED_CHAINS',
         )
         .catch(reason => logger.warn('Proposal rejection failed', reason));
+      const requiredProblem =
+        analysis.unsupportedRequiredChains.length > 0 ||
+        analysis.unsupportedNamespaces.length > 0 ||
+        analysis.unsupportedRequiredMethods.length > 0;
+      if (!requiredProblem) {
+        // 필수 항목은 없지만 요청한 네트워크를 하나도 지원하지 않는 경우
+        const requested = describeUnsupported([
+          ...analysis.unsupportedOptionalChains,
+          ...analysis.unsupportedOptionalNamespaces,
+        ]);
+        notifyFailure(
+          '연결할 수 없는 dApp',
+          `${name}이(가) 요청한 네트워크${
+            requested ? `(${requested})` : ''
+          }를 토리월렛이 지원하지 않아 연결을 거부했습니다.${
+            analysis.unsupportedOptionalChains.length > 0
+              ? '\n\n필요한 네트워크는 설정 > 네트워크에서 직접 추가한 뒤 다시 연결할 수 있습니다.'
+              : ''
+          }`,
+        );
+        return;
+      }
       const unsupported = [
         describeUnsupported([
           ...analysis.unsupportedRequiredChains,
@@ -509,7 +581,7 @@ export function WalletConnectHost(): React.JSX.Element | null {
       const networkProblem =
         analysis.unsupportedRequiredChains.length > 0 ||
         analysis.unsupportedNamespaces.length > 0;
-      Alert.alert(
+      notifyFailure(
         '연결할 수 없는 dApp',
         `${name}이(가) 토리월렛이 지원하지 않는 ${
           networkProblem ? '네트워크' : '기능'
@@ -701,23 +773,26 @@ export function WalletConnectHost(): React.JSX.Element | null {
   }, [hasPending, locked]);
 
   // 딥링크로 받은 WalletConnect URI는 잠금 해제 후 자동으로 페어링한다.
-  const handleDeepLink = useCallback((action: DeepLinkAction) => {
-    if (action.kind === 'wake') return;
-    if (action.kind === 'invalid') {
-      showToast(action.reason, 'error', 5000);
-      return;
-    }
-    if (!wcService.isConfigured()) {
-      showToast(WC_NOT_CONFIGURED_MESSAGE, 'error', 5000);
-      return;
-    }
-    showToast('dApp 연결 요청을 불러오는 중입니다…', 'info');
-    wcService
-      .pairWithUri(action.uri)
-      .catch(error =>
-        showToast(errorMessage(error) || '연결에 실패했습니다.', 'error', 5000),
-      );
-  }, []);
+  // 페어링에 실패하면 거부된 promise를 돌려줘, dApp이 같은 링크를 다시 열 때 재시도되게 한다.
+  const handleDeepLink = useCallback(
+    (action: DeepLinkAction): Promise<void> | void => {
+      if (action.kind === 'wake') return;
+      if (action.kind === 'invalid') {
+        showToast(action.reason, 'error', 5000);
+        return;
+      }
+      if (!wcService.isConfigured()) {
+        showToast(WC_NOT_CONFIGURED_MESSAGE, 'error', 5000);
+        return Promise.reject(new Error(WC_NOT_CONFIGURED_MESSAGE));
+      }
+      showToast('dApp 연결 요청을 불러오는 중입니다…', 'info');
+      return wcService.pairWithUri(action.uri).catch(error => {
+        showToast(errorMessage(error) || '연결에 실패했습니다.', 'error', 5000);
+        throw error;
+      });
+    },
+    [],
+  );
   useDeepLinks(!locked, handleDeepLink);
 
   // ---------------------------------------------------------------------------
@@ -743,43 +818,72 @@ export function WalletConnectHost(): React.JSX.Element | null {
           snapshot.account,
           snapshot.method,
         );
+      const isTransaction = snapshot.method === 'eth_sendTransaction';
       try {
-        if (!isAuthorized())
-          throw new Error(
-            '서명 승인이 만료되었거나 계정이 변경되었습니다. 요청을 다시 확인해주세요.',
+        let result: unknown;
+        try {
+          if (!isAuthorized())
+            throw new Error(
+              '서명 승인이 만료되었거나 계정이 변경되었습니다. 요청을 다시 확인해주세요.',
+            );
+          assertSigningIntentUnchanged(snapshot.intent.fingerprint, snapshot);
+          await wcLogService.logRequest({
+            sessionTopic: snapshot.topic,
+            requestId: snapshot.id,
+            method: snapshot.method,
+            params: snapshot.params,
+            chainId: snapshot.chainId,
+            dappName: snapshot.dApp.name,
+          });
+          if (!isAuthorized()) throw new Error('서명 승인이 취소되었습니다.');
+          result = await signingService.handleRequest(
+            snapshot.method,
+            snapshot.params,
+            snapshot.chainId,
+            isAuthorized,
           );
-        assertSigningIntentUnchanged(snapshot.intent.fingerprint, snapshot);
-        await wcLogService.logRequest({
-          sessionTopic: snapshot.topic,
-          requestId: snapshot.id,
-          method: snapshot.method,
-          params: snapshot.params,
-          chainId: snapshot.chainId,
-          dappName: snapshot.dApp.name,
-        });
-        if (!isAuthorized()) throw new Error('서명 승인이 취소되었습니다.');
-        const result = await signingService.handleRequest(
-          snapshot.method,
-          snapshot.params,
-          snapshot.chainId,
-          isAuthorized,
-        );
-        await wcService.respondRequest(snapshot.topic, snapshot.id, result);
-        if (alive.current)
-          showToast(
-            snapshot.method === 'eth_sendTransaction'
-              ? '트랜잭션을 네트워크에 제출했습니다.'
-              : '서명을 완료했습니다.',
-            'success',
-          );
-      } catch (error) {
-        await wcService
-          .rejectRequest(snapshot.topic, snapshot.id)
-          .catch(reason => logger.warn('Request rejection failed', reason));
-        if (alive.current)
-          Alert.alert(
+        } catch (error) {
+          // 서명/전송 전에 실패한 경우에만 dApp에 거부로 응답한다.
+          await wcService
+            .rejectRequest(snapshot.topic, snapshot.id)
+            .catch(reason => logger.warn('Request rejection failed', reason));
+          notifyFailure(
             '서명 실패',
             errorMessage(error) || '서명 처리에 실패했습니다.',
+          );
+          return;
+        }
+
+        // 여기부터는 이미 서명(전송)됐다. 어떤 경우에도 거부 응답을 보내지 않는다.
+        if (isTransaction) {
+          // 활동 탭·상태 알림·승인 관리용 기록. dApp 응답을 기다리게 하지 않는다.
+          recordDAppTransaction(snapshot, result).catch(error =>
+            logger.warn('Failed to record dApp transaction', error),
+          );
+        }
+        const hash =
+          isTransaction && typeof result === 'string'
+            ? ` (${shortAddress(result)})`
+            : '';
+        try {
+          await wcService.respondRequest(snapshot.topic, snapshot.id, result);
+        } catch (error) {
+          logger.warn('Signed result could not be delivered to the dApp', error);
+          notifyFailure(
+            isTransaction ? '트랜잭션 제출됨' : '서명 완료',
+            isTransaction
+              ? `트랜잭션은 네트워크에 제출되었지만 dApp에 결과를 전달하지 못했습니다${hash}. 같은 거래를 다시 보내기 전에 활동 탭에서 상태를 확인하세요.`
+              : '서명은 완료되었지만 dApp에 결과를 전달하지 못했습니다. dApp에서 다시 요청해주세요.',
+          );
+          return;
+        }
+        if (alive.current)
+          showToast(
+            isTransaction
+              ? `트랜잭션을 네트워크에 제출했습니다${hash}. 활동 탭에서 상태를 확인할 수 있습니다.`
+              : '서명을 완료했습니다.',
+            'success',
+            isTransaction ? 4000 : undefined,
           );
       } finally {
         if (approvedRequest.current === snapshot)
@@ -789,7 +893,7 @@ export function WalletConnectHost(): React.JSX.Element | null {
         removeItem(snapshot);
       }
     },
-    [removeItem],
+    [notifyFailure, removeItem],
   );
 
   const handleApproveSignRequest = useCallback(() => {
@@ -802,6 +906,17 @@ export function WalletConnectHost(): React.JSX.Element | null {
       lockedRef.current
     )
       return;
+    // 활성 계정이 아닌 계정의 요청은 PIN을 묻기 전에 막는다 (서명 직전 검사는 그대로 유지).
+    if (!sameAddress(activeWalletRef.current?.address, current.account)) {
+      showToast(
+        `이 요청은 계정 "${accountLabel(
+          current.account,
+        )}"용입니다. 해당 계정으로 전환한 뒤 승인할 수 있습니다.`,
+        'warning',
+        5000,
+      );
+      return;
+    }
     const snapshot: QueuedSignRequest = JSON.parse(JSON.stringify(current));
     approvedRequest.current = snapshot;
     // 거래 한도 정책: 계산 가능한 eth_sendTransaction의 USD 가치를 전달한다.
@@ -809,7 +924,19 @@ export function WalletConnectHost(): React.JSX.Element | null {
       snapshot.method === 'eth_sendTransaction' ? snapshot.usdValue : undefined;
     if (requiresTransactionPin(usdValue)) setShowSignPinConfirm(true);
     else executeSignRequest(snapshot);
-  }, [executeSignRequest, requiresTransactionPin]);
+  }, [accountLabel, executeSignRequest, requiresTransactionPin]);
+
+  /** 요청한 계정으로 앱의 활성 계정을 바꾼다 (사용자가 모달에서 직접 누른 경우만). */
+  const handleSwitchToAccount = useCallback(
+    (address: string) => {
+      const index = walletsRef.current.findIndex(item =>
+        sameAddress(item.address, address),
+      );
+      if (index < 0 || lockedRef.current) return;
+      setActiveWallet(index);
+    },
+    [setActiveWallet],
+  );
 
   const handleSignPinConfirmed = useCallback(() => {
     const snapshot = approvedRequest.current;
@@ -840,7 +967,14 @@ export function WalletConnectHost(): React.JSX.Element | null {
 
   const handleApproveChainRequest = useCallback(async () => {
     const current = queueRef.current[0];
-    if (!current || current.type !== 'chain' || lockedRef.current) return;
+    if (
+      !current ||
+      current.type !== 'chain' ||
+      lockedRef.current ||
+      switchingChain.current
+    )
+      return;
+    switchingChain.current = true;
     setIsSwitchingChain(true);
     try {
       const address = activeWalletRef.current?.address;
@@ -857,10 +991,20 @@ export function WalletConnectHost(): React.JSX.Element | null {
         )
       )
         throw new Error('dApp 연결이 해제되었거나 권한이 없습니다.');
+      // 이 dApp에 연결하지 않은 계정을 세션에 추가하거나 알리지 않는다.
+      if (!wcService.sessionHasAddress(current.topic, address)) {
+        const connected = wcService.getSessionAddresses(current.topic)[0];
+        throw new Error(
+          connected
+            ? `이 dApp은 계정 "${accountLabel(
+                connected,
+              )}"에 연결되어 있습니다. 해당 계정으로 전환한 뒤 다시 시도하세요.`
+            : 'dApp 연결이 해제되었거나 권한이 없습니다.',
+        );
+      }
       const ready = await wcService.ensureSessionChain(
         current.topic,
         current.targetChainId,
-        address,
       );
       if (!ready)
         throw new Error('이 dApp 연결에 네트워크를 추가하지 못했습니다.');
@@ -879,17 +1023,18 @@ export function WalletConnectHost(): React.JSX.Element | null {
       showToast(
         errorMessage(error) || '네트워크를 전환하지 못했습니다.',
         'error',
-        4000,
+        5000,
       );
     } finally {
+      switchingChain.current = false;
       if (alive.current) setIsSwitchingChain(false);
       removeItem(current);
     }
-  }, [removeItem]);
+  }, [accountLabel, removeItem]);
 
   const handleRejectChainRequest = useCallback(async () => {
     const current = queueRef.current[0];
-    if (!current || current.type !== 'chain') return;
+    if (!current || current.type !== 'chain' || switchingChain.current) return;
     await wcService
       .rejectRequest(current.topic, current.id)
       .catch(error => logger.warn('Failed to reject request', error));
@@ -904,8 +1049,10 @@ export function WalletConnectHost(): React.JSX.Element | null {
     async (acknowledged: boolean) => {
       const current = proposalsRef.current[0];
       const wallet = activeWalletRef.current;
-      if (!current || !wallet || lockedRef.current) return;
+      if (!current || !wallet || lockedRef.current || approvingSession.current)
+        return;
       const { proposal, verification } = current;
+      approvingSession.current = true;
       setIsApprovingSession(true);
       try {
         if (
@@ -950,22 +1097,23 @@ export function WalletConnectHost(): React.JSX.Element | null {
         wcService
           .rejectSession(proposal)
           .catch(reason => logger.warn('Proposal rejection failed', reason));
-        Alert.alert(
+        notifyFailure(
           '연결 실패',
           errorMessage(error) && /검증|지원/.test(errorMessage(error) || '')
             ? (errorMessage(error) as string)
             : '세션 승인에 실패했습니다. dApp에서 다시 연결해주세요.',
         );
       } finally {
+        approvingSession.current = false;
         if (alive.current) setIsApprovingSession(false);
       }
     },
-    [removeProposal],
+    [notifyFailure, removeProposal],
   );
 
   const handleRejectSession = useCallback(async () => {
     const current = proposalsRef.current[0];
-    if (!current) return;
+    if (!current || approvingSession.current) return;
     removeProposal(current.proposal.id);
     await wcService
       .rejectSession(current.proposal)
@@ -1014,6 +1162,32 @@ export function WalletConnectHost(): React.JSX.Element | null {
 
   const networkName = (chainId: number | undefined) =>
     networkList.find(network => network.chainId === chainId)?.name;
+  const walletFor = (address: string | undefined) =>
+    walletList.find(wallet => sameAddress(wallet.address, address));
+
+  // 요청 계정이 앱의 활성 계정과 다르면 승인을 막고 전환을 안내한다.
+  const signAccountWallet = signHead ? walletFor(signHead.account) : undefined;
+  const signInactiveAccount =
+    signHead && !sameAddress(signHead.account, activeWallet?.address)
+      ? {
+          name: signAccountWallet?.name || shortAddress(signHead.account),
+          onSwitch: signAccountWallet
+            ? () => handleSwitchToAccount(signHead.account)
+            : undefined,
+        }
+      : undefined;
+
+  // 네트워크 전환은 이 dApp에 연결된 계정 기준으로 보여주고, 다른 계정이 활성이면 막는다.
+  const chainSessionAddresses = chainHead
+    ? wcService.getSessionAddresses(chainHead.topic)
+    : [];
+  const chainAccount =
+    chainSessionAddresses.find(address =>
+      sameAddress(address, activeWallet?.address),
+    ) ?? chainSessionAddresses[0];
+  const chainAccountWallet = walletFor(chainAccount);
+  const chainAccountMismatch =
+    !!chainAccount && !sameAddress(chainAccount, activeWallet?.address);
 
   return (
     <>
@@ -1048,6 +1222,7 @@ export function WalletConnectHost(): React.JSX.Element | null {
         dAppVerification={signHead?.dApp.verification}
         isProcessing={isSigning}
         queuePosition={queuePosition}
+        inactiveAccount={signInactiveAccount}
         onApprove={handleApproveSignRequest}
         onReject={handleRejectSignRequest}
       />
@@ -1061,6 +1236,14 @@ export function WalletConnectHost(): React.JSX.Element | null {
             networkName(activeNetworkChainId) || `체인 ${activeNetworkChainId}`
           }
           toNetworkName={chainHead.targetNetworkName}
+          accountAddress={chainAccount}
+          accountName={chainAccountWallet?.name}
+          accountMismatch={chainAccountMismatch}
+          onSwitchAccount={
+            chainAccountMismatch && chainAccount && chainAccountWallet
+              ? () => handleSwitchToAccount(chainAccount)
+              : undefined
+          }
           isAddChain={chainHead.method === 'wallet_addEthereumChain'}
           queuePosition={queuePosition}
           expiresAt={chainHead.expiresAt}

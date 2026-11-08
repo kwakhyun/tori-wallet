@@ -293,8 +293,15 @@ export interface ProposalAnalysis {
   approvedChainIds: number[];
   /** 지갑이 지원하지 않는 필수 체인 (CAIP-2) */
   unsupportedRequiredChains: string[];
+  /**
+   * 지갑이 지원하지 않는 선택 체인 (CAIP-2). 요청한 EVM 체인 중 지원하는 것이 하나도
+   * 없으면 연결할 네트워크가 없으므로 승인할 수 없다.
+   */
+  unsupportedOptionalChains: string[];
   /** 지원하지 않는 필수 네임스페이스 (예: solana) */
   unsupportedNamespaces: string[];
+  /** EVM(eip155) 없이 요청한 선택 네임스페이스 (예: solana만 요청한 dApp) */
+  unsupportedOptionalNamespaces: string[];
   /** 지원하지 않는 필수 메서드/이벤트 (예: 보안상 막은 eth_sign) */
   unsupportedRequiredMethods: string[];
   /** 승인될 메서드 (요청 ∩ 지원) */
@@ -303,23 +310,29 @@ export interface ProposalAnalysis {
   canApprove: boolean;
 }
 
+interface CollectedNamespaces {
+  chains: string[];
+  methods: Set<string>;
+  events: Set<string>;
+  /** eip155 / eip155:<id> 네임스페이스가 하나라도 있었는지 */
+  hasEvm: boolean;
+  /** EVM이 아닌 네임스페이스 키 */
+  otherNamespaces: string[];
+}
+
 function collectNamespace(
   namespaces: Record<string, NamespaceLike> | undefined,
-  required: boolean,
-  out: {
-    chains: string[];
-    methods: Set<string>;
-    events: Set<string>;
-    unsupportedNamespaces: string[];
-  },
+  out: CollectedNamespaces,
 ): void {
   for (const [key, ns] of Object.entries(namespaces || {})) {
     if (key === 'eip155') {
+      out.hasEvm = true;
       out.chains.push(...(ns?.chains || []));
     } else if (key.startsWith('eip155:')) {
+      out.hasEvm = true;
       out.chains.push(key);
     } else {
-      if (required) out.unsupportedNamespaces.push(key);
+      out.otherNamespaces.push(key);
       continue;
     }
     (ns?.methods || []).forEach(method => out.methods.add(method));
@@ -337,20 +350,17 @@ export function analyzeProposal(
     requiredNamespaces?: Record<string, NamespaceLike>;
     optionalNamespaces?: Record<string, NamespaceLike>;
   };
-  const required = {
-    chains: [] as string[],
+  const empty = (): CollectedNamespaces => ({
+    chains: [],
     methods: new Set<string>(),
     events: new Set<string>(),
-    unsupportedNamespaces: [] as string[],
-  };
-  const optional = {
-    chains: [] as string[],
-    methods: new Set<string>(),
-    events: new Set<string>(),
-    unsupportedNamespaces: [] as string[],
-  };
-  collectNamespace(params.requiredNamespaces, true, required);
-  collectNamespace(params.optionalNamespaces, false, optional);
+    hasEvm: false,
+    otherNamespaces: [],
+  });
+  const required = empty();
+  const optional = empty();
+  collectNamespace(params.requiredNamespaces, required);
+  collectNamespace(params.optionalNamespaces, optional);
 
   const supported = new Set(walletChainIds);
   const unsupportedRequiredChains: string[] = [];
@@ -365,10 +375,16 @@ export function analyzeProposal(
     }
   }
   const optionalChainIds: number[] = [];
+  const unsupportedOptionalChains: string[] = [];
   for (const caip of optional.chains) {
     const chainId = parseCaipChainId(caip);
     if (chainId !== null && !optionalChainIds.includes(chainId))
       optionalChainIds.push(chainId);
+    if (
+      (chainId === null || !supported.has(chainId)) &&
+      !unsupportedOptionalChains.includes(caip)
+    )
+      unsupportedOptionalChains.push(caip);
   }
 
   const requested = [
@@ -376,8 +392,20 @@ export function analyzeProposal(
     ...optionalChainIds.filter(id => supported.has(id)),
   ];
   let approvedChainIds = Array.from(new Set(requested));
-  if (approvedChainIds.length === 0 && supported.has(activeChainId)) {
-    // 체인을 명시하지 않았거나 지원 체인이 없으면 현재 네트워크로 연결한다.
+  // 요청에 EVM 체인이 하나도 없을 때만 현재 네트워크로 연결한다. dApp이 체인을 나열했는데
+  // 지원하는 것이 없으면 승인할 체인이 없다 (WalletConnect도 교집합만 승인한다).
+  const proposedEvmChains = required.chains.length + optional.chains.length > 0;
+  // EVM 네임스페이스 없이 다른 네임스페이스(예: solana)만 요청했다면 연결할 것이 없다.
+  const onlyOtherNamespaces =
+    !required.hasEvm &&
+    !optional.hasEvm &&
+    required.otherNamespaces.length + optional.otherNamespaces.length > 0;
+  if (
+    approvedChainIds.length === 0 &&
+    !proposedEvmChains &&
+    !onlyOtherNamespaces &&
+    supported.has(activeChainId)
+  ) {
     approvedChainIds = [activeChainId];
   }
   if (approvedChainIds.includes(activeChainId)) {
@@ -405,18 +433,28 @@ export function analyzeProposal(
     optionalChainIds,
     approvedChainIds,
     unsupportedRequiredChains,
-    unsupportedNamespaces: required.unsupportedNamespaces,
+    unsupportedOptionalChains,
+    unsupportedNamespaces: required.otherNamespaces,
+    unsupportedOptionalNamespaces: onlyOtherNamespaces
+      ? optional.otherNamespaces
+      : [],
     unsupportedRequiredMethods,
     methods,
     canApprove:
       unsupportedRequiredChains.length === 0 &&
-      required.unsupportedNamespaces.length === 0 &&
+      required.otherNamespaces.length === 0 &&
       unsupportedRequiredMethods.length === 0 &&
       approvedChainIds.length > 0,
   };
 }
 
-/** 승인할 eip155 네임스페이스를 만든다. 필수 체인을 지원하지 못하면 예외. */
+/**
+ * 승인할 eip155 네임스페이스를 만든다. 필수 체인을 지원하지 못하면 예외.
+ *
+ * WalletConnect의 buildApprovedNamespaces는 제안에 나열된 체인과의 교집합만 승인하므로,
+ * 체인을 나열하지 않은 eip155 네임스페이스(현재 네트워크로 연결하는 경우)는 빈 결과가
+ * 된다. 그때는 요청한 메서드/이벤트 중 지원하는 것만으로 직접 만든다.
+ */
 export function buildSessionNamespaces(
   proposal: Pick<SessionProposal, 'params'>,
   address: string,
@@ -424,7 +462,7 @@ export function buildSessionNamespaces(
 ): SessionTypes.Namespaces {
   const chains = chainIds.map(chainId => `eip155:${chainId}`);
   const accounts = chainIds.map(chainId => `eip155:${chainId}:${address}`);
-  return buildApprovedNamespaces({
+  const approved = buildApprovedNamespaces({
     proposal: proposal.params,
     supportedNamespaces: {
       eip155: {
@@ -435,6 +473,30 @@ export function buildSessionNamespaces(
       },
     },
   });
+  if ((approved.eip155?.accounts?.length ?? 0) > 0 || chainIds.length === 0)
+    return approved;
+
+  const params = proposal.params as unknown as {
+    requiredNamespaces?: Record<string, NamespaceLike>;
+    optionalNamespaces?: Record<string, NamespaceLike>;
+  };
+  const requested = { methods: new Set<string>(), events: new Set<string>() };
+  [params.requiredNamespaces, params.optionalNamespaces].forEach(group =>
+    Object.entries(group || {}).forEach(([key, ns]) => {
+      if (key !== 'eip155' && !key.startsWith('eip155:')) return;
+      (ns?.methods || []).forEach(method => requested.methods.add(method));
+      (ns?.events || []).forEach(event => requested.events.add(event));
+    }),
+  );
+  return {
+    ...approved,
+    eip155: {
+      chains,
+      methods: SUPPORTED_METHODS.filter(method => requested.methods.has(method)),
+      events: SUPPORTED_EVENTS.filter(event => requested.events.has(event)),
+      accounts,
+    },
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -1056,19 +1118,42 @@ class WCService {
   }
 
   /**
-   * 사용자가 승인한 네트워크 전환을 위해 세션에 체인을 추가한다.
-   * 이미 포함되어 있으면 아무 것도 하지 않는다.
+   * 세션에 승인된 계정 주소 (중복 제거, 세션에 저장된 표기 그대로).
+   * 사용자가 연결을 승인한 계정만 들어 있다.
    */
-  async ensureSessionChain(
-    topic: string,
-    chainId: number,
-    address: string,
-  ): Promise<boolean> {
+  getSessionAddresses(topic: string): string[] {
+    const namespace = this.getRawSession(topic)?.namespaces.eip155;
+    const seen = new Map<string, string>();
+    (namespace?.accounts || []).forEach(account => {
+      const address = account.split(':')[2];
+      if (address && !seen.has(address.toLowerCase()))
+        seen.set(address.toLowerCase(), address);
+    });
+    return Array.from(seen.values());
+  }
+
+  /** 계정이 이 세션에 승인되어 있는지 (체인 무관) */
+  sessionHasAddress(topic: string, address: string | undefined): boolean {
+    if (!address) return false;
+    const target = address.toLowerCase();
+    return this.getSessionAddresses(topic).some(
+      item => item.toLowerCase() === target,
+    );
+  }
+
+  /**
+   * 사용자가 승인한 네트워크 전환을 위해 세션에 체인을 추가한다.
+   * 이미 포함되어 있으면 아무 것도 하지 않는다. 새 체인에는 이 세션에 이미 승인된
+   * 계정만 추가한다 (앱의 다른 계정을 dApp에 노출하지 않는다).
+   */
+  async ensureSessionChain(topic: string, chainId: number): Promise<boolean> {
     const session = this.getRawSession(topic);
     const namespace = session?.namespaces.eip155;
     if (!this.walletKit || !session || !namespace) return false;
     const caipChain = `eip155:${chainId}`;
     if ((namespace.chains || []).includes(caipChain)) return true;
+    const addresses = this.getSessionAddresses(topic);
+    if (addresses.length === 0) return false;
     const kit = this.walletKit as IWalletKit & {
       updateSession?: IWalletKit['updateSession'];
     };
@@ -1081,7 +1166,10 @@ class WCService {
           eip155: {
             ...namespace,
             chains: [...(namespace.chains || []), caipChain],
-            accounts: [...namespace.accounts, `${caipChain}:${address}`],
+            accounts: [
+              ...namespace.accounts,
+              ...addresses.map(address => `${caipChain}:${address}`),
+            ],
           },
         },
       });

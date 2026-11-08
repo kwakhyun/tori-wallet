@@ -2,11 +2,18 @@
  * WalletConnect 요청 검토 보조 함수 (호스트에서 사용)
  */
 
-import { formatEther } from 'viem';
+import { formatEther, formatUnits } from 'viem';
 import { coinService } from '@/services/coinService';
+import { decodeApproveCalldata } from '@/services/approvalService';
+import { transactionTracker } from '@/services/transactionTracker';
+import { transactionCacheService, type TransactionType } from '@/realm/services';
 import type { SignRequest } from '@/components/SignRequestModal';
 import type { DAppVerification } from '@/services/wcService';
-import type { SigningRequestInput } from '@/services/signingIntentService';
+import {
+  getKnownToken,
+  nativeSymbol,
+  type SigningRequestInput,
+} from '@/services/signingIntentService';
 
 export interface DAppInfo {
   name: string;
@@ -145,6 +152,147 @@ export function describeMethods(methods: string[]): string[] {
   return Array.from(
     new Set(methods.map(method => METHOD_LABELS[method]).filter(Boolean)),
   );
+}
+
+// ---------------------------------------------------------------------------
+// 자동 거부 사유
+// ---------------------------------------------------------------------------
+
+const NETWORK_ERRORS = new Set([
+  'HttpRequestError',
+  'TimeoutError',
+  'WebSocketRequestError',
+  'RpcRequestError',
+]);
+const REVERT_ERRORS = new Set([
+  'ExecutionRevertedError',
+  'ContractFunctionRevertedError',
+  'CallExecutionError',
+  'EstimateGasExecutionError',
+]);
+const MAX_REASON_LENGTH = 80;
+
+function errorChain(error: unknown): Error[] {
+  const chain: Error[] = [];
+  let current: unknown = error;
+  while (current instanceof Error && chain.length < 8) {
+    if (chain.includes(current)) break;
+    chain.push(current);
+    current = (current as { cause?: unknown }).cause;
+  }
+  return chain;
+}
+
+function truncate(text: string): string {
+  const line = text.split('\n')[0].trim();
+  return line.length > MAX_REASON_LENGTH
+    ? `${line.slice(0, MAX_REASON_LENGTH - 1)}…`
+    : line;
+}
+
+/**
+ * 검토 준비(가스 추정, RPC 조회 등) 실패를 토스트에 붙일 짧은 한국어 사유로 바꾼다.
+ * viem 오류의 긴 영문 메시지(호출 인자, calldata 포함)는 그대로 보여주지 않는다.
+ */
+export function describeReviewError(error: unknown): string | null {
+  const chain = errorChain(error);
+  if (chain.length === 0) return null;
+  const names = chain.map(item => item.name);
+  if (names.includes('InsufficientFundsError')) return '잔액이 부족합니다';
+  if (names.some(name => NETWORK_ERRORS.has(name)))
+    return '네트워크 응답이 없습니다';
+  if (names.some(name => REVERT_ERRORS.has(name)))
+    return '트랜잭션이 실패할 것으로 예상됩니다';
+  const own = chain[0].message || '';
+  // 앱이 직접 만든 한국어 오류는 그대로 보여준다.
+  if (/[가-힣]/.test(own)) return truncate(own);
+  const short = (chain[0] as { shortMessage?: unknown }).shortMessage;
+  const text = typeof short === 'string' && short ? short : own;
+  return text ? truncate(text) : null;
+}
+
+// ---------------------------------------------------------------------------
+// dApp 트랜잭션 기록
+// ---------------------------------------------------------------------------
+
+function quantity(value: unknown): bigint | null {
+  if (typeof value !== 'string' && typeof value !== 'number') return null;
+  try {
+    const parsed = BigInt(value);
+    return parsed >= 0n ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * dApp이 보낸 eth_sendTransaction을 로컬 거래 기록에 남긴다. 활동 탭의 대기 행,
+ * 상태 토스트(TransactionNotifier)와 가속/취소, 토큰 승인 관리(dApp에 부여한 approve
+ * 발견)가 이 기록을 사용한다. 실패해도 dApp 응답에는 영향을 주지 않는다.
+ */
+export async function recordDAppTransaction(
+  request: Pick<
+    QueuedSignRequest,
+    'params' | 'chainId' | 'account' | 'tokenMetadata' | 'dApp'
+  >,
+  hash: unknown,
+): Promise<void> {
+  if (typeof hash !== 'string' || !/^0x[0-9a-fA-F]{64}$/.test(hash)) return;
+  const tx = request.params[0] as
+    | {
+        to?: string;
+        value?: string;
+        data?: string;
+        gas?: string;
+        gasPrice?: string;
+        maxFeePerGas?: string;
+        nonce?: string;
+      }
+    | undefined;
+  if (!tx?.to) return;
+  const valueWei = quantity(tx.value) ?? 0n;
+  const data = tx.data || '0x';
+  const approve = decodeApproveCalldata(data);
+  const type: TransactionType = approve
+    ? 'approve'
+    : data !== '0x'
+    ? 'contract'
+    : 'send';
+  const token = approve
+    ? getKnownToken(request.chainId, tx.to) ??
+      request.tokenMetadata?.[tx.to.toLowerCase()] ??
+      null
+    : null;
+  const nonce = quantity(tx.nonce);
+  const gas = quantity(tx.gas);
+  let tokenAmount: string | undefined;
+  if (approve) {
+    tokenAmount = token
+      ? formatUnits(approve.amount, token.decimals)
+      : approve.amount.toString();
+  } else if (type === 'send') {
+    tokenAmount = formatEther(valueWei);
+  }
+  await transactionCacheService.createLocalTransaction({
+    hash,
+    chainId: request.chainId,
+    from: request.account,
+    to: tx.to,
+    value: formatEther(valueWei),
+    valueWei: valueWei.toString(),
+    gasPrice: (quantity(tx.gasPrice ?? tx.maxFeePerGas) ?? 0n).toString(),
+    gasLimit: gas === null ? undefined : gas.toString(),
+    nonce:
+      nonce !== null && nonce <= BigInt(Number.MAX_SAFE_INTEGER)
+        ? Number(nonce)
+        : undefined,
+    type,
+    method: `wc:${request.dApp.name}`.slice(0, 80),
+    tokenSymbol: approve ? token?.symbol : nativeSymbol(request.chainId),
+    tokenAmount,
+    tokenAddress: approve ? tx.to : undefined,
+  });
+  transactionTracker.reconcile();
 }
 
 /** "eip155:999" → "체인 999", "solana" → "solana 네임스페이스" */

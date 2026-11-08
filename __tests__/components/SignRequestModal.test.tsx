@@ -226,4 +226,28 @@ describe('SignRequestModal', () => {
     expect(onReject).toHaveBeenCalled();
     expect(getByLabelText('요청 승인')).toBeTruthy();
   });
+
+  it('blocks approval for an account that is not active and offers to switch', () => {
+    const onApprove = jest.fn();
+    const onSwitch = jest.fn();
+    const { getByTestId, getByLabelText, getByText } = renderWithTheme(
+      <SignRequestModal
+        {...defaultProps}
+        onApprove={onApprove}
+        inactiveAccount={{ name: '계정 1', onSwitch }}
+      />,
+    );
+    expect(getByTestId('sign-request-inactive-account')).toBeTruthy();
+    expect(
+      getByText(
+        '이 요청은 계정 "계정 1"용입니다. 해당 계정으로 전환한 뒤 승인할 수 있습니다.',
+      ),
+    ).toBeTruthy();
+    const approve = getByLabelText('요청 승인');
+    expect(approve.props.accessibilityState).toEqual({ disabled: true });
+    fireEvent.press(approve);
+    expect(onApprove).not.toHaveBeenCalled();
+    fireEvent.press(getByTestId('sign-request-switch-account'));
+    expect(onSwitch).toHaveBeenCalledTimes(1);
+  });
 });

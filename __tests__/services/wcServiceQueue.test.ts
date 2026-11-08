@@ -263,9 +263,7 @@ describe('session events', () => {
     const { kit } = await initWith(
       createKit({ a: session('a', ['eip155:1']) }),
     );
-    await expect(wcService.ensureSessionChain('a', 137, ADDRESS)).resolves.toBe(
-      true,
-    );
+    await expect(wcService.ensureSessionChain('a', 137)).resolves.toBe(true);
     expect(kit.updateSession).toHaveBeenCalledWith({
       topic: 'a',
       namespaces: {
@@ -275,6 +273,28 @@ describe('session events', () => {
         }),
       },
     });
+  });
+
+  it('adds only the accounts already approved for the session to a new chain', async () => {
+    const { kit } = await initWith(
+      createKit({ a: session('a', ['eip155:1', 'eip155:10']) }),
+    );
+    expect(wcService.getSessionAddresses('a')).toEqual([ADDRESS]);
+    expect(wcService.sessionHasAddress('a', ADDRESS)).toBe(true);
+    expect(
+      wcService.sessionHasAddress(
+        'a',
+        '0x9999999999999999999999999999999999999999',
+      ),
+    ).toBe(false);
+    await wcService.ensureSessionChain('a', 137);
+    const accounts =
+      kit.updateSession.mock.calls[0][0].namespaces.eip155.accounts;
+    expect(accounts).toEqual([
+      `eip155:1:${ADDRESS}`,
+      `eip155:10:${ADDRESS}`,
+      `eip155:137:${ADDRESS}`,
+    ]);
   });
 });
 
