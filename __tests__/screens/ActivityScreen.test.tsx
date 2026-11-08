@@ -359,6 +359,28 @@ describe('ActivityScreen', () => {
       });
     });
 
+    it('loads a newly pending transaction into the local records before it confirms', async () => {
+      mockGetHistoryPage.mockResolvedValue({
+        transactions: [],
+        hasMore: false,
+      });
+      render(<ActivityScreen />);
+      await waitFor(() => screen.getByText('거래 내역이 없습니다'));
+      mockRefetchCache.mockClear();
+
+      mockGetPending.mockResolvedValue([pendingEntry]);
+      act(() => {
+        focusManager.setFocused(false);
+        focusManager.setFocused(true);
+      });
+      await waitFor(() => screen.getByTestId('activity-pending-badge'));
+      // 확정되어 대기 목록에서 빠질 때 로컬 기록에 이미 있어 행이 깜박이지 않는다.
+      await waitFor(() => expect(mockRefetchCache).toHaveBeenCalled());
+      act(() => {
+        focusManager.setFocused(undefined);
+      });
+    });
+
     it('ignores tracker events for other networks', async () => {
       mockGetHistoryPage.mockResolvedValue({
         transactions: [],
