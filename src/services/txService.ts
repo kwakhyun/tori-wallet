@@ -102,6 +102,12 @@ export function chargesL1DataFee(chainId: number): boolean {
 export const FEE_ESTIMATE_FAILED_MESSAGE =
   '수수료를 추정하지 못했습니다. 받는 주소가 이 전송을 거부하거나 네트워크 오류일 수 있습니다.';
 
+const REVERT_REASON_MAX_CHARS = 80;
+// C0/C1 제어 문자, 폭 없는 문자, 양방향 제어 문자(LRE…RLO, LRI…PDI), BOM
+const INVISIBLE_OR_CONTROL_CHARS =
+  // eslint-disable-next-line no-control-regex
+  /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F​-‏‪-‮⁠-⁩﻿]/g;
+
 /** viem 오류 체인에서 컨트랙트 되돌림(revert)과 그 이유를 찾는다. */
 function findRevert(error: unknown): { reason: string | null } | null {
   let current: unknown = error;
@@ -116,8 +122,17 @@ function findRevert(error: unknown): { reason: string | null } | null {
         typeof candidate.shortMessage === 'string'
           ? /with reason: ([\s\S]+?)\.?$/.exec(candidate.shortMessage)
           : null;
-      const reason = match?.[1]?.replace(/\s+/g, ' ').trim();
-      return { reason: reason ? reason.slice(0, 80) : null };
+      // 컨트랙트가 정한 문자열이므로 방향 제어(RTL override 등)·제어·보이지 않는
+      // 문자를 지워 안내 문구를 뒤집거나 숨기지 못하게 한다.
+      const reason = match?.[1]
+        ?.replace(INVISIBLE_OR_CONTROL_CHARS, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+      return {
+        reason: reason
+          ? Array.from(reason).slice(0, REVERT_REASON_MAX_CHARS).join('')
+          : null,
+      };
     }
     current = candidate.cause;
   }

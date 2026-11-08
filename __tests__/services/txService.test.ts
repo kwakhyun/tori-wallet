@@ -332,9 +332,9 @@ describe('TxService - Error Handling', () => {
       );
       // 없는 수동 가스 입력란을 안내하지 않는다.
       chainClient.estimateGas.mockRejectedValueOnce(new Error('RPC timeout'));
-      await expect(
-        txService.estimateTransaction(request),
-      ).rejects.not.toThrow('수동');
+      await expect(txService.estimateTransaction(request)).rejects.not.toThrow(
+        '수동',
+      );
     });
 
     it('says the recipient rejected the transfer and quotes the revert reason', async () => {
@@ -363,6 +363,41 @@ describe('TxService - Error Handling', () => {
       await expect(txService.estimateTransaction(request)).rejects.toThrow(
         /^수수료를 추정하지 못했습니다\. 받는 주소가 이 전송을 거부했습니다\.$/,
       );
+    });
+
+    it('strips bidi/invisible characters from a contract revert reason and caps its length', async () => {
+      const { chainClient } = require('../../src/services/chainClient');
+      const { ExecutionRevertedError } = require('viem');
+      const request = {
+        from: '0x1234567890123456789012345678901234567890' as `0x${string}`,
+        to: '0x0987654321098765432109876543210987654321' as `0x${string}`,
+        value: '1.0',
+        chainId: 1,
+      };
+      // RTL override(U+202E)와 폭 없는 문자로 안내 문구를 뒤집으려는 사유
+      chainClient.estimateGas.mockRejectedValueOnce(
+        new ExecutionRevertedError({
+          message: 'execution reverted: ‮denied​ ⁦ok⁩',
+        }),
+      );
+      await expect(txService.estimateTransaction(request)).rejects.toThrow(
+        '(컨트랙트 응답: "denied ok")',
+      );
+
+      chainClient.estimateGas.mockRejectedValueOnce(
+        new ExecutionRevertedError({
+          message: `execution reverted: ${'가'.repeat(79)}😀😀`,
+        }),
+      );
+      const error = await txService
+        .estimateTransaction(request)
+        .catch((e: Error) => e);
+      const quoted = /컨트랙트 응답: "(.*)"\)$/.exec(
+        (error as Error).message,
+      )?.[1];
+      // 80자에서 자르되 서로게이트 쌍을 반으로 가르지 않는다.
+      expect(Array.from(quoted ?? '')).toHaveLength(80);
+      expect(quoted?.endsWith('😀')).toBe(true);
     });
   });
 
