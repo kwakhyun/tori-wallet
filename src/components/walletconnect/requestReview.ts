@@ -158,17 +158,23 @@ export function describeMethods(methods: string[]): string[] {
 // 자동 거부 사유
 // ---------------------------------------------------------------------------
 
-const NETWORK_ERRORS = new Set([
-  'HttpRequestError',
-  'TimeoutError',
-  'WebSocketRequestError',
-  'RpcRequestError',
-]);
+// 노드가 되돌림(revert)을 명시한 경우. 전송 계층 오류보다 먼저 본다: viem은 노드의
+// JSON-RPC 오류 응답도 RpcRequestError로 감싸므로, 되돌림 오류의 cause에 함께 들어 있다.
 const REVERT_ERRORS = new Set([
   'ExecutionRevertedError',
   'ContractFunctionRevertedError',
-  'CallExecutionError',
+]);
+// 노드에 닿지 못했거나 응답이 없는 경우 (전송 계층)
+const TRANSPORT_ERRORS = new Set([
+  'HttpRequestError',
+  'TimeoutError',
+  'WebSocketRequestError',
+]);
+// 노드는 응답했지만 가스 추정/호출이 실패한 경우
+const EXECUTION_ERRORS = new Set([
   'EstimateGasExecutionError',
+  'CallExecutionError',
+  'ContractFunctionExecutionError',
 ]);
 const MAX_REASON_LENGTH = 80;
 
@@ -199,10 +205,14 @@ export function describeReviewError(error: unknown): string | null {
   if (chain.length === 0) return null;
   const names = chain.map(item => item.name);
   if (names.includes('InsufficientFundsError')) return '잔액이 부족합니다';
-  if (names.some(name => NETWORK_ERRORS.has(name)))
-    return '네트워크 응답이 없습니다';
   if (names.some(name => REVERT_ERRORS.has(name)))
     return '트랜잭션이 실패할 것으로 예상됩니다';
+  if (names.some(name => TRANSPORT_ERRORS.has(name)))
+    return '네트워크 응답이 없습니다';
+  if (names.some(name => EXECUTION_ERRORS.has(name)))
+    return '트랜잭션이 실패할 것으로 예상됩니다';
+  if (names.includes('RpcRequestError'))
+    return '네트워크 노드가 요청을 처리하지 못했습니다';
   const own = chain[0].message || '';
   // 앱이 직접 만든 한국어 오류는 그대로 보여준다.
   if (/[가-힣]/.test(own)) return truncate(own);

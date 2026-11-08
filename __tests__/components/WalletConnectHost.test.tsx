@@ -835,6 +835,44 @@ describe('sessions and chains', () => {
     });
   });
 
+  it('does not time out a chain switch that is already being applied', async () => {
+    let finishUpdate: (() => void) | undefined;
+    kit.updateSession.mockImplementation(
+      () =>
+        new Promise(resolve => {
+          finishUpdate = () => resolve({});
+        }),
+    );
+    await mount();
+    await emit('session_request', switchRequest(15, '0x89'));
+    let approving: Promise<void> | undefined;
+    act(() => {
+      approving = mockChainProps.onApprove();
+    });
+    await act(flush);
+    expect(mockChainProps.isProcessing).toBe(true);
+    // 검토 시간이 지나 만료 정리가 돌아도 처리 중인 전환은 거부하지 않는다.
+    const later = Date.now() + 600_000;
+    jest.spyOn(Date, 'now').mockReturnValue(later);
+    await act(() => new Promise<void>(resolve => setTimeout(resolve, 1100)));
+    expect(rejectedIds()).toEqual([]);
+    expect(mockShowToast).not.toHaveBeenCalledWith(
+      expect.stringContaining('시간 초과'),
+      'warning',
+      expect.any(Number),
+    );
+    await act(async () => {
+      finishUpdate?.();
+      await approving;
+      await flush();
+    });
+    expect(rejectedIds()).toEqual([]);
+    expect(kit.respondSessionRequest).toHaveBeenCalledWith({
+      topic: 'session',
+      response: { id: 15, jsonrpc: '2.0', result: null },
+    });
+  });
+
   it('rejects switching to a network the wallet does not know', async () => {
     await mount();
     await emit('session_request', {
@@ -973,6 +1011,53 @@ describe('session proposals', () => {
     );
     expect(mockProposalProps).toBeUndefined();
     expect(kit.approveSession).not.toHaveBeenCalled();
+  });
+
+  it('rejects a proposal that only asks for non-EVM namespaces as an unsupported namespace', async () => {
+    await mount();
+    const input = proposal([]);
+    input.params.requiredNamespaces = {} as any;
+    input.params.optionalNamespaces = {
+      solana: { chains: ['solana:main'], methods: [], events: [] },
+    } as any;
+    await emit('session_proposal', input);
+    const { getSdkError } = require('@walletconnect/utils');
+    expect(kit.rejectSession).toHaveBeenCalledWith({
+      id: 77,
+      reason: getSdkError('UNSUPPORTED_NAMESPACE_KEY'),
+    });
+    expect(Alert.alert).toHaveBeenCalledWith(
+      '연결할 수 없는 dApp',
+      expect.stringContaining('요청한 네트워크(solana'),
+    );
+    expect(mockProposalProps).toBeUndefined();
+  });
+
+  it('does not expire a proposal while its approval is in flight', async () => {
+    let finishApprove: (() => void) | undefined;
+    kit.approveSession.mockImplementation(
+      () =>
+        new Promise(resolve => {
+          finishApprove = () => resolve({ topic: 'new', expiry: 1 });
+        }),
+    );
+    await mount();
+    await emit('session_proposal', proposal(['eip155:1']));
+    let approving: Promise<void> | undefined;
+    act(() => {
+      approving = mockProposalProps.onApprove(false);
+    });
+    await act(flush);
+    jest.spyOn(Date, 'now').mockReturnValue(Date.now() + 600_000);
+    await act(() => new Promise<void>(resolve => setTimeout(resolve, 1100)));
+    expect(kit.rejectSession).not.toHaveBeenCalled();
+    await act(async () => {
+      finishApprove?.();
+      await approving;
+      await flush();
+    });
+    expect(kit.rejectSession).not.toHaveBeenCalled();
+    expect(mockShowToast).toHaveBeenCalledWith('Swap에 연결되었습니다.', 'success');
   });
 
   it('ignores Android back while the connection is being approved', async () => {

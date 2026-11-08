@@ -171,9 +171,10 @@ export function WalletConnectHost(): React.JSX.Element | null {
   const [showSignPinConfirm, setShowSignPinConfirm] = useState(false);
   const [isApprovingSession, setIsApprovingSession] = useState(false);
   const [isSwitchingChain, setIsSwitchingChain] = useState(false);
-  // 승인 처리 중에는 (Android 뒤로 가기 등으로) 같은 항목을 거부하지 않는다.
-  const approvingSession = useRef(false);
-  const switchingChain = useRef(false);
+  // 승인 처리 중인 항목. 처리 중에는 (Android 뒤로 가기, 만료 정리 등으로) 같은 항목을
+  // 거부하거나 대기열에서 빼지 않는다.
+  const approvingSession = useRef<number | null>(null);
+  const switchingChain = useRef<{ id: number; topic: string } | null>(null);
 
   /** 앱 계정 이름 (없으면 축약 주소) */
   const accountLabel = useCallback((address: string) => {
@@ -542,7 +543,8 @@ export function WalletConnectHost(): React.JSX.Element | null {
       await wcService
         .rejectSession(
           proposal,
-          analysis.unsupportedNamespaces.length > 0
+          analysis.unsupportedNamespaces.length > 0 ||
+            analysis.unsupportedOptionalNamespaces.length > 0
             ? 'UNSUPPORTED_NAMESPACE_KEY'
             : 'UNSUPPORTED_CHAINS',
         )
@@ -721,6 +723,11 @@ export function WalletConnectHost(): React.JSX.Element | null {
           signing.current &&
           approvedRequest.current?.id === item.id &&
           approvedRequest.current?.topic === item.topic
+        ) &&
+        // 네트워크 전환이 이미 진행 중이면 그 처리 결과로 응답한다.
+        !(
+          switchingChain.current?.id === item.id &&
+          switchingChain.current?.topic === item.topic
         ),
     );
     if (expired.length > 0) {
@@ -742,7 +749,8 @@ export function WalletConnectHost(): React.JSX.Element | null {
       );
     }
     const expiredProposals = proposalsRef.current.filter(
-      item => item.expiresAt <= now,
+      item =>
+        item.expiresAt <= now && item.proposal.id !== approvingSession.current,
     );
     if (expiredProposals.length > 0) {
       expiredProposals.forEach(item => {
@@ -974,7 +982,7 @@ export function WalletConnectHost(): React.JSX.Element | null {
       switchingChain.current
     )
       return;
-    switchingChain.current = true;
+    switchingChain.current = { id: current.id, topic: current.topic };
     setIsSwitchingChain(true);
     try {
       const address = activeWalletRef.current?.address;
@@ -1026,7 +1034,7 @@ export function WalletConnectHost(): React.JSX.Element | null {
         5000,
       );
     } finally {
-      switchingChain.current = false;
+      switchingChain.current = null;
       if (alive.current) setIsSwitchingChain(false);
       removeItem(current);
     }
@@ -1049,10 +1057,15 @@ export function WalletConnectHost(): React.JSX.Element | null {
     async (acknowledged: boolean) => {
       const current = proposalsRef.current[0];
       const wallet = activeWalletRef.current;
-      if (!current || !wallet || lockedRef.current || approvingSession.current)
+      if (
+        !current ||
+        !wallet ||
+        lockedRef.current ||
+        approvingSession.current !== null
+      )
         return;
       const { proposal, verification } = current;
-      approvingSession.current = true;
+      approvingSession.current = proposal.id;
       setIsApprovingSession(true);
       try {
         if (
@@ -1104,7 +1117,7 @@ export function WalletConnectHost(): React.JSX.Element | null {
             : '세션 승인에 실패했습니다. dApp에서 다시 연결해주세요.',
         );
       } finally {
-        approvingSession.current = false;
+        approvingSession.current = null;
         if (alive.current) setIsApprovingSession(false);
       }
     },
@@ -1113,7 +1126,7 @@ export function WalletConnectHost(): React.JSX.Element | null {
 
   const handleRejectSession = useCallback(async () => {
     const current = proposalsRef.current[0];
-    if (!current || approvingSession.current) return;
+    if (!current || approvingSession.current !== null) return;
     removeProposal(current.proposal.id);
     await wcService
       .rejectSession(current.proposal)

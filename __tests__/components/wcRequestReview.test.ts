@@ -7,6 +7,9 @@ import {
   ExecutionRevertedError,
   HttpRequestError,
   InsufficientFundsError,
+  InternalRpcError,
+  InvalidInputRpcError,
+  RpcRequestError,
   TimeoutError,
 } from 'viem';
 import { describeReviewError } from '../../src/components/walletconnect/requestReview';
@@ -38,6 +41,55 @@ describe('describeReviewError', () => {
     expect(
       describeReviewError(
         new TimeoutError({ body: {}, url: 'https://rpc.example' }),
+      ),
+    ).toBe('네트워크 응답이 없습니다');
+  });
+
+  it('reports a node-side revert as a failing transaction, not a network outage', () => {
+    // viem 2.55가 JSON-RPC 오류 응답(-32000 execution reverted)으로 만드는 실제 오류 사슬:
+    // EstimateGasExecutionError → ExecutionRevertedError → InvalidInputRpcError → RpcRequestError
+    const rpcError = (code: number, message: string) =>
+      new RpcRequestError({
+        body: { method: 'eth_estimateGas' },
+        error: { code, message },
+        url: 'https://rpc.example',
+      });
+    const revert = gasError(
+      new ExecutionRevertedError({
+        cause: new InvalidInputRpcError(
+          rpcError(-32000, 'execution reverted: STF'),
+        ),
+      }),
+    );
+    expect(describeReviewError(revert)).toBe(
+      '트랜잭션이 실패할 것으로 예상됩니다',
+    );
+    const funds = gasError(
+      new InsufficientFundsError({
+        cause: new InvalidInputRpcError(
+          rpcError(-32000, 'insufficient funds for gas * price + value'),
+        ),
+      }),
+    );
+    expect(describeReviewError(funds)).toBe('잔액이 부족합니다');
+    // 노드가 응답한 내부 오류는 "응답 없음"이 아니다.
+    expect(
+      describeReviewError(
+        gasError(new InternalRpcError(rpcError(-32603, 'internal error'))),
+      ),
+    ).toBe('트랜잭션이 실패할 것으로 예상됩니다');
+    expect(
+      describeReviewError(new InternalRpcError(rpcError(-32603, 'boom'))),
+    ).toBe('네트워크 노드가 요청을 처리하지 못했습니다');
+    // 노드에 닿지 못한 경우만 "네트워크 응답이 없습니다"
+    expect(
+      describeReviewError(
+        gasError(
+          new HttpRequestError({
+            url: 'https://rpc.example',
+            cause: new TypeError('Network request failed'),
+          }),
+        ),
       ),
     ).toBe('네트워크 응답이 없습니다');
   });
