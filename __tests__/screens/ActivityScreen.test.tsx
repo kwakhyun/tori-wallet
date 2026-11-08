@@ -7,9 +7,19 @@
  */
 
 import React from 'react';
+import { act } from '@testing-library/react-native';
 import { render, screen, fireEvent, waitFor } from '../test-utils';
 import { usePreferencesStore } from '../../src/store/preferencesStore';
-import type { Transaction } from '../../src/services/transactionHistory';
+import { useSwapStore } from '../../src/store/swapStore';
+import type {
+  Transaction,
+  TransactionPage,
+} from '../../src/services/transactionHistory';
+import {
+  transactionTracker,
+  type TransactionStatusEvent,
+} from '../../src/services/transactionTracker';
+import type { TransactionCacheEntry } from '../../src/realm/schemas';
 
 const mockNavigate = jest.fn();
 jest.mock('@react-navigation/native', () => {
@@ -38,12 +48,20 @@ jest.mock('../../src/store/walletStore', () => ({
 }));
 
 const mockGetHistoryPage = jest.fn();
-jest.mock('../../src/services/transactionHistory', () => ({
-  transactionHistoryService: {
-    getHistoryPage: (...args: unknown[]) => mockGetHistoryPage(...args),
-    clearCache: jest.fn(),
-  },
-}));
+const mockClearCache = jest.fn();
+let mockSupported = true;
+jest.mock('../../src/services/transactionHistory', () => {
+  const actual = jest.requireActual('../../src/services/transactionHistory');
+  return {
+    transactionHistoryService: {
+      getHistoryPage: (...args: unknown[]) => mockGetHistoryPage(...args),
+      clearCache: (...args: unknown[]) => mockClearCache(...args),
+      isSupported: () => mockSupported,
+      combinePages: (pages: unknown[]) =>
+        actual.transactionHistoryService.combinePages(pages),
+    },
+  };
+});
 
 const mockGetPending = jest.fn();
 const mockSync = jest.fn();
@@ -55,11 +73,13 @@ jest.mock('../../src/realm/services', () => ({
 }));
 
 let mockCached: unknown[] = [];
+const mockRefetchCache = jest.fn();
 jest.mock('../../src/realm/hooks', () => ({
   useTransactions: () => ({
     transactions: mockCached,
     isLoading: false,
-    refetch: jest.fn(),
+    refetch: mockRefetchCache,
+    loadMore: jest.fn(),
   }),
 }));
 
@@ -68,6 +88,8 @@ import ActivityScreen, {
   groupByDay,
   dayLabel,
   describeAmount,
+  fromCacheEntry,
+  labelOf,
 } from '../../src/screens/Activity/ActivityScreen';
 
 const tx = (overrides: Partial<Transaction>): Transaction => ({
@@ -110,9 +132,11 @@ describe('ActivityScreen', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     mockCached = [];
+    mockSupported = true;
     mockGetPending.mockResolvedValue([]);
     mockSync.mockResolvedValue(0);
     usePreferencesStore.setState({ currency: 'USD', hideBalances: false });
+    useSwapStore.getState().resetSwapState();
   });
 
   it('never renders "NaN" for tiny amounts', async () => {
@@ -258,9 +282,360 @@ describe('ActivityScreen', () => {
     render(<ActivityScreen />);
     await waitFor(() => screen.getByText('거래 내역이 없습니다'));
   });
+
+  describe('local transactions and tracker events', () => {
+    let emit: (event: TransactionStatusEvent) => void;
+    let subscribe: jest.SpyInstance;
+
+    beforeEach(() => {
+      subscribe = jest
+        .spyOn(transactionTracker, 'subscribe')
+        .mockImplementation(listener => {
+          emit = listener;
+          return jest.fn();
+        });
+    });
+
+    afterEach(() => subscribe.mockRestore());
+
+    it('keeps a confirmed local transaction visible while the explorer has not indexed it', async () => {
+      // 탐색기 색인 지연: API에는 아직 없다.
+      mockGetHistoryPage.mockResolvedValue({
+        transactions: [],
+        hasMore: false,
+      });
+      mockGetPending.mockResolvedValue([pendingEntry]);
+      mockCached = [pendingEntry];
+      render(<ActivityScreen />);
+      await waitFor(() => screen.getByTestId('activity-pending-badge'));
+      expect(mockGetHistoryPage).toHaveBeenCalledTimes(1);
+
+      // 추적기가 완료를 기록했다.
+      mockGetPending.mockResolvedValue([]);
+      mockCached = [{ ...pendingEntry, status: 'confirmed' }];
+      await act(async () => {
+        emit({ hash: '0xpending', chainId: 1, status: 'confirmed' });
+      });
+
+      await waitFor(() =>
+        expect(screen.queryByTestId('activity-pending-badge')).toBeNull(),
+      );
+      expect(screen.getByTestId('activity-tx-0xpending')).toBeTruthy();
+      expect(screen.getByText('-0.5 ETH')).toBeTruthy();
+      expect(screen.queryByText('거래 내역이 없습니다')).toBeNull();
+      // 로컬 기록과 탐색기 내역(서비스 캐시 포함)을 다시 읽는다.
+      expect(mockRefetchCache).toHaveBeenCalled();
+      expect(mockClearCache).toHaveBeenCalledWith(ME, 1);
+      await waitFor(() => expect(mockGetHistoryPage).toHaveBeenCalledTimes(2));
+    });
+
+    it('ignores tracker events for other networks', async () => {
+      mockGetHistoryPage.mockResolvedValue({
+        transactions: [],
+        hasMore: false,
+      });
+      render(<ActivityScreen />);
+      await waitFor(() => screen.getByText('거래 내역이 없습니다'));
+      await act(async () => {
+        emit({ hash: '0xother', chainId: 137, status: 'confirmed' });
+      });
+      expect(mockClearCache).not.toHaveBeenCalled();
+      expect(mockGetHistoryPage).toHaveBeenCalledTimes(1);
+    });
+
+    it('lists this device’s transactions on networks without an explorer API', async () => {
+      mockSupported = false;
+      mockCached = [{ ...pendingEntry, hash: '0xlocal', status: 'confirmed' }];
+      render(<ActivityScreen />);
+      await waitFor(() => screen.getByTestId('activity-tx-0xlocal'));
+      expect(screen.getByTestId('activity-local-only-note')).toBeTruthy();
+      expect(mockGetHistoryPage).not.toHaveBeenCalled();
+    });
+
+    it('explains the empty state on networks without an explorer API', async () => {
+      mockSupported = false;
+      render(<ActivityScreen />);
+      await waitFor(() =>
+        screen.getByText(/거래 내역 조회를 지원하지 않습니다/),
+      );
+    });
+
+    it('does not show synced explorer rows from the cache while the API works', async () => {
+      mockGetHistoryPage.mockResolvedValue({
+        transactions: [tx({ hash: '0xapi' })],
+        hasMore: false,
+      });
+      mockCached = [
+        {
+          ...pendingEntry,
+          hash: '0xsynced',
+          status: 'confirmed',
+          isLocal: false,
+        },
+      ];
+      render(<ActivityScreen />);
+      await waitFor(() => screen.getByTestId('activity-tx-0xapi'));
+      expect(screen.queryByTestId('activity-tx-0xsynced')).toBeNull();
+    });
+  });
+
+  it('shows a pending transfer from another own account as 받음 on the receiving account', async () => {
+    mockGetHistoryPage.mockResolvedValue({ transactions: [], hasMore: false });
+    mockGetPending.mockResolvedValue([
+      {
+        ...pendingEntry,
+        hash: '0xincoming',
+        from: OTHER.toLowerCase(),
+        to: ME.toLowerCase(),
+      },
+    ]);
+    render(<ActivityScreen />);
+    await waitFor(() => screen.getByTestId('activity-tx-0xincoming'));
+    expect(screen.getByText('받음')).toBeTruthy();
+    expect(screen.getByText('+0.5 ETH')).toBeTruthy();
+    expect(screen.queryByText('보냄')).toBeNull();
+  });
+
+  it('shows a replaced transaction as 대체됨 rather than failed, and a cancel without an amount', async () => {
+    const original = `0x${'a'.repeat(64)}`;
+    const cancel = `0x${'c'.repeat(64)}`;
+    mockGetHistoryPage.mockRejectedValue(new Error('offline'));
+    mockCached = [
+      { ...pendingEntry, hash: original, status: 'cancelled' },
+      {
+        ...pendingEntry,
+        hash: cancel,
+        to: ME.toLowerCase(),
+        tokenAmount: '0',
+        status: 'confirmed',
+        method: `replacement:cancel:${original}`,
+      },
+    ];
+    render(<ActivityScreen />);
+    await waitFor(() => screen.getByTestId(`activity-tx-${original}`));
+    expect(screen.getByText('보냄 (대체됨)')).toBeTruthy();
+    expect(screen.queryByText(/실패/)).toBeNull();
+    expect(screen.getByText('취소 시도')).toBeTruthy();
+    expect(screen.queryByText('-0 ETH')).toBeNull();
+  });
+
+  it('shows a pending speed-up as one row with a 가속 중 badge', async () => {
+    const original = `0x${'a'.repeat(64)}`;
+    const speedUp = `0x${'b'.repeat(64)}`;
+    mockGetHistoryPage.mockResolvedValue({ transactions: [], hasMore: false });
+    mockGetPending.mockResolvedValue([
+      { ...pendingEntry, hash: original },
+      {
+        ...pendingEntry,
+        hash: speedUp,
+        timestamp: pendingEntry.timestamp + 60,
+        method: `replacement:speedUp:${original}`,
+      },
+    ]);
+    render(<ActivityScreen />);
+    await waitFor(() => screen.getByTestId(`activity-tx-${original}`));
+    expect(screen.queryByTestId(`activity-tx-${speedUp}`)).toBeNull();
+    expect(screen.getAllByText('-0.5 ETH')).toHaveLength(1);
+    expect(screen.getByText('가속 중')).toBeTruthy();
+  });
+
+  it('labels a token-to-native swap from swap history as 스왑', async () => {
+    useSwapStore.getState().addHistoryItem({
+      chainId: 1,
+      timestamp: Date.now(),
+      sellToken: { address: '0xusdc', symbol: 'USDC', amount: '100' },
+      buyToken: { address: '0xeee', symbol: 'ETH', amount: '0.03' },
+      txHash: '0xSWAP',
+      status: 'success',
+      rate: '0.0003',
+    });
+    mockGetHistoryPage.mockResolvedValue({
+      transactions: [
+        tx({ hash: '0xswap', value: '100', tokenSymbol: 'USDC', type: 'send' }),
+      ],
+      hasMore: false,
+    });
+    render(<ActivityScreen />);
+    await waitFor(() => screen.getByTestId('activity-tx-0xswap'));
+    expect(screen.getByText('스왑')).toBeTruthy();
+    expect(screen.getByText('100 USDC → 0.03 ETH')).toBeTruthy();
+    expect(screen.queryByText('보냄')).toBeNull();
+  });
+
+  it('re-labels a swap whose transfers arrive on a later page', async () => {
+    const swapRow = {
+      hash: '0xswap',
+      from: ME,
+      to: OTHER,
+      value: '0',
+      gasUsed: '1',
+      gasPrice: '1',
+      timeStamp: '1600000000',
+      blockNumber: '1',
+      isError: '0',
+      input: '0x12345678',
+    };
+    const leg = (from: string, to: string, value: string, symbol: string) => ({
+      hash: '0xswap',
+      from,
+      to,
+      value,
+      contractAddress: `0x${symbol}`,
+      tokenSymbol: symbol,
+      tokenDecimal: '0',
+      timeStamp: '1600000000',
+      blockNumber: '1',
+    });
+    const page = (raw: TransactionPage['raw'], hasMore: boolean) => ({
+      transactions: [],
+      hasMore,
+      raw,
+    });
+    mockGetHistoryPage
+      .mockResolvedValueOnce(
+        page({ address: ME, txs: [swapRow], tokenTxs: [] }, true),
+      )
+      .mockResolvedValueOnce(
+        page(
+          {
+            address: ME,
+            txs: [],
+            tokenTxs: [
+              leg(ME, OTHER, '100', 'USDC'),
+              leg(OTHER, ME, '5', 'WETH'),
+            ],
+          },
+          false,
+        ),
+      );
+    render(<ActivityScreen />);
+    await waitFor(() => screen.getByText('컨트랙트 실행'));
+    await act(async () => {
+      screen.getByTestId('activity-list').props.onEndReached();
+    });
+    await waitFor(() => screen.getByText('스왑'));
+    expect(screen.getByText('100 USDC → 5 WETH')).toBeTruthy();
+    expect(screen.queryByText('컨트랙트 실행')).toBeNull();
+  });
 });
 
 describe('Activity helpers', () => {
+  const entry = (
+    overrides: Partial<TransactionCacheEntry>,
+  ): TransactionCacheEntry =>
+    ({
+      ...pendingEntry,
+      ...overrides,
+    } as TransactionCacheEntry);
+
+  it('fromCacheEntry maps replaced records and replacement links', () => {
+    const original = `0x${'a'.repeat(64)}`;
+    expect(fromCacheEntry(entry({ status: 'cancelled' })).status).toBe(
+      'replaced',
+    );
+    expect(fromCacheEntry(entry({ status: 'failed' })).status).toBe('failed');
+    const cancel = fromCacheEntry(
+      entry({
+        to: ME.toLowerCase(),
+        tokenAmount: '0',
+        method: `replacement:cancel:${original}`,
+      }),
+      ME,
+    );
+    expect(cancel.replacement).toEqual({
+      kind: 'cancel',
+      originalHash: original,
+    });
+    expect(labelOf(cancel)).toBe('취소 시도');
+    expect(describeAmount(cancel, 'ETH')).toBeNull();
+    const speedUp = fromCacheEntry(
+      entry({ method: `replacement:speedUp:${original}` }),
+    );
+    expect(labelOf(speedUp)).toBe('가속 거래');
+    expect(describeAmount(speedUp, 'ETH')).toBe('-0.5 ETH');
+  });
+
+  it('fromCacheEntry re-derives direction for the viewing account', () => {
+    const transfer = entry({
+      from: OTHER.toLowerCase(),
+      to: ME.toLowerCase(),
+      type: 'send',
+    });
+    expect(fromCacheEntry(transfer, ME).type).toBe('receive');
+    expect(fromCacheEntry(transfer, OTHER).type).toBe('send');
+    expect(fromCacheEntry(transfer).type).toBe('send');
+    const self = entry({ from: ME.toLowerCase(), to: ME.toLowerCase() });
+    expect(fromCacheEntry(self, ME).type).toBe('send');
+    const received = entry({
+      from: ME.toLowerCase(),
+      to: OTHER.toLowerCase(),
+      type: 'receive',
+    });
+    expect(fromCacheEntry(received, ME).type).toBe('send');
+  });
+
+  it('mergeTransactions collapses pending replacements and keeps lost ones visible', () => {
+    const original = `0x${'a'.repeat(64)}`;
+    const cancel = `0x${'c'.repeat(64)}`;
+    const replacement = { kind: 'cancel' as const, originalHash: original };
+    const merged = mergeTransactions(
+      [],
+      [
+        tx({ hash: original, status: 'pending', timestamp: 1 }),
+        tx({ hash: cancel, status: 'pending', timestamp: 2, replacement }),
+      ],
+    );
+    expect(merged).toEqual([
+      expect.objectContaining({ hash: original, pendingReplacement: 'cancel' }),
+    ]);
+
+    // 원래 거래가 대체된 뒤에는 둘 다 보이고, 원래 거래는 '대체됨'이다.
+    const settled = mergeTransactions(
+      [],
+      [],
+      [
+        tx({ hash: original, status: 'replaced', timestamp: 1 }),
+        tx({ hash: cancel, status: 'success', timestamp: 2, replacement }),
+      ],
+    );
+    expect(settled.map(t => [t.hash, t.status])).toEqual([
+      [cancel, 'success'],
+      [original, 'replaced'],
+    ]);
+    expect(settled[0].pendingReplacement).toBeUndefined();
+  });
+
+  it('mergeTransactions keeps the replacement label when the explorer lists the tx', () => {
+    const original = `0x${'a'.repeat(64)}`;
+    const speedUp = `0x${'b'.repeat(64)}`;
+    const [merged] = mergeTransactions(
+      [tx({ hash: speedUp, status: 'success' })],
+      [],
+      [
+        tx({
+          hash: speedUp,
+          status: 'pending',
+          replacement: { kind: 'speedUp', originalHash: original },
+        }),
+      ],
+    );
+    expect(merged.status).toBe('success');
+    expect(labelOf(merged)).toBe('가속 거래');
+  });
+
+  it('mergeTransactions treats a local swap record as a swap', () => {
+    const [merged] = mergeTransactions(
+      [tx({ hash: '0xs', type: 'send', value: '100', tokenSymbol: 'USDC' })],
+      [],
+      [tx({ hash: '0xs', type: 'swap', value: '100', tokenSymbol: 'USDC' })],
+    );
+    expect(merged).toMatchObject({
+      type: 'swap',
+      value: '100',
+      tokenSymbol: 'USDC',
+    });
+  });
+
   it('mergeTransactions prefers API data and keeps unseen pending on top', () => {
     const merged = mergeTransactions(
       [tx({ hash: '0xAAA', status: 'success', timestamp: 2 })],

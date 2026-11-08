@@ -2,12 +2,24 @@
  * 거래 내역 화면
  *
  * - 탐색기 API(일반 + ERC-20 전송)를 페이지 단위로 불러오고 끝까지 스크롤하면 다음 페이지를 읽는다.
- * - 이 기기에서 제출한 대기 중 거래는 API 결과와 해시로 합쳐 항상 위에 보인다.
- * - API를 읽지 못하면 로컬 캐시(Realm)를 보여 주고, 아무것도 없으면 오류 + 다시 시도.
+ *   여러 페이지는 원시 응답을 모아 다시 합친다 (뒤 페이지의 토큰 전송으로 앞 페이지 분류 보정).
+ * - 이 기기에서 제출한 거래(Realm isLocal)는 API에 아직 없으면 항상 합쳐 보인다
+ *   (탐색기 색인 지연 중 완료된 거래가 사라지지 않음). 대기 중 거래는 맨 위.
+ * - 거래 추적기가 완료/실패/대체됨을 알리면 대기 목록, 로컬 기록, 탐색기 내역을 다시 읽는다.
+ * - 탐색기 API가 없는 네트워크(사용자 추가 네트워크 등)는 이 기기의 기록을 기본으로 보여 주고
+ *   그 사실을 안내한다. API를 읽지 못하면 저장된 전체 기록을 보여 준다.
+ * - 가속/취소 거래는 '가속 거래'/'취소 시도'로 표시하고, 대기 중인 원래 거래와 한 행으로 묶는다.
+ *   같은 nonce의 다른 거래가 먼저 처리된 거래는 실패가 아니라 '대체됨'으로 표시한다.
  * - 날짜별(오늘/어제/날짜)로 묶어 표시하고, 행을 누르면 거래 상세로 이동한다.
  */
 
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import styled from 'styled-components/native';
 import { useShallow } from 'zustand/react/shallow';
 import {
@@ -19,16 +31,26 @@ import {
 } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
-import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
+import {
+  useInfiniteQuery,
+  useQuery,
+  useQueryClient,
+} from '@tanstack/react-query';
 import type { RootStackParamList } from '@/navigation/RootNavigator';
 import { useTheme } from '@/hooks/useTheme';
 import { useFiat } from '@/hooks/useFiat';
 import { useWalletStore } from '@/store/walletStore';
+import { useSwapStore, type SwapHistoryItem } from '@/store/swapStore';
 import {
   transactionHistoryService,
   type Transaction,
   type TransactionKind,
 } from '@/services/transactionHistory';
+import {
+  parseReplacementMethod,
+  transactionTracker,
+  type ReplacementKind,
+} from '@/services/transactionTracker';
 import { useTransactions } from '@/realm/hooks';
 import { transactionCacheService } from '@/realm/services';
 import type { TransactionCacheEntry } from '@/realm/schemas';
@@ -42,23 +64,48 @@ type NavigationProp = NativeStackNavigationProp<RootStackParamList>;
 
 const PAGE_SIZE = 20;
 
+/** 화면 표시용 거래: 대기 중인 가속/취소 거래와 묶인 원래 거래에는 그 종류를 표시한다. */
+export type ActivityTransaction = Transaction & {
+  pendingReplacement?: ReplacementKind;
+};
+
 export interface ActivitySection {
   title: string;
-  data: Transaction[];
+  data: ActivityTransaction[];
 }
 
 function lower(value: string | undefined | null): string {
   return (value || '').toLowerCase();
 }
 
-/** Realm 캐시 항목 → 화면 표시용 거래 */
-export function fromCacheEntry(tx: TransactionCacheEntry): Transaction {
+/**
+ * Realm 캐시 항목 → 화면 표시용 거래
+ *
+ * @param viewer 보고 있는 계정. 기록은 보낸 쪽 기준으로 저장되므로 내 계정 사이 전송을
+ *   받는 계정에서 보면 '받음'으로 바꾼다 (반대로 받은 쪽 기록을 보낸 계정에서 보면 '보냄').
+ */
+export function fromCacheEntry(
+  tx: TransactionCacheEntry,
+  viewer?: string,
+): Transaction {
   const status: Transaction['status'] =
     tx.status === 'confirmed'
       ? 'success'
-      : tx.status === 'failed' || tx.status === 'cancelled'
+      : tx.status === 'failed'
       ? 'failed'
+      : tx.status === 'cancelled'
+      ? // 추적기는 같은 nonce의 다른 거래가 처리된 거래를 'cancelled'로 저장한다.
+        'replaced'
       : 'pending';
+  let type = (tx.type as TransactionKind) || 'send';
+  if (viewer) {
+    const me = lower(viewer);
+    const from = lower(tx.from);
+    const to = lower(tx.to);
+    if (type === 'send' && from !== me && to === me) type = 'receive';
+    else if (type === 'receive' && from === me && to !== me) type = 'send';
+  }
+  const replacement = parseReplacementMethod(tx.method) ?? undefined;
   return {
     hash: tx.hash,
     from: tx.from,
@@ -72,42 +119,117 @@ export function fromCacheEntry(tx: TransactionCacheEntry): Transaction {
     timestamp: tx.timestamp * 1000,
     blockNumber: tx.blockNumber || '',
     isError: status === 'failed',
-    type: (tx.type as TransactionKind) || 'send',
+    type,
     status,
     tokenSymbol: tx.tokenSymbol || undefined,
     tokenAddress: tx.tokenAddress || undefined,
     isLocal: tx.isLocal,
+    ...(replacement ? { replacement } : {}),
   };
 }
 
 /**
- * API 내역 + 로컬 대기 거래 (+ API 실패 시 캐시) 를 해시 기준으로 합친다.
- * API에 이미 있는 거래는 API 값을 우선한다 (확정 상태가 더 정확).
+ * 이 기기의 기록으로 API 항목을 보정한다.
+ * - 가속/취소 거래 표시를 유지한다.
+ * - 앱에서 한 스왑은 스왑으로 표시한다. 토큰 → 네이티브 스왑은 받은 네이티브가 내부 거래라
+ *   탐색기 목록만으로는 '보냄'으로 분류되기 때문이다.
+ */
+function withLocalContext(
+  tx: Transaction,
+  local: Transaction | undefined,
+  swap: SwapHistoryItem | undefined,
+): Transaction {
+  let next = tx;
+  if (!next.replacement && local?.replacement)
+    next = { ...next, replacement: local.replacement };
+  const isSwap = !!swap || local?.type === 'swap';
+  if (
+    isSwap &&
+    next.type !== 'approve' &&
+    (next.type !== 'swap' || !next.receivedValue)
+  ) {
+    const sold =
+      next.type === 'swap'
+        ? null
+        : swap
+        ? { value: swap.sellToken.amount, symbol: swap.sellToken.symbol }
+        : !next.tokenSymbol && local?.tokenSymbol
+        ? { value: local.value, symbol: local.tokenSymbol }
+        : null;
+    next = {
+      ...next,
+      type: 'swap',
+      ...(sold ? { value: sold.value, tokenSymbol: sold.symbol } : {}),
+      receivedValue: next.receivedValue ?? swap?.buyToken.amount,
+      receivedSymbol: next.receivedSymbol ?? swap?.buyToken.symbol,
+    };
+  }
+  return next;
+}
+
+/**
+ * 대기 중인 원래 거래와 그 가속/취소 거래를 한 행으로 묶는다.
+ * 원래 거래 행에 '가속 중'/'취소 시도 중'을 표시하고, 대기 중인 대체 거래 행은 숨긴다.
+ */
+function collapsePendingReplacements(
+  transactions: Transaction[],
+): ActivityTransaction[] {
+  const pendingByOriginal = new Map<string, Transaction[]>();
+  for (const tx of transactions) {
+    if (!tx.replacement || tx.status !== 'pending') continue;
+    const key = lower(tx.replacement.originalHash);
+    pendingByOriginal.set(key, [...(pendingByOriginal.get(key) ?? []), tx]);
+  }
+  if (pendingByOriginal.size === 0) return transactions;
+  const hidden = new Set<string>();
+  const result: ActivityTransaction[] = transactions.map(tx => {
+    const replacements = pendingByOriginal.get(lower(tx.hash));
+    if (tx.status !== 'pending' || tx.replacement || !replacements) return tx;
+    for (const item of replacements) hidden.add(lower(item.hash));
+    const latest = replacements.reduce((a, b) =>
+      b.timestamp > a.timestamp ? b : a,
+    );
+    return { ...tx, pendingReplacement: latest.replacement!.kind };
+  });
+  return result.filter(tx => !hidden.has(lower(tx.hash)));
+}
+
+/**
+ * API 내역 + 이 기기의 기록(로컬 거래, API 실패/미지원 시 저장된 전체 기록) + 로컬 대기 거래를
+ * 해시 기준으로 합친다. API에 이미 있는 거래는 API 값을 우선한다 (확정 상태가 더 정확).
  */
 export function mergeTransactions(
   apiTransactions: Transaction[],
   pending: Transaction[],
   cached: Transaction[] = [],
-): Transaction[] {
+  options: { swaps?: SwapHistoryItem[] } = {},
+): ActivityTransaction[] {
+  const localByHash = new Map<string, Transaction>();
+  for (const tx of [...pending, ...cached]) localByHash.set(lower(tx.hash), tx);
+  const swapByHash = new Map<string, SwapHistoryItem>();
+  for (const item of options.swaps ?? [])
+    swapByHash.set(lower(item.txHash), item);
+
   const byHash = new Map<string, Transaction>();
-  for (const tx of apiTransactions) {
+  const add = (tx: Transaction) => {
     const key = lower(tx.hash);
-    if (!byHash.has(key)) byHash.set(key, tx);
-  }
-  for (const tx of cached) {
-    const key = lower(tx.hash);
-    if (!byHash.has(key)) byHash.set(key, tx);
-  }
-  for (const tx of pending) {
-    const key = lower(tx.hash);
-    if (!byHash.has(key)) byHash.set(key, { ...tx, status: 'pending' });
-  }
-  return [...byHash.values()].sort((a, b) => {
+    if (byHash.has(key)) return;
+    byHash.set(
+      key,
+      withLocalContext(tx, localByHash.get(key), swapByHash.get(key)),
+    );
+  };
+  for (const tx of apiTransactions) add(tx);
+  for (const tx of cached) add(tx);
+  for (const tx of pending) add({ ...tx, status: 'pending' });
+
+  const sorted = [...byHash.values()].sort((a, b) => {
     // 대기 중 거래는 항상 맨 위
     if (a.status === 'pending' && b.status !== 'pending') return -1;
     if (b.status === 'pending' && a.status !== 'pending') return 1;
     return b.timestamp - a.timestamp;
   });
+  return collapsePendingReplacements(sorted);
 }
 
 /** 날짜 묶음 제목: 오늘 / 어제 / M월 D일 / YYYY년 M월 D일 */
@@ -125,7 +247,7 @@ export function dayLabel(timestamp: number, now: Date = new Date()): string {
 }
 
 export function groupByDay(
-  transactions: Transaction[],
+  transactions: ActivityTransaction[],
   now: Date = new Date(),
 ): ActivitySection[] {
   const sections: ActivitySection[] = [];
@@ -162,6 +284,27 @@ const TYPE_LABELS: Record<TransactionKind, string> = {
   contract: '컨트랙트 실행',
 };
 
+const REPLACEMENT_LABELS: Record<ReplacementKind, string> = {
+  speedUp: '가속 거래',
+  cancel: '취소 시도',
+};
+
+const PENDING_REPLACEMENT_LABELS: Record<ReplacementKind, string> = {
+  speedUp: '가속 중',
+  cancel: '취소 시도 중',
+};
+
+/** 행 제목: 가속/취소 거래는 그 종류, 나머지는 거래 유형 */
+export function labelOf(tx: Transaction): string {
+  if (tx.replacement) return REPLACEMENT_LABELS[tx.replacement.kind];
+  return TYPE_LABELS[tx.type] ?? '거래';
+}
+
+const STATUS_SUFFIX: Partial<Record<Transaction['status'], string>> = {
+  failed: '실패',
+  replaced: '대체됨',
+};
+
 const TYPE_ICONS: Record<TransactionKind, string> = {
   send: '↑',
   receive: '↓',
@@ -170,8 +313,13 @@ const TYPE_ICONS: Record<TransactionKind, string> = {
   contract: '⚙',
 };
 
-function typeColors(theme: Theme, type: TransactionKind) {
-  switch (type) {
+function typeColors(theme: Theme, tx: Transaction) {
+  if (tx.replacement?.kind === 'cancel')
+    return {
+      fg: theme.colors.textSecondary,
+      bg: theme.colors.backgroundTertiary,
+    };
+  switch (tx.type) {
     case 'send':
       return { fg: theme.colors.error, bg: theme.colors.errorSubtle };
     case 'receive':
@@ -193,6 +341,8 @@ export function describeAmount(
   tx: Transaction,
   nativeSymbol: string,
 ): string | null {
+  // 취소 거래는 0을 자기 주소로 보내는 거래이므로 금액을 표시하지 않는다.
+  if (tx.replacement?.kind === 'cancel') return null;
   const symbol = tx.tokenSymbol || nativeSymbol;
   const amount = `${formatDisplayAmount(tx.value)} ${symbol}`;
   switch (tx.type) {
@@ -232,6 +382,15 @@ function ActivityScreen(): React.JSX.Element {
   const activeNetwork = networks.find(n => n.chainId === activeNetworkChainId);
   const nativeSymbol = activeNetwork?.symbol || 'ETH';
   const [isPullRefreshing, setIsPullRefreshing] = useState(false);
+  const queryClient = useQueryClient();
+  // 탐색기 API가 없는 네트워크는 이 기기의 기록만 보여 준다.
+  const historySupported =
+    transactionHistoryService.isSupported(activeNetworkChainId);
+  const swapHistory = useSwapStore(state => state.history);
+  const chainSwaps = useMemo(
+    () => swapHistory.filter(item => item.chainId === activeNetworkChainId),
+    [swapHistory, activeNetworkChainId],
+  );
 
   // 탐색기 API (페이지 단위)
   const historyQuery = useInfiniteQuery({
@@ -246,7 +405,7 @@ function ActivityScreen(): React.JSX.Element {
     initialPageParam: 1,
     getNextPageParam: (lastPage, pages) =>
       lastPage?.hasMore ? pages.length + 1 : undefined,
-    enabled: !!address,
+    enabled: !!address && historySupported,
     staleTime: 30000,
   });
 
@@ -260,18 +419,47 @@ function ActivityScreen(): React.JSX.Element {
           address,
           activeNetworkChainId,
         )) ?? []
-      ).map(fromCacheEntry),
+      ).map(entry => fromCacheEntry(entry, address)),
     enabled: !!address,
     refetchInterval: 5000,
   });
 
-  // 로컬 캐시 (오프라인/오류 시 대체 표시)
-  const { transactions: cachedEntries, refetch: refetchCache } =
-    useTransactions(address, { chainId: activeNetworkChainId, limit: 50 });
+  // 이 기기의 기록 (로컬 거래는 항상, 오프라인/오류/미지원 네트워크에서는 전체)
+  const {
+    transactions: cachedEntries,
+    isLoading: isCacheLoading,
+    refetch: refetchCache,
+    loadMore: loadMoreCache,
+  } = useTransactions(address, { chainId: activeNetworkChainId, limit: 50 });
 
+  // 여러 페이지의 원시 응답을 모아 다시 합친다 (뒤 페이지의 토큰 전송으로 분류 보정).
   const apiTransactions = useMemo(
-    () => historyQuery.data?.pages.flatMap(page => page.transactions) ?? [],
+    () =>
+      historyQuery.data
+        ? transactionHistoryService.combinePages(historyQuery.data.pages)
+        : [],
     [historyQuery.data],
+  );
+
+  // 거래 추적기가 완료/실패/대체됨을 알리면 대기 목록, 로컬 기록, 탐색기 내역을 다시 읽는다.
+  const refreshAfterTrackerEvent = useRef<() => void>(() => undefined);
+  refreshAfterTrackerEvent.current = () => {
+    pendingQuery.refetch();
+    refetchCache?.();
+    if (!address) return;
+    // 서비스의 10초 캐시를 비워야 다시 읽을 때 새 응답을 받는다.
+    transactionHistoryService.clearCache(address, activeNetworkChainId);
+    queryClient.invalidateQueries({
+      queryKey: ['transactions', address, activeNetworkChainId],
+    });
+  };
+  useEffect(
+    () =>
+      transactionTracker.subscribe(event => {
+        if (event.chainId === activeNetworkChainId)
+          refreshAfterTrackerEvent.current();
+      }),
+    [activeNetworkChainId],
   );
 
   // API 첫 페이지를 로컬 캐시에 반영 (대기 중이던 로컬 거래의 확정 상태 갱신 포함)
@@ -294,7 +482,12 @@ function ActivityScreen(): React.JSX.Element {
             fee: tx.fee,
             timestamp: Math.floor(tx.timestamp / 1000),
             blockNumber: tx.blockNumber,
-            status: tx.status === 'success' ? 'confirmed' : tx.status,
+            status:
+              tx.status === 'success'
+                ? 'confirmed'
+                : tx.status === 'replaced'
+                ? 'cancelled'
+                : tx.status,
             type: tx.type,
             ...(tx.tokenSymbol ? { tokenSymbol: tx.tokenSymbol } : {}),
             ...(tx.tokenAddress ? { tokenAddress: tx.tokenAddress } : {}),
@@ -321,15 +514,16 @@ function ActivityScreen(): React.JSX.Element {
     [pendingQuery.data],
   );
 
-  const usingCacheFallback = historyQuery.isError && !historyQuery.data;
+  const usingCacheFallback =
+    historySupported && historyQuery.isError && !historyQuery.data;
+  // 탐색기 내역이 없으면 저장된 전체 기록, 있으면 아직 탐색기에 없는 이 기기의 거래만 합친다.
+  const showAllCached = usingCacheFallback || !historySupported;
   const cachedTransactions = useMemo(
     () =>
-      usingCacheFallback
-        ? (Array.isArray(cachedEntries) ? cachedEntries : []).map(
-            fromCacheEntry,
-          )
-        : [],
-    [usingCacheFallback, cachedEntries],
+      (Array.isArray(cachedEntries) ? cachedEntries : [])
+        .filter(entry => showAllCached || entry.isLocal)
+        .map(entry => fromCacheEntry(entry, address)),
+    [showAllCached, cachedEntries, address],
   );
 
   const transactions = useMemo(
@@ -338,23 +532,40 @@ function ActivityScreen(): React.JSX.Element {
         apiTransactions,
         pendingTransactions,
         cachedTransactions,
+        { swaps: chainSwaps },
       ),
-    [apiTransactions, pendingTransactions, cachedTransactions],
+    [apiTransactions, pendingTransactions, cachedTransactions, chainSwaps],
   );
   const sections = useMemo(() => groupByDay(transactions), [transactions]);
 
   const handleRefresh = useCallback(async () => {
     setIsPullRefreshing(true);
     try {
-      transactionHistoryService.clearCache();
-      await Promise.all([historyQuery.refetch(), pendingQuery.refetch()]);
+      if (address)
+        transactionHistoryService.clearCache(address, activeNetworkChainId);
+      await Promise.all([
+        historySupported ? historyQuery.refetch() : undefined,
+        pendingQuery.refetch(),
+      ]);
       refetchCache?.();
     } finally {
       setIsPullRefreshing(false);
     }
-  }, [historyQuery, pendingQuery, refetchCache]);
+  }, [
+    address,
+    activeNetworkChainId,
+    historySupported,
+    historyQuery,
+    pendingQuery,
+    refetchCache,
+  ]);
 
   const handleEndReached = useCallback(() => {
+    // 저장된 기록만 보여 주는 동안에는 이 기기의 기록을 더 읽는다.
+    if (showAllCached) {
+      loadMoreCache?.();
+      return;
+    }
     if (
       historyQuery.hasNextPage &&
       !historyQuery.isFetchingNextPage &&
@@ -362,7 +573,7 @@ function ActivityScreen(): React.JSX.Element {
     ) {
       historyQuery.fetchNextPage();
     }
-  }, [historyQuery]);
+  }, [historyQuery, loadMoreCache, showAllCached]);
 
   const handlePress = useCallback(
     (tx: Transaction) => {
@@ -374,18 +585,29 @@ function ActivityScreen(): React.JSX.Element {
     [navigation, activeNetworkChainId],
   );
 
-  const renderTransaction = ({ item }: { item: Transaction }) => {
-    const colors = typeColors(theme, item.type);
-    const label = TYPE_LABELS[item.type] ?? '거래';
+  const renderTransaction = ({ item }: { item: ActivityTransaction }) => {
+    const colors = typeColors(theme, item);
+    const label = labelOf(item);
     const amount = describeAmount(item, nativeSymbol);
     const counterparty =
       item.type === 'receive' ? item.from : item.to || item.from;
     const arrow = item.type === 'receive' ? '← ' : '→ ';
     const failed = item.status === 'failed';
+    const replaced = item.status === 'replaced';
     const pending = item.status === 'pending';
+    const statusSuffix = STATUS_SUFFIX[item.status];
+    const pendingLabel = item.pendingReplacement
+      ? PENDING_REPLACEMENT_LABELS[item.pendingReplacement]
+      : '대기 중';
     const showFee =
-      item.type !== 'receive' && !!item.fee && Number(item.fee) > 0 && !pending;
+      item.type !== 'receive' &&
+      !!item.fee &&
+      Number(item.fee) > 0 &&
+      !pending &&
+      !replaced;
     const amountText = amount ? mask(amount) : null;
+    const icon =
+      item.replacement?.kind === 'cancel' ? '✕' : TYPE_ICONS[item.type] ?? '•';
 
     return (
       <TransactionItem
@@ -394,7 +616,7 @@ function ActivityScreen(): React.JSX.Element {
         accessibilityRole="button"
         accessibilityLabel={[
           label,
-          pending ? '대기 중' : failed ? '실패' : null,
+          pending ? pendingLabel : statusSuffix ?? null,
           amountText,
           formatAddress(counterparty),
           formatTime(item.timestamp),
@@ -405,27 +627,30 @@ function ActivityScreen(): React.JSX.Element {
       >
         <IconContainer $bg={colors.bg}>
           <IconText $color={colors.fg} importantForAccessibility="no">
-            {TYPE_ICONS[item.type] ?? '•'}
+            {icon}
           </IconText>
         </IconContainer>
 
         <TransactionInfo>
           <TransactionRow>
             <LabelRow>
-              <TransactionLabel $failed={failed} numberOfLines={1}>
+              <TransactionLabel
+                $tone={failed ? 'failed' : replaced ? 'muted' : undefined}
+                numberOfLines={1}
+              >
                 {label}
-                {failed ? ' (실패)' : ''}
+                {statusSuffix ? ` (${statusSuffix})` : ''}
               </TransactionLabel>
               {pending ? (
                 <PendingBadge testID="activity-pending-badge">
-                  <PendingText>대기 중</PendingText>
+                  <PendingText>{pendingLabel}</PendingText>
                 </PendingBadge>
               ) : null}
             </LabelRow>
             {amountText ? (
               <TransactionAmount
                 $color={
-                  failed
+                  failed || replaced
                     ? theme.colors.textTertiary
                     : item.type === 'receive'
                     ? theme.colors.success
@@ -498,9 +723,12 @@ function ActivityScreen(): React.JSX.Element {
   }
 
   const isInitialLoading =
-    historyQuery.isLoading && !historyQuery.data && transactions.length === 0;
+    transactions.length === 0 &&
+    (historySupported
+      ? historyQuery.isLoading && !historyQuery.data
+      : !!isCacheLoading);
   const showFullError =
-    historyQuery.isError && !historyQuery.data && transactions.length === 0;
+    usingCacheFallback && !historyQuery.data && transactions.length === 0;
 
   return (
     <TabScreen testID="activity-screen">
@@ -527,6 +755,15 @@ function ActivityScreen(): React.JSX.Element {
           </StaleBanner>
         ) : null}
 
+        {!historySupported && transactions.length > 0 ? (
+          <InfoBanner testID="activity-local-only-note">
+            <InfoText>
+              이 네트워크는 거래 내역 조회를 지원하지 않아 이 기기에서 보낸
+              거래만 표시합니다.
+            </InfoText>
+          </InfoBanner>
+        ) : null}
+
         {isInitialLoading ? (
           <ActivityScreenSkeleton />
         ) : showFullError ? (
@@ -551,9 +788,13 @@ function ActivityScreen(): React.JSX.Element {
               <EmptyState
                 icon="📋"
                 title="거래 내역이 없습니다"
-                message={`${
-                  activeNetwork?.name ?? '이 네트워크'
-                }에서 토큰을 보내거나 받으면 여기에 표시됩니다.`}
+                message={
+                  historySupported
+                    ? `${
+                        activeNetwork?.name ?? '이 네트워크'
+                      }에서 토큰을 보내거나 받으면 여기에 표시됩니다.`
+                    : '이 네트워크는 거래 내역 조회를 지원하지 않습니다. 이 기기에서 보낸 거래가 여기에 표시됩니다.'
+                }
               />
             }
             ListFooterComponent={renderFooter}
@@ -639,6 +880,19 @@ const StaleText = styled.Text`
   font-size: ${({ theme }) => theme.typography.caption.fontSize}px;
 `;
 
+const InfoBanner = styled.View`
+  padding: ${({ theme }) => theme.spacing.sm}px
+    ${({ theme }) => theme.spacing.md}px;
+  margin-bottom: ${({ theme }) => theme.spacing.sm}px;
+  border-radius: ${({ theme }) => theme.borderRadius.md}px;
+  background-color: ${({ theme }) => theme.colors.surface};
+`;
+
+const InfoText = styled.Text`
+  color: ${({ theme }) => theme.colors.textSecondary};
+  font-size: ${({ theme }) => theme.typography.caption.fontSize}px;
+`;
+
 const SectionHeader = styled.Text`
   color: ${({ theme }) => theme.colors.textSecondary};
   font-size: ${({ theme }) => theme.typography.bodySmall.fontSize}px;
@@ -690,9 +944,13 @@ const LabelRow = styled.View`
   margin-right: ${({ theme }) => theme.spacing.sm}px;
 `;
 
-const TransactionLabel = styled.Text<{ $failed?: boolean }>`
-  color: ${({ theme, $failed }) =>
-    $failed ? theme.colors.error : theme.colors.textPrimary};
+const TransactionLabel = styled.Text<{ $tone?: 'failed' | 'muted' }>`
+  color: ${({ theme, $tone }) =>
+    $tone === 'failed'
+      ? theme.colors.error
+      : $tone === 'muted'
+      ? theme.colors.textSecondary
+      : theme.colors.textPrimary};
   font-size: ${({ theme }) => theme.typography.body.fontSize}px;
   font-weight: 600;
   flex-shrink: 1;
