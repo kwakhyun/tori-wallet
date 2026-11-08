@@ -12,6 +12,7 @@ import { chainClient } from '../../src/services/chainClient';
 import { ensService } from '../../src/services/ensService';
 import { transferService } from '../../src/services/transferService';
 import { tokenService } from '../../src/services/tokenService';
+import { useToastStore } from '../../src/store/toastStore';
 
 const mockAddress = '0x1234567890123456789012345678901234567890';
 const recipient = '0x0987654321098765432109876543210987654321';
@@ -25,6 +26,7 @@ let mockQrProps: any;
 let mockAddressBookProps: any;
 let mockRecentAddresses: { address: string; lastUsed: number }[];
 let mockActiveChainId = 1;
+let mockIsLocked = false;
 const mockWallet = { address: mockAddress };
 const mockRefetch = jest.fn();
 const mockReadContract = jest.fn();
@@ -54,22 +56,26 @@ jest.mock('../../src/hooks/useFiat', () => ({
   }),
 }));
 jest.mock('../../src/store/walletStore', () => ({
-  useWalletStore: () => ({
-    wallets: [mockWallet],
-    activeWalletIndex: 0,
-    activeNetworkChainId: mockActiveChainId,
-    networks: [
-      {
-        chainId: 1,
-        name: 'Ethereum',
-        symbol: 'ETH',
-        isTestnet: false,
-        blockExplorerUrl: 'https://etherscan.io',
-      },
-      { chainId: 137, name: 'Polygon', symbol: 'MATIC' },
-      { chainId: 8453, name: 'Base', symbol: 'ETH', isTestnet: false },
-    ],
-  }),
+  useWalletStore: Object.assign(
+    () => ({
+      wallets: [mockWallet],
+      activeWalletIndex: 0,
+      activeNetworkChainId: mockActiveChainId,
+      networks: [
+        {
+          chainId: 1,
+          name: 'Ethereum',
+          symbol: 'ETH',
+          isTestnet: false,
+          blockExplorerUrl: 'https://etherscan.io',
+        },
+        { chainId: 137, name: 'Polygon', symbol: 'MATIC' },
+        { chainId: 8453, name: 'Base', symbol: 'ETH', isTestnet: false },
+      ],
+    }),
+    // 비동기 흐름은 스토어의 현재 잠금 상태를 읽는다.
+    { getState: () => ({ isLocked: mockIsLocked }) },
+  ),
 }));
 jest.mock('../../src/store/securityStore', () => ({
   useSecurityStore: () => ({
@@ -173,6 +179,8 @@ beforeEach(() => {
   mockRouteParams = {};
   mockRecentAddresses = [];
   mockActiveChainId = 1;
+  mockIsLocked = false;
+  useToastStore.getState().reset();
   mockRequiresPin.mockReturnValue(true);
   mockNativeBalance.mockResolvedValue(parseEther('10'));
   mockReadContract.mockImplementation(async ({ address, functionName }) => {
@@ -700,6 +708,43 @@ describe('QR payment requests', () => {
     alert.mockRestore();
   });
 
+  it('does not raise the unknown-token Alert over the lock screen when the lookup finishes after auto-lock', async () => {
+    const alert = jest.spyOn(Alert, 'alert').mockImplementation();
+    const view = mount();
+    await flush(10);
+    let resolveSymbol!: (value: string) => void;
+    mockReadContract.mockImplementation(async ({ functionName }) => {
+      if (functionName === 'symbol')
+        return new Promise(resolve => {
+          resolveSymbol = resolve;
+        });
+      return functionName === 'decimals' ? 18 : 0n;
+    });
+    let scan!: Promise<void>;
+    act(() => {
+      scan = mockQrProps.onScan({
+        kind: 'payment',
+        recipient,
+        chainId: 1,
+        tokenAddress: contract,
+        amountRaw: 3n * 10n ** 18n,
+        raw: '',
+      });
+    });
+    // 토큰 조회 중에 자동 잠금
+    mockIsLocked = true;
+    await act(async () => {
+      resolveSymbol('FAKE');
+      await scan;
+    });
+    expect(alert).not.toHaveBeenCalled();
+    expect(useToastStore.getState().current?.message).toMatch(
+      /지갑이 잠겨 결제 요청을 적용하지 않았습니다/,
+    );
+    expect(view.getByTestId('send-address-input').props.value).toBe('');
+    alert.mockRestore();
+  });
+
   it('warns about a different chain and does not apply the request silently', async () => {
     const alert = jest.spyOn(Alert, 'alert').mockImplementation();
     const view = mount();
@@ -847,9 +892,9 @@ describe('token picker and balances', () => {
     mockReadContract.mockRejectedValue(new Error('metadata unavailable'));
     const view = mount();
     await flush(10);
-    expect(
-      view.getByTestId('send-balance-text').props.children.join(''),
-    ).toBe('잔액: — 토큰');
+    expect(view.getByTestId('send-balance-text').props.children.join('')).toBe(
+      '잔액: — 토큰',
+    );
   });
 
   it('shows the token list error with retry next to the native entry', async () => {
@@ -875,9 +920,7 @@ describe('token picker and balances', () => {
     mount();
     await flush(10);
     expect(tokenService.getTokens).toHaveBeenCalledTimes(1);
-    expect(
-      queryClient.getQueryData(['tokens', mockAddress, 1]),
-    ).toBeDefined();
+    expect(queryClient.getQueryData(['tokens', mockAddress, 1])).toBeDefined();
     await act(async () => {
       await queryClient.invalidateQueries({ queryKey: ['tokens'] });
     });
@@ -947,4 +990,63 @@ it('offers explorer, hash copy, detail and a real way home after submitting', as
   fireEvent.press(view.getByTestId('send-success-primary'));
   expect(mockNavigate).toHaveBeenCalledWith('Main', { screen: 'Home' });
   openURL.mockRestore();
+});
+
+describe('auto-lock during async work', () => {
+  it('turns a send failure caused by auto-lock into a held toast instead of an Alert over the lock screen', async () => {
+    const alert = jest.spyOn(Alert, 'alert').mockImplementation();
+    const view = mount();
+    await fill(view, '1');
+    await review(view);
+    (signingService.sendTransaction as jest.Mock).mockImplementationOnce(
+      async () => {
+        // 서명 직전에 자동 잠금 → signerVault가 서명을 막는다.
+        mockIsLocked = true;
+        throw new Error('Wallet signing session expired');
+      },
+    );
+    await confirmWithPin(view);
+    expect(alert).not.toHaveBeenCalled();
+    expect(useToastStore.getState().current).toMatchObject({
+      type: 'error',
+      message:
+        '지갑이 잠겨 전송하지 않았습니다. 잠금을 해제한 뒤 다시 시도해주세요.',
+    });
+    expect(view.queryByText('전송 제출 완료')).toBeNull();
+    alert.mockRestore();
+  });
+
+  it('still shows the send failure Alert while the wallet stays unlocked', async () => {
+    const alert = jest.spyOn(Alert, 'alert').mockImplementation();
+    const view = mount();
+    await fill(view, '1');
+    await review(view);
+    (signingService.sendTransaction as jest.Mock).mockRejectedValueOnce(
+      new Error('nonce too low'),
+    );
+    await confirmWithPin(view);
+    expect(alert).toHaveBeenCalledWith('전송 실패', 'nonce too low');
+    alert.mockRestore();
+  });
+
+  it('does not raise the review error Alert after an auto-lock', async () => {
+    const alert = jest.spyOn(Alert, 'alert').mockImplementation();
+    const view = mount();
+    await fill(view, '1');
+    await waitFor(() =>
+      expect(view.getByTestId('send-continue-button')).toBeEnabled(),
+    );
+    mockNativeBalance.mockImplementationOnce(async () => {
+      mockIsLocked = true;
+      throw new Error('RPC 서버 응답 시간 초과');
+    });
+    await act(async () => {
+      fireEvent.press(view.getByTestId('send-continue-button'));
+    });
+    expect(alert).not.toHaveBeenCalled();
+    expect(useToastStore.getState().current?.message).toBe(
+      'RPC 서버 응답 시간 초과',
+    );
+    alert.mockRestore();
+  });
 });

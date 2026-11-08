@@ -85,6 +85,28 @@ const RECENT_PLACEHOLDER_NAME = '최근 주소';
 const ENS_MAINNET_RECORD_WARNING =
   '이더리움 메인넷 기록의 주소입니다. 받는 사람이 이 네트워크에서도 이 주소를 쓰는지 확인하세요.';
 
+/** 서명 직전에 지갑이 잠겨 signerVault가 서명을 막은 경우 */
+const LOCKED_BEFORE_SEND_MESSAGE =
+  '지갑이 잠겨 전송하지 않았습니다. 잠금을 해제한 뒤 다시 시도해주세요.';
+const LOCKED_QR_REQUEST_MESSAGE =
+  '지갑이 잠겨 결제 요청을 적용하지 않았습니다. 잠금을 해제한 뒤 다시 스캔해주세요.';
+
+/**
+ * 비동기 흐름에서 읽는 현재 잠금 상태 (렌더 시점 값이 아닌 스토어 값).
+ * Alert은 잠금 화면 위에 뜨므로 잠겼으면 토스트(잠긴 동안 보류)로 바꾼다.
+ */
+function isWalletLockedNow(): boolean {
+  return useWalletStore.getState().isLocked !== false;
+}
+
+/** signerVault가 잠금 때문에 서명을 막았을 때의 오류인지 */
+function isLockedSigningError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    /Wallet signing session expired|Wallet is locked/.test(error.message)
+  );
+}
+
 /** ENS 해석 상태. 입력과 네트워크가 모두 같을 때만 현재 결과로 쓴다. */
 type EnsState =
   | { status: 'idle' }
@@ -130,8 +152,7 @@ function pickerBalanceOf(token: Token): string | null {
 function pickerUsdValueOf(token: Token): number | null {
   if (token.balanceError) return null;
   if (token.usdValue !== undefined) {
-    return typeof token.usdValue === 'number' &&
-      Number.isFinite(token.usdValue)
+    return typeof token.usdValue === 'number' && Number.isFinite(token.usdValue)
       ? token.usdValue
       : null;
   }
@@ -274,6 +295,23 @@ function SendTransactionScreen(): React.JSX.Element {
   useEffect(
     () => () => {
       mounted.current = false;
+    },
+    [],
+  );
+
+  /**
+   * 비동기 작업이 끝난 뒤의 실패 안내. 그 사이 자동 잠금되었으면 잠금 화면 위에
+   * Alert을 띄우지 않고 토스트로 바꾼다 (잠금 해제 후 표시된다). 화면을 떠났으면
+   * notifyIfLeft일 때만 토스트로 알린다.
+   */
+  const alertUnlessLocked = useCallback(
+    (title: string, message: string, notifyIfLeft = false) => {
+      if (!mounted.current && !notifyIfLeft) return;
+      if (!mounted.current || isWalletLockedNow()) {
+        showToast(message, 'error');
+        return;
+      }
+      Alert.alert(title, message);
     },
     [],
   );
@@ -646,10 +684,17 @@ function SendTransactionScreen(): React.JSX.Element {
                 activeNetworkChainId,
               );
         } catch {
-          Alert.alert(
+          alertUnlessLocked(
             '토큰을 확인할 수 없습니다',
             '결제 요청의 토큰 계약을 현재 네트워크에서 찾을 수 없습니다. 요청을 다시 확인해주세요.',
           );
+          return;
+        }
+        // 토큰 조회 중에 자동 잠금되었거나 화면을 떠났으면 확인 Alert을 잠금 화면
+        // 위에 띄우지 않는다.
+        if (!mounted.current) return;
+        if (!known && isWalletLockedNow()) {
+          showToast(LOCKED_QR_REQUEST_MESSAGE, 'warning');
           return;
         }
         const apply = () => {
@@ -698,6 +743,7 @@ function SendTransactionScreen(): React.JSX.Element {
       activeAddress,
       handleRecipientChange,
       cancelMaxRequest,
+      alertUnlessLocked,
     ],
   );
 
@@ -723,14 +769,14 @@ function SendTransactionScreen(): React.JSX.Element {
       setPlan(next);
       setStep('confirm');
     } catch (error) {
-      Alert.alert(
+      alertUnlessLocked(
         '오류',
         error instanceof Error ? error.message : '전송을 확인할 수 없습니다.',
       );
     } finally {
       if (mounted.current) setIsEstimating(false);
     }
-  }, [prepareTransfer]);
+  }, [prepareTransfer, alertUnlessLocked]);
 
   const handleSendTransaction = useCallback(async () => {
     if (!plan || sending.current) return;
@@ -787,11 +833,17 @@ function SendTransactionScreen(): React.JSX.Element {
       refetchBalance();
       if (snapshot.tokenAddress) refetchToken();
     } catch (error) {
-      if (mounted.current)
-        Alert.alert(
-          '전송 실패',
-          error instanceof Error ? error.message : '전송에 실패했습니다.',
-        );
+      // 잠금으로 서명이 막혔으면 아무것도 보내지 않았다는 사실을 분명히 알린다.
+      // 잠금 화면 위에는 Alert을 띄우지 않는다 (alertUnlessLocked).
+      alertUnlessLocked(
+        '전송 실패',
+        isWalletLockedNow() && isLockedSigningError(error)
+          ? LOCKED_BEFORE_SEND_MESSAGE
+          : error instanceof Error
+          ? error.message
+          : '전송에 실패했습니다.',
+        true,
+      );
     } finally {
       sending.current = false;
       if (mounted.current) setIsSending(false);
@@ -802,6 +854,7 @@ function SendTransactionScreen(): React.JSX.Element {
     addRecentAddress,
     refetchBalance,
     refetchToken,
+    alertUnlessLocked,
   ]);
 
   // 거래의 USD 가치 (모르면 undefined → 한도 설정 시 PIN 필요)
@@ -1308,7 +1361,8 @@ function SendTransactionScreen(): React.JSX.Element {
             </ConfirmSub>
             {plan && plan.l1FeeWei > 0n ? (
               <ConfirmSub testID="send-confirm-l1-fee">
-                L1 데이터 수수료 최대 {formatDisplayAmount(formatEther(plan.l1FeeWei))}{' '}
+                L1 데이터 수수료 최대{' '}
+                {formatDisplayAmount(formatEther(plan.l1FeeWei))}{' '}
                 {planFeeSymbol} 포함
               </ConfirmSub>
             ) : null}
