@@ -39,6 +39,8 @@ export interface CreateTransactionInput {
 
 export interface UpdateTransactionInput {
   status?: TransactionStatus;
+  /** 대기 중 mempool에서 확인한 nonce (제출 시 기록하지 못한 경우) */
+  nonce?: number;
   gasUsed?: string;
   fee?: string;
   blockNumber?: string;
@@ -190,6 +192,7 @@ class TransactionCacheService {
 
     realm.write(() => {
       if (input.status !== undefined) entry.status = input.status;
+      if (input.nonce !== undefined) entry.nonce = input.nonce;
       if (input.gasUsed !== undefined) entry.gasUsed = input.gasUsed;
       if (input.fee !== undefined) entry.fee = input.fee;
       if (input.blockNumber !== undefined)
@@ -201,7 +204,9 @@ class TransactionCacheService {
       entry.updatedAt = new Date();
     });
 
-    logger.info(`Transaction updated: ${hash} -> ${input.status}`);
+    logger.info(
+      `Transaction updated: ${hash} -> ${input.status ?? 'fields only'}`,
+    );
     return entry;
   }
 
@@ -237,7 +242,8 @@ class TransactionCacheService {
   ): Promise<TransactionCacheEntry[]> {
     const realm = await realmDB.getRealm();
     const lowerAddress = address.toLowerCase();
-    let query = `from ==[c] $0 OR to ==[c] $0`;
+    // AND가 OR보다 먼저 결합하므로 주소 조건을 괄호로 묶어야 체인/상태/유형 필터가 적용된다.
+    let query = '(from ==[c] $0 OR to ==[c] $0)';
     const queryParams: (string | number)[] = [lowerAddress];
 
     if (chainId !== undefined) {
@@ -361,7 +367,7 @@ class TransactionCacheService {
   async countByAddress(address: string, chainId?: number): Promise<number> {
     const realm = await realmDB.getRealm();
     const lowerAddress = address.toLowerCase();
-    let query = 'from ==[c] $0 OR to ==[c] $0';
+    let query = '(from ==[c] $0 OR to ==[c] $0)';
     const params: (string | number)[] = [lowerAddress];
 
     if (chainId !== undefined) {

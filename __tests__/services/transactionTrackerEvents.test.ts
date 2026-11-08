@@ -194,6 +194,54 @@ it('marks a transaction replaced only after its nonce is consumed on two passes'
   );
 });
 
+it('persists the nonce it learns from the mempool on the stored record', async () => {
+  const { tracker } = track();
+  await tracker.reconcile();
+  expect(transactionCacheService.updateStatus).toHaveBeenCalledWith(
+    original,
+    1,
+    { nonce: 3 },
+  );
+});
+
+it('resolves a dropped transaction after a restart using the persisted nonce', async () => {
+  // 이전 세션에서 저장한 nonce가 있고, 앱이 꺼진 사이 mempool에서 사라졌다.
+  pendingRecords = [record({ nonce: 3 })];
+  client.getTransaction.mockRejectedValue(
+    Object.assign(new Error('gone'), { name: 'TransactionNotFoundError' }),
+  );
+  client.getTransactionCount.mockResolvedValue(4);
+  const { tracker, events } = track();
+  await tracker.reconcile(); // first observation: suspect only
+  expect(events).toHaveLength(0);
+  await tracker.reconcile(); // nonce still used and the node no longer knows it
+  expect(events).toEqual([
+    expect.objectContaining({ hash: original, status: 'replaced' }),
+  ]);
+  expect(transactionCacheService.updateStatus).toHaveBeenCalledWith(
+    original,
+    1,
+    expect.objectContaining({ status: 'cancelled' }),
+  );
+});
+
+it('keeps polling in memory when persisting the nonce fails', async () => {
+  (transactionCacheService.updateStatus as jest.Mock).mockRejectedValueOnce(
+    new Error('realm closed'),
+  );
+  const warn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+  const { tracker, events } = track();
+  await tracker.reconcile(); // learns the nonce; the write fails
+  client.getTransactionCount.mockResolvedValue(4);
+  client.getTransaction.mockRejectedValue(
+    Object.assign(new Error('gone'), { name: 'TransactionNotFoundError' }),
+  );
+  await tracker.reconcile();
+  await tracker.reconcile();
+  warn.mockRestore();
+  expect(events.map(event => event.status)).toEqual(['replaced']);
+});
+
 it('waits for its own pending replacement instead of guessing', async () => {
   pendingRecords = [
     record({ nonce: 3 }),
