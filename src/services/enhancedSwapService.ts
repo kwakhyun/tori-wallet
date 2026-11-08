@@ -35,16 +35,31 @@ const NATIVE_COINGECKO_IDS: Record<number, string> = {
   8453: 'ethereum',
 };
 
+/**
+ * 시세 조회는 견적을 막지 않는다. 제한 시간이 지나거나 실패하면 null.
+ * fetch 구현이 signal을 무시해도 제한 시간 안에 끝나도록 타이머와 경쟁시킨다.
+ */
 async function fetchJsonWithTimeout(url: string): Promise<unknown | null> {
   const controller =
     typeof AbortController !== 'undefined' ? new AbortController() : null;
-  const timer = setTimeout(() => controller?.abort(), PRICE_FETCH_TIMEOUT_MS);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<null>(resolve => {
+    timer = setTimeout(() => {
+      controller?.abort();
+      resolve(null);
+    }, PRICE_FETCH_TIMEOUT_MS);
+  });
+  const request = (async () => {
+    try {
+      const response = await fetch(url, { signal: controller?.signal });
+      if (!response.ok) return null;
+      return (await response.json()) as unknown;
+    } catch {
+      return null;
+    }
+  })();
   try {
-    const response = await fetch(url, { signal: controller?.signal });
-    if (!response.ok) return null;
-    return await response.json();
-  } catch {
-    return null;
+    return await Promise.race([request, timeout]);
   } finally {
     clearTimeout(timer);
   }
@@ -411,6 +426,8 @@ class EnhancedSwapService {
   private priceCache: Map<string, { price: TokenPrice; timestamp: number }> =
     new Map();
   private readonly PRICE_CACHE_TTL = 60000; // 1분
+  /** 진행 중인 /simple/price 요청 (CoinGecko ID → 요청) */
+  private priceRequests: Map<string, Promise<TokenPrice | null>> = new Map();
 
   /**
    * 스왑 견적 가져오기
@@ -449,11 +466,11 @@ class EnhancedSwapService {
     // API v2가 실행 견적에 서명한 최소 수령량을 그대로 사용한다.
     const minimumReceived = BigInt(quote.minBuyAmount);
 
-    const prices = await this.getUsdPrices(chainId, [
-      params.sellToken,
-      params.buyToken,
+    // 동시에 조회한다. 네이티브 시세는 진행 중인 요청을 공유하므로 한 번만 요청된다.
+    const [prices, nativePriceUsd] = await Promise.all([
+      this.getUsdPrices(chainId, [params.sellToken, params.buyToken]),
+      this.getNativeUsdPrice(chainId),
     ]);
-    const nativePriceUsd = await this.getNativeUsdPrice(chainId);
     const sellPriceUsd = prices[params.sellToken.address.toLowerCase()] ?? null;
     const buyPriceUsd = prices[params.buyToken.address.toLowerCase()] ?? null;
 
@@ -530,22 +547,29 @@ class EnhancedSwapService {
       }
     }
 
+    const platform = COINGECKO_PLATFORMS[chainId];
+    const unique = [...new Set(contracts)];
+    const fetchContracts = unique.length > 0 && !!platform;
+    // 네이티브와 ERC-20 시세를 동시에 조회한다 (각각 제한 시간 있음).
+    const [native, data] = await Promise.all([
+      hasNative ? this.getNativeUsdPrice(chainId) : Promise.resolve(null),
+      fetchContracts
+        ? (fetchJsonWithTimeout(
+            `${COINGECKO_API}/simple/token_price/${platform}?contract_addresses=${unique.join(
+              ',',
+            )}&vs_currencies=usd`,
+          ) as Promise<Record<string, { usd?: number }> | null>)
+        : Promise.resolve(null),
+    ]);
+
     if (hasNative) {
-      const native = await this.getNativeUsdPrice(chainId);
       for (const token of tokens) {
         if (isNativeSwapToken(token))
           result[token.address.toLowerCase()] = native;
       }
     }
 
-    const platform = COINGECKO_PLATFORMS[chainId];
-    if (contracts.length > 0 && platform) {
-      const unique = [...new Set(contracts)];
-      const data = (await fetchJsonWithTimeout(
-        `${COINGECKO_API}/simple/token_price/${platform}?contract_addresses=${unique.join(
-          ',',
-        )}&vs_currencies=usd`,
-      )) as Record<string, { usd?: number }> | null;
+    if (fetchContracts) {
       for (const key of unique) {
         const usd = data?.[key]?.usd;
         if (typeof usd === 'number' && usd > 0) {
@@ -606,38 +630,37 @@ class EnhancedSwapService {
       return cached.price;
     }
 
-    try {
-      const response = await fetch(
-        `https://api.coingecko.com/api/v3/simple/price?ids=${coingeckoId}&vs_currencies=usd&include_24hr_change=true`,
-      );
+    // 같은 시세를 동시에 여러 번 요청하지 않는다 (실패는 캐시되지 않으므로 특히 중요).
+    const inFlight = this.priceRequests.get(coingeckoId);
+    if (inFlight) return inFlight;
 
-      if (!response.ok) {
-        return null;
-      }
+    const request = this.fetchTokenPrice(coingeckoId).finally(() => {
+      this.priceRequests.delete(coingeckoId);
+    });
+    this.priceRequests.set(coingeckoId, request);
+    return request;
+  }
 
-      const data = (await response.json()) as Record<
-        string,
-        { usd: number; usd_24h_change?: number }
-      >;
-      const tokenData = data[coingeckoId];
-
-      if (!tokenData) {
-        return null;
-      }
-
-      const price: TokenPrice = {
-        usd: tokenData.usd,
-        usd24hChange: tokenData.usd_24h_change,
-      };
-
-      // 캐시 저장
-      this.priceCache.set(coingeckoId, { price, timestamp: Date.now() });
-
-      return price;
-    } catch (error) {
-      console.error('Failed to get token price:', error);
+  private async fetchTokenPrice(
+    coingeckoId: string,
+  ): Promise<TokenPrice | null> {
+    const data = (await fetchJsonWithTimeout(
+      `${COINGECKO_API}/simple/price?ids=${coingeckoId}&vs_currencies=usd&include_24hr_change=true`,
+    )) as Record<string, { usd: number; usd_24h_change?: number }> | null;
+    const tokenData = data?.[coingeckoId];
+    if (!tokenData || typeof tokenData.usd !== 'number') {
       return null;
     }
+
+    const price: TokenPrice = {
+      usd: tokenData.usd,
+      usd24hChange: tokenData.usd_24h_change,
+    };
+
+    // 캐시 저장
+    this.priceCache.set(coingeckoId, { price, timestamp: Date.now() });
+
+    return price;
   }
 
   /**
@@ -649,37 +672,24 @@ class EnhancedSwapService {
     const validIds = coingeckoIds.filter(id => id);
     if (validIds.length === 0) return {};
 
-    try {
-      const response = await fetch(
-        `https://api.coingecko.com/api/v3/simple/price?ids=${validIds.join(
-          ',',
-        )}&vs_currencies=usd&include_24hr_change=true`,
-      );
+    const data = (await fetchJsonWithTimeout(
+      `${COINGECKO_API}/simple/price?ids=${validIds.join(
+        ',',
+      )}&vs_currencies=usd&include_24hr_change=true`,
+    )) as Record<string, { usd: number; usd_24h_change?: number }> | null;
+    if (!data) return {};
 
-      if (!response.ok) {
-        return {};
+    const result: Record<string, TokenPrice> = {};
+    for (const id of validIds) {
+      if (data[id]) {
+        result[id] = {
+          usd: data[id].usd,
+          usd24hChange: data[id].usd_24h_change,
+        };
       }
-
-      const data = (await response.json()) as Record<
-        string,
-        { usd: number; usd_24h_change?: number }
-      >;
-
-      const result: Record<string, TokenPrice> = {};
-      for (const id of validIds) {
-        if (data[id]) {
-          result[id] = {
-            usd: data[id].usd,
-            usd24hChange: data[id].usd_24h_change,
-          };
-        }
-      }
-
-      return result;
-    } catch (error) {
-      console.error('Failed to get token prices:', error);
-      return {};
     }
+
+    return result;
   }
 
   /**

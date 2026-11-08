@@ -5,7 +5,16 @@
 // 테스트 타임아웃 5초 설정 (이 테스트는 빠르게 완료되어야 함)
 jest.setTimeout(5000);
 
-import { isAddress } from 'viem';
+import {
+  BaseError,
+  EstimateGasExecutionError,
+  ExecutionRevertedError,
+  InsufficientFundsError,
+  TransactionExecutionError,
+  UserRejectedRequestError,
+  WaitForTransactionReceiptTimeoutError,
+  isAddress,
+} from 'viem';
 import {
   swapService,
   SwapToken,
@@ -13,11 +22,16 @@ import {
   SwapError,
   computePriceImpact,
   classifyPriceImpact,
+  describeSwapError,
+  isReceiptTimeoutError,
   mapZeroXError,
   nativeSwapMax,
   quoteRemainingMs,
   QUOTE_MAX_AGE_MS,
+  ZERO_X_FETCH_TIMEOUT_MS,
 } from '../../src/services/swapService';
+
+const USDC_POLYGON = '0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174';
 import { SWAP_TOKENS as ENHANCED_SWAP_TOKENS } from '../../src/services/enhancedSwapService';
 
 // fetch 모킹
@@ -338,6 +352,153 @@ describe('SwapService', () => {
         }).message,
       ).toContain('too small');
     });
+  });
+
+  describe('describeSwapError (viem and signer errors)', () => {
+    const from = '0x1234567890123456789012345678901234567890';
+    const calldata = `0x095ea7b3${'00'.repeat(64)}`;
+
+    function expectReadable(message: string) {
+      expect(message).toMatch(/^[^a-zA-Z]*[가-힣]/);
+      expect(message).not.toMatch(/Version:|Details:|Request Arguments/);
+      expect(message).not.toContain(calldata.slice(0, 18));
+      expect(message).not.toContain(from);
+    }
+
+    it('explains insufficient gas funds in Korean without the viem dump', () => {
+      const error = new TransactionExecutionError(
+        new InsufficientFundsError(),
+        {
+          account: { address: from, type: 'json-rpc' } as any,
+          to: USDC_POLYGON,
+          data: calldata as `0x${string}`,
+        },
+      );
+      // viem의 원문은 요청 인자와 버전을 포함한다.
+      expect(error.message).toContain('Version: viem@');
+
+      const message = describeSwapError(error, { nativeSymbol: 'MATIC' });
+      expectReadable(message);
+      expect(message).toContain('MATIC');
+      expect(message).toContain('가스비');
+    });
+
+    it('maps reverts, receipt timeouts and rejections', () => {
+      const reverted = new EstimateGasExecutionError(
+        new ExecutionRevertedError({ message: 'execution reverted' }),
+        { account: { address: from } as any, data: calldata as any },
+      );
+      expectReadable(describeSwapError(reverted));
+      expect(describeSwapError(reverted)).toMatch(/시뮬레이션/);
+
+      const timeout = new WaitForTransactionReceiptTimeoutError({
+        hash: `0x${'ab'.repeat(32)}`,
+      });
+      expectReadable(describeSwapError(timeout));
+      expect(describeSwapError(timeout)).toMatch(/아직 확정되지 않았습니다/);
+      expect(isReceiptTimeoutError(timeout)).toBe(true);
+      expect(isReceiptTimeoutError(reverted)).toBe(false);
+
+      const rejected = new UserRejectedRequestError(new Error('nope'));
+      expect(describeSwapError(rejected)).toBe('요청이 취소되었습니다.');
+    });
+
+    it('never shows the full message of an unknown viem error', () => {
+      const error = new BaseError('Something odd happened.', {
+        metaMessages: [
+          `Request Arguments:`,
+          `  from: ${from}`,
+          `  data: ${calldata}`,
+        ],
+      });
+      const message = describeSwapError(error);
+      expectReadable(message);
+      expect(message).toContain('Something odd happened.');
+    });
+
+    it('translates signer lock errors and keeps Korean app errors', () => {
+      expect(describeSwapError(new Error('Wallet is locked'))).toMatch(
+        /지갑이 잠겨/,
+      );
+      expect(
+        describeSwapError(new Error('Wallet signing session expired')),
+      ).toMatch(/지갑이 잠겨/);
+      expect(describeSwapError(new SwapError('NETWORK'))).toMatch(
+        /연결할 수 없습니다/,
+      );
+      expect(describeSwapError(new Error('유효하지 않은 승인 대상'))).toBe(
+        '유효하지 않은 승인 대상',
+      );
+      expect(describeSwapError('boom')).toBe('견적을 가져오지 못했습니다.');
+    });
+  });
+
+  describe('allowance reset tokens', () => {
+    it('requires a zero reset only for mainnet USDT', () => {
+      expect(
+        swapService.requiresAllowanceReset(
+          1,
+          '0xdAC17F958D2ee523a2206206994597C13D831ec7',
+        ),
+      ).toBe(true);
+      expect(
+        swapService.requiresAllowanceReset(
+          1,
+          '0xdac17f958d2ee523a2206206994597c13d831ec7',
+        ),
+      ).toBe(true);
+      // Polygon USDT, 메인넷 USDC는 초기화가 필요 없다.
+      expect(
+        swapService.requiresAllowanceReset(
+          137,
+          '0xc2132D05D31c914a87C6611C10748AEb04B58e8F',
+        ),
+      ).toBe(false);
+      expect(
+        swapService.requiresAllowanceReset(
+          1,
+          '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48',
+        ),
+      ).toBe(false);
+    });
+  });
+
+  describe('0x request timeout', () => {
+    afterEach(() => {
+      jest.useRealTimers();
+    });
+
+    it.each(['getPrice', 'getQuote'] as const)(
+      '%s fails with a network error when 0x never answers',
+      async method => {
+        jest.useFakeTimers();
+        let signal: AbortSignal | undefined;
+        (global.fetch as jest.Mock).mockImplementation(
+          (_url: string, init?: { signal?: AbortSignal }) => {
+            signal = init?.signal;
+            return new Promise(() => {});
+          },
+        );
+        const consoleError = jest
+          .spyOn(console, 'error')
+          .mockImplementation(() => {});
+
+        const result = swapService[method](
+          {
+            sellToken: SWAP_TOKENS[1][0],
+            buyToken: SWAP_TOKENS[1][1],
+            sellAmount: '1',
+            takerAddress: '0x1234567890123456789012345678901234567890',
+          },
+          1,
+        );
+        const outcome = result.catch((error: unknown) => error);
+        await jest.advanceTimersByTimeAsync(ZERO_X_FETCH_TIMEOUT_MS);
+        expect(await outcome).toMatchObject({ code: 'NETWORK' });
+        expect(signal?.aborted).toBe(true);
+        consoleError.mockRestore();
+      },
+    );
   });
 
   describe('native MAX reserve (bigint)', () => {
