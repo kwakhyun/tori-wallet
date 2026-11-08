@@ -9,7 +9,10 @@ import {
   tokenService,
   Token,
   TokenBalanceError,
+  isTestnetChain,
 } from '../../src/services/tokenService';
+import { customNetworkRegistry } from '../../src/services/customNetworks';
+import { formatDisplayAmount } from '../../src/utils/format';
 
 const mockGetBalance = jest.fn();
 const mockReadContract = jest.fn();
@@ -207,8 +210,41 @@ describe('TokenService', () => {
       expect(usdt.balanceError).toBe(true);
       expect(usdt.balance).toBe('—');
       expect(usdt.usdValue).toBeNull();
+      // 과거 형식 필드도 0으로 위장하지 않는다 (표시하면 '—')
+      expect(usdt.balanceRaw).not.toBe('0');
+      expect(Number(usdt.balanceRaw)).toBeNaN();
+      expect(formatDisplayAmount(usdt.balanceRaw)).toBe('—');
+      expect(usdt.value).toBeNaN();
       // 다른 토큰은 정상
       expect(tokens.find(t => t.symbol === 'ETH')!.usdValue).toBe(2000);
+    });
+
+    it('marks tokens without a price source separately from failed lookups', async () => {
+      (global.fetch as jest.Mock).mockResolvedValue(
+        priceResponse({
+          ethereum: { usd: 2000 },
+          tether: { usd: 1 },
+          'usd-coin': { usd: 1 },
+        }),
+      );
+      mockGetCustomTokens.mockResolvedValue([
+        {
+          address: CUSTOM.toLowerCase(),
+          symbol: 'LINK',
+          name: 'Chainlink',
+          decimals: 18,
+          isHidden: false,
+          isSpam: false,
+          isCustom: true,
+        },
+      ]);
+      const tokens = await tokenService.getTokens(ADDRESS, 1);
+      expect(tokens.find(t => t.symbol === 'ETH')!.hasPriceSource).toBe(true);
+      expect(tokens.find(t => t.symbol === 'LINK')).toMatchObject({
+        hasPriceSource: false,
+        priceAvailable: false,
+        usdValue: null,
+      });
     });
 
     it('throws when every balance lookup fails', async () => {
@@ -281,6 +317,83 @@ describe('TokenService', () => {
 
       const tokens = await tokenService.getTokens(ADDRESS, 1);
       expect(tokens.map(t => t.symbol)).toEqual(['ETH', 'USDT', 'USDC']);
+    });
+  });
+
+  describe('custom networks', () => {
+    const BNB = {
+      chainId: 56,
+      name: 'BNB Chain',
+      rpcUrl: 'https://bsc-rpc.example.com',
+      symbol: 'BNB',
+      isTestnet: false,
+    };
+
+    beforeEach(() => {
+      customNetworkRegistry.set([BNB]);
+    });
+    afterEach(() => {
+      customNetworkRegistry.set([]);
+    });
+
+    it('returns the network currency as an unpriced native token', async () => {
+      // 2.5 BNB
+      mockGetBalance.mockResolvedValue(25n * 10n ** 17n);
+
+      const tokens = await tokenService.getTokens(ADDRESS, 56);
+
+      expect(tokens).toHaveLength(1);
+      expect(tokens[0]).toMatchObject({
+        symbol: 'BNB',
+        name: 'BNB Chain',
+        address: 'native',
+        balance: '2.5',
+        balanceError: false,
+        priceAvailable: false,
+        usdValue: null,
+        hasPriceSource: false,
+        isTestnet: false,
+      });
+      // 시세 출처가 없으니 가격 API를 부르지 않는다
+      expect(global.fetch).not.toHaveBeenCalled();
+      // 합계는 0이 아니라 "모름"
+      expect(tokenService.getDisplayTotal(tokens).total).toBeNull();
+      expect(tokenService.isTotalComplete(tokens)).toBe(false);
+    });
+
+    it('lists the native currency as the default token', () => {
+      expect(tokenService.getDefaultTokens(56)).toEqual([
+        { symbol: 'BNB', name: 'BNB Chain', address: 'native', decimals: 18 },
+      ]);
+    });
+
+    it('treats a custom network marked as testnet as a testnet', async () => {
+      customNetworkRegistry.set([{ ...BNB, chainId: 97, isTestnet: true }]);
+      expect(isTestnetChain(97)).toBe(true);
+      expect(isTestnetChain(56)).toBe(false);
+      const tokens = await tokenService.getTokens(ADDRESS, 97);
+      expect(tokens[0]).toMatchObject({ isTestnet: true, usdValue: null });
+    });
+
+    it('reads ERC-20 metadata on a custom network instead of rejecting it', async () => {
+      mockReadContract.mockImplementation(
+        ({ functionName }: { functionName: string }) =>
+          Promise.resolve(
+            { symbol: 'CAKE', name: 'PancakeSwap', decimals: 18 }[functionName],
+          ),
+      );
+      await expect(tokenService.getTokenMetadata(CUSTOM, 56)).resolves.toEqual({
+        address: CUSTOM,
+        symbol: 'CAKE',
+        name: 'PancakeSwap',
+        decimals: 18,
+      });
+    });
+
+    it('still rejects chains that are neither built in nor registered', async () => {
+      await expect(
+        tokenService.getTokenMetadata(CUSTOM, 999999),
+      ).rejects.toThrow('지원하지 않는 네트워크입니다.');
     });
   });
 

@@ -60,17 +60,21 @@ jest.mock('../../src/store/walletStore', () => ({
 const mockNativeRefetch = jest.fn().mockResolvedValue(undefined);
 const mockTokenRefetch = jest.fn().mockResolvedValue(undefined);
 const mockUseTokenBalance = jest.fn();
+const mockUseBalance = jest.fn();
 jest.mock('../../src/hooks/useBalance', () => ({
-  useBalance: () => ({
-    data: {
-      formatted: '1.5',
-      wei: BigInt('1500000000000000000'),
-      symbol: 'ETH',
-    },
-    isLoading: false,
-    isError: false,
-    refetch: mockNativeRefetch,
-  }),
+  useBalance: (...args: unknown[]) => {
+    mockUseBalance(...args);
+    return {
+      data: {
+        formatted: '1.5',
+        wei: BigInt('1500000000000000000'),
+        symbol: 'ETH',
+      },
+      isLoading: false,
+      isError: false,
+      refetch: mockNativeRefetch,
+    };
+  },
   useTokenBalance: (...args: unknown[]) => mockUseTokenBalance(...args),
 }));
 
@@ -258,6 +262,88 @@ describe('TokenDetailScreen', () => {
   it('shows the ETH glyph for the native token without a logo', () => {
     render(<TokenDetailScreen />);
     expect(screen.getByText('Ξ')).toBeTruthy();
+  });
+
+  describe('chain binding', () => {
+    it('stays on the chain it was opened for when the active network changes', async () => {
+      mockParams = { ...mockParams, chainId: 1 };
+      render(<TokenDetailScreen />);
+      await waitFor(() => {
+        expect(screen.getByTestId('token-detail-price')).toHaveTextContent(
+          '$2,000.00',
+        );
+      });
+      expect(screen.queryByTestId('token-detail-network-changed')).toBeNull();
+
+      // dApp의 체인 전환 요청이 승인되어 활성 네트워크가 Optimism으로 바뀜
+      mockChainId = 10;
+      screen.rerender(<TokenDetailScreen />);
+
+      expect(screen.getByTestId('token-detail-network-changed')).toBeTruthy();
+      expect(
+        screen.getByTestId('token-detail-network-changed-text'),
+      ).toHaveTextContent(
+        '지금 네트워크는 Optimism입니다. 이 화면의 ETH은(는) Ethereum Mainnet 자산이라',
+        { exact: false },
+      );
+      // 잔액/시세는 여전히 원래 체인 기준
+      expect(mockUseBalance).toHaveBeenLastCalledWith(
+        '0x1234567890123456789012345678901234567890',
+        1,
+      );
+      expect(mockGetPrice).toHaveBeenCalledWith('ethereum', 1);
+      expect(mockGetPrice).not.toHaveBeenCalledWith('ethereum', 10);
+      // 탐색기도 원래 체인
+      fireEvent.press(screen.getByTestId('token-detail-explorer'));
+      expect(mockOpenURL).toHaveBeenCalledWith(
+        'https://etherscan.io/address/0x1234567890123456789012345678901234567890',
+      );
+
+      // 활성 네트워크에서 실행될 동작은 막는다
+      for (const key of ['send', 'receive', 'swap', 'buy']) {
+        expect(
+          screen.getByTestId(`token-detail-${key}`).props.accessibilityState,
+        ).toEqual(expect.objectContaining({ disabled: true }));
+      }
+      fireEvent.press(screen.getByText('보내기'));
+      fireEvent.press(screen.getByText('받기'));
+      fireEvent.press(screen.getByText('구매'));
+      expect(mockNavigate).not.toHaveBeenCalledWith(
+        'SendTransaction',
+        expect.anything(),
+      );
+      expect(mockNavigate).not.toHaveBeenCalledWith('ReceiveToken');
+      expect(mockShowBuyProviderAlert).not.toHaveBeenCalled();
+
+      fireEvent.press(screen.getByTestId('token-detail-network-back'));
+      expect(mockGoBack).toHaveBeenCalled();
+    });
+
+    it('re-enables the actions when the network switches back', () => {
+      mockParams = { ...mockParams, chainId: 1 };
+      mockChainId = 10;
+      render(<TokenDetailScreen />);
+      expect(screen.getByTestId('token-detail-network-changed')).toBeTruthy();
+
+      mockChainId = 1;
+      screen.rerender(<TokenDetailScreen />);
+      expect(screen.queryByTestId('token-detail-network-changed')).toBeNull();
+      fireEvent.press(screen.getByText('보내기'));
+      expect(mockNavigate).toHaveBeenCalledWith('SendTransaction', {
+        tokenAddress: undefined,
+      });
+    });
+
+    it('binds to the network active at open when params have no chain id', () => {
+      render(<TokenDetailScreen />);
+      mockChainId = 10;
+      screen.rerender(<TokenDetailScreen />);
+      expect(screen.getByTestId('token-detail-network-changed')).toBeTruthy();
+      expect(mockUseBalance).toHaveBeenLastCalledWith(
+        '0x1234567890123456789012345678901234567890',
+        1,
+      );
+    });
   });
 
   describe('ERC-20 tokens', () => {

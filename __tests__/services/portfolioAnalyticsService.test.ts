@@ -2,7 +2,10 @@
  * 포트폴리오 분석 서비스 테스트
  */
 
-import { portfolioAnalyticsService } from '../../src/services/portfolioAnalyticsService';
+import {
+  portfolioAnalyticsService,
+  isSnapshotReliable,
+} from '../../src/services/portfolioAnalyticsService';
 import { Token } from '../../src/services/tokenService';
 
 // AsyncStorage 모킹
@@ -458,6 +461,100 @@ describe('PortfolioAnalyticsService', () => {
       expect(stats.change7d).toBe(500);
       expect(stats.changePercent7d).toBeCloseTo(12.5);
       expect(stats.changePercent24h).toBeNull();
+    });
+
+    it('returns null recorded-value stats instead of $0 when nothing reliable exists', async () => {
+      const AsyncStorage = require('@react-native-async-storage/async-storage');
+      portfolioAnalyticsService.clearCache();
+      AsyncStorage.getItem.mockResolvedValueOnce(JSON.stringify([]));
+
+      // 가격 조회 실패(CoinGecko 429 등): ETH 1.5개, 가치 모름
+      const stats = await portfolioAnalyticsService.calculateStats(
+        '0xd3d3567890123456789012345678901234567890',
+        1,
+        [
+          {
+            ...mockTokens[0],
+            price: 0,
+            value: 0,
+            usdValue: null,
+            priceAvailable: false,
+            hasPriceSource: true,
+          },
+        ],
+      );
+
+      expect(stats.highestValue).toBeNull();
+      expect(stats.lowestValue).toBeNull();
+      expect(stats.averageValue).toBeNull();
+      expect(stats.change24h).toBeNull();
+    });
+
+    it('fills recorded-value stats from history even when the current total is unreliable', async () => {
+      const AsyncStorage = require('@react-native-async-storage/async-storage');
+      portfolioAnalyticsService.clearCache();
+      AsyncStorage.getItem.mockResolvedValueOnce(
+        JSON.stringify([
+          { timestamp: Date.now() - 86400000, totalValue: 200, tokens: [] },
+        ]),
+      );
+      const stats = await portfolioAnalyticsService.calculateStats(
+        '0xd4d4567890123456789012345678901234567890',
+        1,
+        [{ ...mockTokens[0], balanceError: true, usdValue: null }],
+      );
+      expect(stats.highestValue).toBe(200);
+      expect(stats.lowestValue).toBe(200);
+      expect(stats.averageValue).toBe(200);
+    });
+  });
+
+  describe('isSnapshotReliable - price sources', () => {
+    const eth = {
+      ...mockTokens[0],
+      usdValue: 3000,
+      priceAvailable: true,
+      hasPriceSource: true,
+    };
+    const customToken = {
+      ...mockTokens[2],
+      symbol: 'MYTOKEN',
+      price: 0,
+      value: 0,
+      usdValue: null,
+      priceAvailable: false,
+      coingeckoId: undefined,
+      isCustom: true,
+      hasPriceSource: false,
+    };
+
+    it('does not let a held token without a price source block recording', () => {
+      expect(isSnapshotReliable([eth, customToken])).toBe(true);
+    });
+
+    it('still refuses when a token with a price source has no price', () => {
+      expect(
+        isSnapshotReliable([
+          { ...eth, usdValue: null, priceAvailable: false },
+          customToken,
+        ]),
+      ).toBe(false);
+    });
+
+    it('refuses when only tokens without a price source are held', () => {
+      expect(isSnapshotReliable([customToken])).toBe(false);
+    });
+
+    it('records only the priced part of the portfolio', async () => {
+      const AsyncStorage = require('@react-native-async-storage/async-storage');
+      const saved = await portfolioAnalyticsService.saveSnapshot(
+        '0x8888567890123456789012345678901234567890',
+        1,
+        [eth, customToken],
+      );
+      expect(saved).toBe(true);
+      const [, json] = AsyncStorage.setItem.mock.calls[0];
+      expect(JSON.parse(json)[0].totalValue).toBe(3000);
     });
   });
 

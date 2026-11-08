@@ -224,6 +224,61 @@ describe('HomeScreen', () => {
       expect(screen.queryByText('$0.00')).toBeNull();
     });
 
+    it('shows a dash (not $0.00) for an empty token list', async () => {
+      mockGetTokens.mockResolvedValue([]);
+      render(<HomeScreen />);
+      await waitFor(() => {
+        expect(screen.getByTestId('home-total-value')).toHaveTextContent('—');
+      });
+    });
+
+    it('explains that assets failed to load when some values are unknown', async () => {
+      mockGetTokens.mockResolvedValue([
+        nativeToken(),
+        usdcToken({ priceAvailable: false, usdValue: null, value: 0 }),
+      ]);
+      render(<HomeScreen />);
+      await waitFor(() => {
+        expect(screen.getByTestId('home-total-value')).toHaveTextContent(
+          '$3,000.00',
+        );
+      });
+      expect(screen.getByTestId('home-total-partial')).toHaveTextContent(
+        '일부 자산은 잔액이나 시세를 불러오지 못해 제외했습니다',
+      );
+    });
+
+    it('excludes a custom token without a price source without calling it a failure', async () => {
+      const LINK = '0x514910771AF9Ca656af840dff83E8264EcF986CA';
+      mockGetTokens.mockResolvedValue([
+        nativeToken({ hasPriceSource: true }),
+        usdcToken({
+          symbol: 'LINK',
+          name: 'Chainlink',
+          address: LINK,
+          balance: '10',
+          balanceRaw: '10',
+          price: 0,
+          priceAvailable: false,
+          usdValue: null,
+          value: 0,
+          coingeckoId: undefined,
+          isCustom: true,
+          hasPriceSource: false,
+        }),
+      ]);
+      render(<HomeScreen />);
+      await waitFor(() => {
+        expect(screen.getByTestId('home-total-value')).toHaveTextContent(
+          '$3,000.00',
+        );
+      });
+      expect(screen.getByTestId('home-total-unpriceable')).toHaveTextContent(
+        '시세 정보가 없는 자산은 합계에서 제외됩니다',
+      );
+      expect(screen.queryByTestId('home-total-partial')).toBeNull();
+    });
+
     it('does not block the balance while the token list is loading', async () => {
       mockGetTokens.mockReturnValue(new Promise(() => undefined));
       render(<HomeScreen />);
@@ -283,6 +338,60 @@ describe('HomeScreen', () => {
         undefined,
         11155111,
       );
+    });
+  });
+
+  describe('Custom network', () => {
+    beforeEach(() => {
+      mockWalletStore = createMockWalletStore({
+        activeNetworkChainId: 56,
+        networks: [
+          ...createMockWalletStore().networks,
+          {
+            chainId: 56,
+            name: 'BNB Chain',
+            symbol: 'BNB',
+            isTestnet: false,
+            isCustom: true,
+          },
+        ],
+      });
+      mockBalance = createMockBalance({
+        data: {
+          formatted: '2.5',
+          wei: BigInt('2500000000000000000'),
+          symbol: 'BNB',
+        },
+      });
+      // tokenService가 커스텀 네트워크의 기본 통화를 시세 출처 없는 자산으로 돌려준다
+      mockGetTokens.mockResolvedValue([
+        nativeToken({
+          symbol: 'BNB',
+          name: 'BNB Chain',
+          balance: '2.5',
+          balanceRaw: '2.5',
+          price: 0,
+          priceChange24h: 0,
+          value: 0,
+          usdValue: null,
+          priceAvailable: false,
+          coingeckoId: undefined,
+          hasPriceSource: false,
+        }),
+      ]);
+    });
+
+    it('shows a dash instead of $0.00 and lists the native row', async () => {
+      render(<HomeScreen />);
+      await waitFor(() => {
+        expect(screen.getByTestId('home-token-native')).toBeTruthy();
+      });
+      expect(screen.getByTestId('home-total-value')).toHaveTextContent('—');
+      expect(screen.queryByText('$0.00')).toBeNull();
+      expect(screen.getByTestId('home-balance-value')).toHaveTextContent(
+        '2.5 BNB',
+      );
+      expect(screen.getByTestId('home-total-noPriceSource')).toBeTruthy();
     });
   });
 
@@ -360,6 +469,8 @@ describe('HomeScreen', () => {
         decimals: 6,
         coingeckoId: 'usd-coin',
         logoUrl: 'https://example.com/usdc.png',
+        // 상세 화면은 목록을 읽은 체인에 고정된다
+        chainId: 1,
       });
     });
 

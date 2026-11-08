@@ -3,7 +3,9 @@
  *
  * - 금액은 모두 useFiat().formatFiat (표시 통화, 잔액 숨기기 반영)
  * - 비교할 기록이 없는 기간 변동은 '—'
+ * - 총 자산은 홈과 같은 규칙(tokenValuation)으로 계산한다: 가치를 아는 자산이 없으면 '—'
  * - 조회 실패/가격 미확인/테스트넷 데이터는 기록(스냅샷)하지 않는다 (서비스에서 판단)
+ *   차트가 비어 있으면 기록하지 못한 실제 이유를 보여 준다.
  */
 
 import React, {
@@ -38,6 +40,13 @@ import {
   PortfolioStats,
   PerformanceMetrics,
 } from '@/services/portfolioAnalyticsService';
+import {
+  snapshotBlocker,
+  summarizeTokenTotal,
+  totalNoteKind,
+  TOTAL_NOTES,
+  type SnapshotBlocker,
+} from '@/services/tokenValuation';
 import { PieChart, LineChart } from '@/components/charts';
 import { PortfolioScreenSkeleton } from '@/components/common/Skeleton';
 import { TabScreen } from '@/components/common/Screen';
@@ -53,6 +62,16 @@ const TIME_RANGES: { value: TimeRange; label: string; days: number }[] = [
   { value: '30d', label: '30일', days: 30 },
   { value: '90d', label: '90일', days: 90 },
 ];
+
+/** 차트가 비어 있을 때의 안내 (기록하지 못한 이유별) */
+export const CHART_EMPTY_MESSAGES: Record<SnapshotBlocker | 'ok', string> = {
+  ok: '포트폴리오 탭을 열 때마다 하루 한 번 기록됩니다.',
+  testnet: '테스트넷 자산은 실제 가치가 없어 기록하지 않습니다.',
+  lookupFailed:
+    '잔액이나 시세를 불러오지 못해 기록하지 않았습니다. 아래로 당겨 다시 시도하세요.',
+  noPriceSource: '시세 정보가 있는 자산이 없어 기록하지 않습니다.',
+  empty: '이 네트워크에서는 자산을 불러올 수 없어 기록하지 않습니다.',
+};
 
 export const formatChange = (value: number | null | undefined): string => {
   if (value === null || value === undefined || !Number.isFinite(value)) {
@@ -113,8 +132,16 @@ function PortfolioScreen(): React.JSX.Element {
     [tokenData],
   );
 
-  const totalValue = tokens ? tokenService.getTotalValue(tokens) : null;
-  const totalComplete = tokens ? tokenService.isTotalComplete(tokens) : false;
+  // 홈과 같은 합산 규칙 (빈 목록/가치를 아는 자산이 없으면 null → '—')
+  const totalSummary = useMemo(
+    () => (tokens ? summarizeTokenTotal(tokens) : null),
+    [tokens],
+  );
+  const totalValue = totalSummary?.total ?? null;
+  const totalNote = totalSummary ? totalNoteKind(totalSummary) : null;
+  const chartEmptyMessage = isTestnet
+    ? CHART_EMPTY_MESSAGES.testnet
+    : CHART_EMPTY_MESSAGES[(tokens && snapshotBlocker(tokens)) || 'ok'];
 
   // 분석 데이터 로드
   const loadAnalytics = useCallback(async () => {
@@ -186,9 +213,12 @@ function PortfolioScreen(): React.JSX.Element {
 
   const handleTokenPress = useCallback(
     (token: Token) => {
-      navigation.navigate('TokenDetail', tokenDetailParams(token));
+      navigation.navigate(
+        'TokenDetail',
+        tokenDetailParams(token, activeNetworkChainId),
+      );
     },
-    [navigation],
+    [navigation, activeNetworkChainId],
   );
 
   const renderToken = useCallback(
@@ -299,9 +329,9 @@ function PortfolioScreen(): React.JSX.Element {
             >
               {formatFiat(totalValue)}
             </TotalValueAmount>
-            {!totalComplete && tokens && !hideBalances ? (
-              <TotalNote>
-                일부 자산은 시세를 불러오지 못해 제외했습니다
+            {totalNote && !hideBalances ? (
+              <TotalNote testID={`portfolio-total-${totalNote}`}>
+                {TOTAL_NOTES[totalNote]}
               </TotalNote>
             ) : null}
             {stats &&
@@ -349,11 +379,7 @@ function PortfolioScreen(): React.JSX.Element {
           width={Math.max(windowWidth - 80, 200)}
           height={180}
           title="포트폴리오 추이"
-          emptyMessage={
-            isTestnet
-              ? '테스트넷 자산은 실제 가치가 없어 기록하지 않습니다.'
-              : '포트폴리오 탭을 열 때마다 하루 한 번 기록됩니다.'
-          }
+          emptyMessage={chartEmptyMessage}
           testID="portfolio-line-chart"
         />
       </ChartCard>
@@ -414,8 +440,8 @@ function PortfolioScreen(): React.JSX.Element {
         </StatsCard>
       )}
 
-      {/* 통계 요약 (기록된 총 자산액 기준) */}
-      {stats && !isTestnet && (
+      {/* 통계 요약 (기록된 총 자산액 기준, 기록이 없으면 숨김) */}
+      {stats && !isTestnet && stats.highestValue !== null && (
         <StatsCard>
           <ChartTitle accessibilityRole="header">
             기록된 총 자산 요약

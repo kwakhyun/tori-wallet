@@ -73,6 +73,8 @@ export type RootStackParamList = {
     decimals?: number;
     coingeckoId?: string;
     logoUrl?: string;
+    /** 토큰 목록을 읽은 체인. 상세 화면은 이 체인에 고정된다 (tokenDetailParams가 채운다). */
+    chainId: number;
   };
   CoinDetail: {
     coinId: string;
