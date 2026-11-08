@@ -3,9 +3,13 @@
  *
  * 일반 트랜잭션(txlist)과 ERC-20 전송(tokentx)을 함께 조회해 해시 기준으로 합친다.
  * 조회 실패는 빈 목록이 아니라 오류로 던진다 (화면에서 다시 시도 제공).
+ *
+ * 두 목록은 같은 page/offset으로 따로 페이지가 나뉘므로 페이지마다 다루는 기간이 다르다.
+ * 여러 페이지를 표시할 때는 combinePages로 원시 데이터를 모아 다시 합친다.
  */
 
 import { formatUnits } from 'viem';
+import type { ReplacementKind } from './transactionTracker';
 
 export type TransactionKind =
   | 'send'
@@ -29,7 +33,8 @@ export interface Transaction {
   blockNumber: string;
   isError: boolean;
   type: TransactionKind;
-  status: 'success' | 'failed' | 'pending';
+  /** replaced: 같은 nonce의 다른 거래가 먼저 처리되어 실행되지 않은 거래 (이 기기 기록) */
+  status: 'success' | 'failed' | 'pending' | 'replaced';
   /** 토큰 전송이면 토큰 심볼 (없으면 네이티브) */
   tokenSymbol?: string;
   tokenDecimals?: number;
@@ -40,14 +45,24 @@ export interface Transaction {
   receivedSymbol?: string;
   /** 이 기기에서 제출한 거래 */
   isLocal?: boolean;
+  /** 이 거래가 다른 거래의 가속/취소 거래인 경우 (이 기기 기록) */
+  replacement?: { kind: ReplacementKind; originalHash: string };
 }
 
 export interface TransactionPage {
   transactions: Transaction[];
   hasMore: boolean;
+  /** 여러 페이지를 다시 합칠 때 쓰는 원시 응답 (combinePages) */
+  raw?: RawHistoryPage;
 }
 
-interface EtherscanTx {
+export interface RawHistoryPage {
+  address: string;
+  txs: EtherscanTx[];
+  tokenTxs: EtherscanTokenTx[];
+}
+
+export interface EtherscanTx {
   hash: string;
   from: string;
   to: string;
@@ -64,12 +79,13 @@ interface EtherscanTx {
   txreceipt_status?: string;
 }
 
-interface EtherscanTokenTx {
+export interface EtherscanTokenTx {
   hash: string;
   from: string;
   to: string;
   value: string;
   contractAddress: string;
+  logIndex?: string;
   tokenName?: string;
   tokenSymbol?: string;
   tokenDecimal?: string;
@@ -183,6 +199,7 @@ class TransactionHistoryService {
     const result: TransactionPage = {
       transactions,
       hasMore: txs.length >= limit || tokenTxs.length >= limit,
+      raw: { address, txs, tokenTxs },
     };
 
     this.cache.set(cacheKey, { data: result, timestamp: Date.now() });
@@ -232,6 +249,51 @@ class TransactionHistoryService {
     }
     console.warn('Explorer API error:', data?.message);
     throw new TransactionHistoryError();
+  }
+
+  /**
+   * 불러온 모든 페이지의 원시 응답을 모아 다시 합친다.
+   *
+   * 앞 페이지의 일반 거래와 뒤 페이지의 토큰 전송이 같은 해시면 하나로 합쳐 스왑/토큰 전송으로
+   * 다시 분류한다 (먼저 받은 반쪽 정보로 '컨트랙트 실행'에 고정되지 않음).
+   * 두 목록의 기간이 다르다고 오래된 항목을 숨기지는 않는다: 스팸 토큰 전송이 많은 계정에서
+   * 내가 보낸 거래가 여러 페이지 뒤로 밀려 보이지 않게 되기 때문이다.
+   */
+  combinePages(pages: TransactionPage[]): Transaction[] {
+    if (pages.length === 0) return [];
+    if (pages.some(page => !page.raw)) {
+      // 원시 응답이 없는 페이지(이전 버전 캐시 등)는 페이지별 결과를 그대로 이어 붙인다.
+      const seen = new Set<string>();
+      return pages
+        .flatMap(page => page.transactions)
+        .filter(tx => {
+          const key = lower(tx.hash);
+          if (seen.has(key)) return false;
+          seen.add(key);
+          return true;
+        });
+    }
+    const raws = pages.map(page => page.raw!);
+    const { address } = raws[0];
+    const txs = raws.flatMap(raw => raw.txs);
+    const tokenTxs: EtherscanTokenTx[] = [];
+    const seenTransfers = new Set<string>();
+    for (const transfer of raws.flatMap(raw => raw.tokenTxs)) {
+      // 페이지 사이에 새 거래가 들어오면 offset이 밀려 같은 전송이 두 페이지에 나올 수 있다.
+      const key = [
+        lower(transfer.hash),
+        transfer.logIndex ?? '',
+        lower(transfer.contractAddress),
+        lower(transfer.from),
+        lower(transfer.to),
+        transfer.value,
+      ].join(':');
+      if (seenTransfers.has(key)) continue;
+      seenTransfers.add(key);
+      tokenTxs.push(transfer);
+    }
+
+    return this.merge(txs, tokenTxs, address);
   }
 
   /**
@@ -422,10 +484,19 @@ class TransactionHistoryService {
   }
 
   /**
-   * 캐시 클리어
+   * 캐시 클리어. 주소/체인을 주면 그 내역만 지운다.
    */
-  clearCache() {
-    this.cache.clear();
+  clearCache(address?: string, chainId?: number) {
+    if (address === undefined && chainId === undefined) {
+      this.cache.clear();
+      return;
+    }
+    for (const key of [...this.cache.keys()]) {
+      const [keyAddress, keyChain] = key.split('-');
+      if (address !== undefined && keyAddress !== lower(address)) continue;
+      if (chainId !== undefined && keyChain !== String(chainId)) continue;
+      this.cache.delete(key);
+    }
   }
 }
 

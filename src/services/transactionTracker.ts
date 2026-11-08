@@ -62,6 +62,8 @@ interface PendingEntry {
   chainId: number;
   from?: string;
   nonce?: number;
+  /** Realm 기록이 있는 거래 (nonce를 저장할 수 있음) */
+  stored?: boolean;
   summary?: TrackedTransactionSummary;
   replacement?: { kind: ReplacementKind; originalHash: string };
 }
@@ -78,7 +80,11 @@ export class TransactionTracker {
   private running: Promise<void> | undefined;
   private generation = 0;
   private listeners = new Set<TransactionStatusListener>();
-  /** 대기 중 mempool에서 확인한 nonce (Realm 기록에 nonce가 없을 때) */
+  /**
+   * 대기 중 mempool에서 확인한 nonce (Realm 기록에 nonce가 없을 때).
+   * Realm 기록이 있으면 함께 저장해, 앱을 다시 시작한 뒤 거래가 mempool에서 사라져도
+   * nonce 소진(대체됨)을 판단할 수 있게 한다.
+   */
   private nonces = new Map<string, { from: string; nonce: number }>();
   /** 한 번 nonce 소진이 관찰된 거래. 두 번 연속 관찰되어야 대체됨으로 확정한다. */
   private suspects = new Set<string>();
@@ -155,6 +161,7 @@ export class TransactionTracker {
           chainId: tx.chainId,
           from: tx.from,
           nonce: typeof tx.nonce === 'number' ? tx.nonce : undefined,
+          stored: true,
           summary: {
             type: tx.type,
             amount: tx.tokenAmount ?? tx.value,
@@ -262,6 +269,16 @@ export class TransactionTracker {
       if (!onChain || onChain.blockNumber != null) return;
       known = { from: onChain.from, nonce: onChain.nonce };
       this.nonces.set(key, known);
+      if (tx.stored && generation === this.generation) {
+        try {
+          await transactionCacheService.updateStatus(tx.hash, tx.chainId, {
+            nonce: onChain.nonce,
+          });
+        } catch (error) {
+          // 저장에 실패해도 이번 세션에서는 메모리의 nonce로 계속 추적한다.
+          console.warn('Failed to persist transaction nonce:', error);
+        }
+      }
       return;
     }
     const latest = await client.getTransactionCount({

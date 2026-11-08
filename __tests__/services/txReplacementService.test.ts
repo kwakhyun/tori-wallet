@@ -1,4 +1,5 @@
 import {
+  assertMatchesLocalRecord,
   bumpFee,
   computeReplacementFees,
   ReplacementError,
@@ -246,6 +247,185 @@ describe('prepare', () => {
         activeAddress: owner,
       }),
     ).rejects.toMatchObject({ code: 'NOT_FOUND' });
+  });
+});
+
+describe('prepare: local record cross-check', () => {
+  const speedUp = () =>
+    txReplacementService.prepare({
+      kind: 'speedUp',
+      hash,
+      chainId: 1,
+      activeAddress: owner,
+    });
+
+  it('speeds up when the RPC transaction matches the recorded token transfer', async () => {
+    (transactionCacheService.getByHash as jest.Mock).mockResolvedValue({
+      type: 'send',
+      to: recipient,
+      valueWei: '0',
+      tokenAddress: token,
+      tokenAmount: '5',
+    });
+    await expect(speedUp()).resolves.toMatchObject({
+      kind: 'speedUp',
+      data: transferData,
+    });
+  });
+
+  it('refuses to re-sign a token transfer whose recipient differs from the record', async () => {
+    (transactionCacheService.getByHash as jest.Mock).mockResolvedValue({
+      type: 'send',
+      to: owner, // 기록된 수신자와 RPC 호출 데이터의 수신자가 다르다
+      valueWei: '0',
+      tokenAddress: token,
+    });
+    await expect(speedUp()).rejects.toMatchObject({ code: 'MISMATCH' });
+  });
+
+  it('refuses to re-sign when the value or target differs from the record', async () => {
+    client.getTransaction.mockResolvedValue(
+      pendingTx({ to: recipient, value: 2n * 10n ** 17n, input: '0x' }),
+    );
+    (transactionCacheService.getByHash as jest.Mock).mockResolvedValue({
+      type: 'send',
+      to: recipient,
+      valueWei: (10n ** 17n).toString(),
+    });
+    await expect(speedUp()).rejects.toMatchObject({ code: 'MISMATCH' });
+
+    (transactionCacheService.getByHash as jest.Mock).mockResolvedValue({
+      type: 'swap',
+      to: token, // 기록된 라우터와 다른 컨트랙트
+      valueWei: (2n * 10n ** 17n).toString(),
+    });
+    await expect(speedUp()).rejects.toMatchObject({ code: 'MISMATCH' });
+  });
+
+  it('accepts the record shapes the app writes (send, swap, approval, a previous speed-up)', () => {
+    const router = '0x2222222222222222222222222222222222222222';
+    const approveData = encodeFunctionData({
+      abi: erc20Abi,
+      functionName: 'approve',
+      args: [router, 0n],
+    });
+    const cases: [
+      Parameters<typeof assertMatchesLocalRecord>[0],
+      Parameters<typeof assertMatchesLocalRecord>[1],
+    ][] = [
+      // SendTransactionScreen: 네이티브 전송
+      [
+        { to: recipient, value: 10n ** 17n, input: '0x' },
+        { type: 'send', to: recipient, valueWei: (10n ** 17n).toString() },
+      ],
+      // SendTransactionScreen: 토큰 전송 (to는 실제 수신자, tokenAddress는 토큰)
+      [
+        { to: token, value: 0n, input: transferData },
+        { type: 'send', to: recipient, valueWei: '0', tokenAddress: token },
+      ],
+      // SwapScreen: 스왑 (to는 라우터, tokenAddress 없음)
+      [
+        { to: router, value: 5n, input: '0x12345678' },
+        { type: 'swap', to: router, valueWei: '5' },
+      ],
+      // SwapScreen 승인 / TokenApprovals 회수
+      [
+        { to: token, value: 0n, input: approveData },
+        { type: 'approve', to: token, valueWei: '0', tokenAddress: token },
+      ],
+      // 기록이 없는 거래(WalletConnect)를 가속한 기록: to = 실제 대상
+      [
+        { to: router, value: 0n, input: '0x12345678' },
+        {
+          type: 'contract',
+          to: router,
+          valueWei: '0',
+          method: `replacement:speedUp:${hash}`,
+        },
+      ],
+    ];
+    for (const [original, record] of cases)
+      expect(() => assertMatchesLocalRecord(original, record)).not.toThrow();
+  });
+
+  it('can speed up its own speed-up of a token transfer (round trip through record())', async () => {
+    (transactionCacheService.getByHash as jest.Mock).mockResolvedValue({
+      type: 'send',
+      to: recipient,
+      value: '0',
+      valueWei: '0',
+      tokenAddress: token,
+      tokenSymbol: 'USDC',
+      tokenAmount: '5',
+    });
+    const first = await speedUp();
+    await txReplacementService.submit(first, () => true, {
+      nativeSymbol: 'ETH',
+    });
+    const written = (
+      transactionCacheService.createLocalTransaction as jest.Mock
+    ).mock.calls[0][0];
+    // 두 번째 가속: 첫 가속 거래의 기록을 기준으로 다시 확인한다.
+    (transactionCacheService.getByHash as jest.Mock).mockResolvedValue(written);
+    await expect(speedUp()).resolves.toMatchObject({
+      kind: 'speedUp',
+      rootHash: hash,
+      data: transferData,
+    });
+  });
+
+  it('keeps a sped-up cancel a cancel (self-transfer, recorded as cancel)', async () => {
+    const root = `0x${'c'.repeat(64)}`;
+    client.getTransaction.mockResolvedValue(
+      pendingTx({ to: owner, value: 0n, input: '0x', gas: 21_000n }),
+    );
+    (transactionCacheService.getByHash as jest.Mock).mockResolvedValue({
+      method: `replacement:cancel:${root}`,
+      type: 'send',
+      to: owner,
+      valueWei: '0',
+      tokenAmount: '0',
+    });
+    const plan = await speedUp();
+    expect(plan).toMatchObject({
+      kind: 'cancel',
+      acceleratesCancel: true,
+      rootHash: root,
+      to: owner,
+      value: 0n,
+      data: undefined,
+    });
+    await txReplacementService.submit(plan, () => true, {
+      nativeSymbol: 'ETH',
+    });
+    const record = (transactionCacheService.createLocalTransaction as jest.Mock)
+      .mock.calls[0][0];
+    expect(record).toMatchObject({ to: owner, value: '0', type: 'send' });
+    expect(parseReplacementMethod(record.method)).toEqual({
+      kind: 'cancel',
+      originalHash: root,
+    });
+  });
+
+  it('cancelling a pending speed-up links the cancel to the root transaction', async () => {
+    const root = `0x${'c'.repeat(64)}`;
+    (transactionCacheService.getByHash as jest.Mock).mockResolvedValue({
+      method: `replacement:speedUp:${root}`,
+      type: 'send',
+      to: recipient,
+      tokenAddress: token,
+    });
+    const plan = await txReplacementService.prepare({
+      kind: 'cancel',
+      hash,
+      chainId: 1,
+      activeAddress: owner,
+    });
+    expect(plan).toMatchObject({
+      kind: 'cancel',
+      acceleratesCancel: false,
+      rootHash: root,
+    });
   });
 });
 

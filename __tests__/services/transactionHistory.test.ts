@@ -7,6 +7,7 @@
 import {
   transactionHistoryService,
   TransactionHistoryError,
+  type Transaction,
 } from '../../src/services/transactionHistory';
 
 const ME = '0x1234567890123456789012345678901234567890';
@@ -276,6 +277,135 @@ describe('TransactionHistoryService', () => {
 
     await transactionHistoryService.getTransactions(ME, 1, 1, 20, true);
     expect(global.fetch).toHaveBeenCalledTimes(4);
+  });
+
+  describe('combinePages (txlist and tokentx are paged independently)', () => {
+    const WETH = '0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2';
+    const spam = (i: number) => ({
+      hash: `0xspam${i}`,
+      from: OTHER,
+      to: ME,
+      value: '1',
+      contractAddress: '0x9999999999999999999999999999999999999999',
+      tokenSymbol: 'SPAM',
+      tokenDecimal: '0',
+      timeStamp: String(1700000100 + i),
+      blockNumber: '2',
+    });
+    const swapLegs = [
+      {
+        hash: '0xswap',
+        from: ME,
+        to: ROUTER,
+        value: '1000000',
+        contractAddress: USDC,
+        tokenSymbol: 'USDC',
+        tokenDecimal: '6',
+        timeStamp: '1600000000',
+        blockNumber: '1',
+      },
+      {
+        hash: '0xswap',
+        from: ROUTER,
+        to: ME,
+        value: '500000000000000000',
+        contractAddress: WETH,
+        tokenSymbol: 'WETH',
+        tokenDecimal: '18',
+        timeStamp: '1600000000',
+        blockNumber: '1',
+      },
+    ];
+    /** page 1: txlist에 스왑, tokentx는 더 최근 스팸으로 가득 / page 2: 스왑의 토큰 전송 */
+    function mockPages() {
+      (global.fetch as jest.Mock).mockImplementation((url: string) => {
+        const page2 = url.includes('page=2');
+        if (url.includes('action=tokentx'))
+          return Promise.resolve(page2 ? ok(swapLegs) : ok([spam(1), spam(2)]));
+        return Promise.resolve(
+          page2
+            ? empty()
+            : ok([
+                {
+                  ...baseTx,
+                  hash: '0xswap',
+                  to: ROUTER,
+                  value: '0',
+                  timeStamp: '1600000000',
+                  input: '0x12345678',
+                },
+              ]),
+        );
+      });
+    }
+
+    it('re-labels a swap once its transfers arrive on a later tokentx page', async () => {
+      mockPages();
+      const page1 = await transactionHistoryService.getHistoryPage(ME, 1, 1, 2);
+      expect(
+        transactionHistoryService
+          .combinePages([page1])
+          .find(tx => tx.hash === '0xswap')?.type,
+      ).toBe('contract');
+
+      const page2 = await transactionHistoryService.getHistoryPage(ME, 1, 2, 2);
+      const combined = transactionHistoryService.combinePages([page1, page2]);
+      expect(combined.filter(tx => tx.hash === '0xswap')).toEqual([
+        expect.objectContaining({
+          type: 'swap',
+          value: '1',
+          tokenSymbol: 'USDC',
+          receivedValue: '0.5',
+          receivedSymbol: 'WETH',
+        }),
+      ]);
+      expect(combined.map(tx => tx.hash)).toEqual([
+        '0xspam2',
+        '0xspam1',
+        '0xswap',
+      ]);
+    });
+
+    it('does not double-count a transfer repeated across pages', async () => {
+      (global.fetch as jest.Mock).mockImplementation((url: string) =>
+        Promise.resolve(
+          url.includes('action=tokentx') ? ok([spam(1)]) : empty(),
+        ),
+      );
+      const page1 = await transactionHistoryService.getHistoryPage(ME, 1, 1, 1);
+      const page2 = await transactionHistoryService.getHistoryPage(ME, 1, 2, 1);
+      const combined = transactionHistoryService.combinePages([page1, page2]);
+      expect(combined).toHaveLength(1);
+      expect(combined[0]).toMatchObject({ type: 'receive', value: '1' });
+    });
+
+    it('falls back to concatenating pages without raw data', () => {
+      const tx = (hash: string) =>
+        ({ hash, timestamp: 1 } as unknown as Transaction);
+      expect(
+        transactionHistoryService
+          .combinePages([
+            { transactions: [tx('0xa'), tx('0xb')], hasMore: true },
+            { transactions: [tx('0xB'), tx('0xc')], hasMore: false },
+          ])
+          .map(t => t.hash),
+      ).toEqual(['0xa', '0xb', '0xc']);
+    });
+  });
+
+  it('clears only the cached pages of one address and chain', async () => {
+    mockExplorer(ok([baseTx]));
+    await transactionHistoryService.getTransactions(ME, 1);
+    await transactionHistoryService.getTransactions(ME, 137);
+    expect(global.fetch).toHaveBeenCalledTimes(4);
+    transactionHistoryService.clearCache(
+      ME.toUpperCase().replace('0X', '0x'),
+      1,
+    );
+    await transactionHistoryService.getTransactions(ME, 137); // cached
+    expect(global.fetch).toHaveBeenCalledTimes(4);
+    await transactionHistoryService.getTransactions(ME, 1); // refetched
+    expect(global.fetch).toHaveBeenCalledTimes(6);
   });
 
   it('does not cache failures', async () => {

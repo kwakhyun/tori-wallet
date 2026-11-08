@@ -6,6 +6,10 @@
  *  - 취소: 자기 자신에게 0 전송, 같은 nonce, 수수료 ≥ +12.5%
  * 서명 직전에 원래 거래가 아직 대기 중인지(영수증 없음, nonce 미사용) 다시 확인한다.
  * 서명은 기존 송금과 같은 signingService 경로(서명 금고 + 승인 확인)를 사용한다.
+ *
+ * 가속은 RPC가 돌려준 원래 거래의 to/value/data를 그대로 다시 서명하므로,
+ * 이 기기에 기록이 있으면 그 기록과 맞는지 먼저 확인한다 (사용자 지정 RPC가 다른 내용을 돌려주는 경우 차단).
+ * 취소 거래를 가속하면 계속 취소 거래로 만든다.
  */
 
 import {
@@ -108,6 +112,8 @@ export function summarizeCalldata(data: string | null | undefined): string {
 
 export interface ReplacementPlan {
   kind: ReplacementKind;
+  /** 취소 거래를 다시 가속하는 경우 (kind는 'cancel'로 유지된다) */
+  acceleratesCancel: boolean;
   chainId: number;
   from: `0x${string}`;
   originalHash: `0x${string}`;
@@ -138,7 +144,8 @@ export class ReplacementError extends Error {
       | 'NOT_OWNER'
       | 'UNSUPPORTED'
       | 'INSUFFICIENT_FUNDS'
-      | 'UNAUTHORIZED',
+      | 'UNAUTHORIZED'
+      | 'MISMATCH',
     message: string,
   ) {
     super(message);
@@ -165,6 +172,69 @@ function feesOf(tx: Transaction): FeeFields {
     'UNSUPPORTED',
     '이 거래 유형은 가속/취소를 지원하지 않습니다.',
   );
+}
+
+/** 대체 계획에 필요한 로컬 기록 필드 (Realm 객체는 비동기 작업 중 무효화될 수 있어 복사한다) */
+interface LocalRecordSnapshot {
+  method?: string;
+  type?: string;
+  to?: string;
+  valueWei?: string;
+  tokenAddress?: string;
+}
+
+const sameAddress = (a?: string | null, b?: string | null) =>
+  !!a && !!b && a.toLowerCase() === b.toLowerCase();
+
+function parseWei(value: string | undefined): bigint | undefined {
+  if (!value) return undefined;
+  try {
+    return BigInt(value);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * 가속 전에 RPC가 돌려준 원래 거래가 이 기기의 기록과 맞는지 확인한다.
+ * 기록마다 믿을 수 있는 필드만 비교한다 (토큰 전송 기록의 to는 실제 수신자,
+ * 스왑 기록의 tokenAddress는 판 토큰이므로 거래의 to와 다를 수 있다).
+ */
+export function assertMatchesLocalRecord(
+  original: Pick<Transaction, 'to' | 'value' | 'input'>,
+  record: LocalRecordSnapshot,
+): void {
+  const mismatch = () =>
+    new ReplacementError(
+      'MISMATCH',
+      '네트워크가 알려준 거래 내용이 이 기기에서 보낸 기록과 다릅니다. 안전을 위해 가속하지 않았습니다.',
+    );
+  const recordedValue = parseWei(record.valueWei);
+  if (recordedValue !== undefined && recordedValue !== original.value)
+    throw mismatch();
+
+  const isTokenSend = record.type === 'send' && !!record.tokenAddress;
+  const expectedTo =
+    isTokenSend || record.type === 'approve'
+      ? record.tokenAddress ?? record.to
+      : record.to;
+  if (expectedTo && !sameAddress(expectedTo, original.to)) throw mismatch();
+
+  // 토큰 전송은 호출 데이터가 transfer이고 수신자도 기록과 같아야 한다.
+  if (isTokenSend && record.to) {
+    let recipient: string | undefined;
+    try {
+      const decoded = decodeFunctionData({
+        abi: erc20Abi,
+        data: original.input,
+      });
+      if (decoded.functionName === 'transfer')
+        recipient = (decoded.args as readonly [string, bigint])[0];
+    } catch {
+      recipient = undefined;
+    }
+    if (!recipient || !sameAddress(recipient, record.to)) throw mismatch();
+  }
 }
 
 function feeParams(fees: FeeFields): Partial<TransactionParams> {
@@ -236,6 +306,26 @@ class TxReplacementService {
       );
   }
 
+  private async readLocal(
+    hash: string,
+    chainId: number,
+  ): Promise<LocalRecordSnapshot | null> {
+    try {
+      const entry = await transactionCacheService.getByHash(hash, chainId);
+      if (!entry) return null;
+      return {
+        method: entry.method ?? undefined,
+        type: entry.type ?? undefined,
+        to: entry.to ?? undefined,
+        valueWei: entry.valueWei ?? undefined,
+        tokenAddress: entry.tokenAddress ?? undefined,
+      };
+    } catch {
+      // 로컬 기록이 없어도 대체는 가능하다.
+      return null;
+    }
+  }
+
   async prepare(input: {
     kind: ReplacementKind;
     hash: `0x${string}`;
@@ -266,6 +356,16 @@ class TxReplacementService {
     const originalFees = feesOf(original);
     const client = chainClient.getClient(input.chainId);
 
+    const local = await this.readLocal(input.hash, input.chainId);
+    const parent = parseReplacementMethod(local?.method);
+    // 대체 거래를 다시 대체하면 Realm 연결은 최초 원본 거래를 가리킨다.
+    const rootHash = (parent?.originalHash ?? input.hash) as `0x${string}`;
+    // 취소 거래를 가속해도 취소로 기록해야 알림과 스왑 내역이 '취소됨'으로 정리된다.
+    const acceleratesCancel =
+      input.kind === 'speedUp' && parent?.kind === 'cancel';
+    const kind: ReplacementKind = acceleratesCancel ? 'cancel' : input.kind;
+    if (kind === 'speedUp' && local) assertMatchesLocalRecord(original, local);
+
     const network =
       originalFees.type === 'eip1559'
         ? await client.estimateFeesPerGas({ type: 'eip1559', chain: undefined })
@@ -276,7 +376,7 @@ class TxReplacementService {
     let value: bigint;
     let data: Hex | undefined;
     let gas: bigint;
-    if (input.kind === 'speedUp') {
+    if (kind === 'speedUp') {
       to = original.to;
       value = original.value;
       data =
@@ -306,20 +406,9 @@ class TxReplacementService {
         )})`,
       );
 
-    let rootHash = input.hash;
-    try {
-      const local = await transactionCacheService.getByHash(
-        input.hash,
-        input.chainId,
-      );
-      const parent = parseReplacementMethod(local?.method);
-      if (parent) rootHash = parent.originalHash as `0x${string}`;
-    } catch {
-      // 로컬 기록이 없어도 대체는 가능하다.
-    }
-
     return {
-      kind: input.kind,
+      kind,
+      acceleratesCancel,
       chainId: input.chainId,
       from,
       originalHash: input.hash,

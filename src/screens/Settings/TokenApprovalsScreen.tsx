@@ -231,7 +231,10 @@ export default function TokenApprovalsScreen(): React.JSX.Element {
         label: '최대 수수료',
         value: `${formatDisplayAmount(formatEther(current.feeWei))} ${symbol}${
           usd !== null
-            ? ` (${formatFiat(usd, { showTinyAsLessThan: true })})`
+            ? ` (${formatFiat(usd, {
+                showTinyAsLessThan: true,
+                ignoreHidden: true,
+              })})`
             : ''
         }`,
         emphasis: true,

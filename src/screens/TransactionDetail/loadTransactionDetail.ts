@@ -3,10 +3,22 @@
  *
  * 로컬 기록(Realm 캐시, 스왑 내역)을 먼저 읽고 RPC(getTransaction/getTransactionReceipt)로
  * 최신 상태를 보강한다. RPC에 실패해도 로컬 기록이 있으면 그 정보를 보여 준다.
+ *
+ * 토큰 이동은 transfer/approve 호출 데이터 → 앱 스왑 내역 → 영수증의 ERC-20 Transfer 로그
+ * → 로컬 기록 순으로 찾는다. 컨트랙트를 거쳐 받은 토큰(에어드롭, 브리지)이나 dApp 스왑은
+ * 호출 데이터로 알 수 없으므로 영수증 로그에서 내 주소가 관련된 전송을 읽는다.
  */
 
-import { decodeFunctionData, erc20Abi, formatUnits, type Hex } from 'viem';
+import {
+  decodeEventLog,
+  decodeFunctionData,
+  erc20Abi,
+  formatEther,
+  formatUnits,
+  type Hex,
+} from 'viem';
 import { chainClient } from '@/services/chainClient';
+import { formatDisplayAmount } from '@/utils/format';
 import { transactionCacheService } from '@/realm/services';
 import { useSwapStore } from '@/store/swapStore';
 import {
@@ -29,6 +41,8 @@ export interface TokenMovement {
   symbol?: string;
   /** 스왑의 받는 쪽 표시 (예: "0.5 ETH") */
   receiveDisplay?: string;
+  /** 스왑에서 판 쪽이 네이티브 자산이면 true (기호는 화면에서 네트워크 기호로 채운다) */
+  nativeSell?: boolean;
 }
 
 export interface RelatedReplacement {
@@ -97,6 +111,9 @@ interface LocalRecord {
   tokenAddress?: string;
   errorMessage?: string;
 }
+
+const sameAddress = (a?: string | null, b?: string | null) =>
+  !!a && !!b && a.toLowerCase() === b.toLowerCase();
 
 const isNotFound = (result: PromiseSettledResult<unknown>) =>
   result.status === 'rejected' &&
@@ -187,9 +204,123 @@ async function readTokenMeta(
   };
 }
 
+/** ERC-20 Transfer(address,address,uint256) */
+const TRANSFER_TOPIC =
+  '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef';
+
+interface ReceiptLog {
+  address: string;
+  topics: readonly (string | null)[];
+  data: string;
+}
+
+interface DecodedTransfer {
+  token: `0x${string}`;
+  from: string;
+  to: string;
+  value: bigint;
+}
+
+/** 영수증 로그에서 owner가 보내거나 받은 ERC-20 전송만 읽는다. */
+export function decodeOwnerTransfers(
+  logs: readonly ReceiptLog[] | undefined,
+  owner: string,
+): DecodedTransfer[] {
+  const me = owner.toLowerCase();
+  const transfers: DecodedTransfer[] = [];
+  for (const log of logs ?? []) {
+    // ERC-721은 같은 topic0이지만 tokenId까지 인덱싱되어 topic이 4개다.
+    if (
+      log.topics?.length !== 3 ||
+      log.topics[0]?.toLowerCase() !== TRANSFER_TOPIC
+    )
+      continue;
+    try {
+      const decoded = decodeEventLog({
+        abi: erc20Abi,
+        eventName: 'Transfer',
+        data: log.data as Hex,
+        topics: log.topics as [Hex, Hex, Hex],
+      });
+      const { from, to, value } = decoded.args;
+      if (from.toLowerCase() !== me && to.toLowerCase() !== me) continue;
+      transfers.push({ token: log.address as `0x${string}`, from, to, value });
+    } catch {
+      // 표준과 다른 로그는 건너뛴다.
+    }
+  }
+  return transfers;
+}
+
+async function movementFromLogs(
+  chainId: number,
+  logs: readonly ReceiptLog[] | undefined,
+  owner: string,
+  sentNativeWei: bigint,
+): Promise<TokenMovement | undefined> {
+  const transfers = decodeOwnerTransfers(logs, owner);
+  if (transfers.length === 0) return undefined;
+  const me = owner.toLowerCase();
+  const outgoing = transfers.filter(
+    t => t.from.toLowerCase() === me && t.to.toLowerCase() !== me,
+  );
+  const incoming = transfers.filter(
+    t => t.to.toLowerCase() === me && t.from.toLowerCase() !== me,
+  );
+  const describe = async (transfer: DecodedTransfer) => {
+    const meta = await readTokenMeta(chainId, transfer.token);
+    return {
+      amount:
+        meta.decimals !== undefined
+          ? formatUnits(transfer.value, meta.decimals)
+          : `${transfer.value.toString()} (원시 단위)`,
+      symbol: meta.symbol,
+      decimalsKnown: meta.decimals !== undefined,
+    };
+  };
+
+  // 보낸 자산(토큰 또는 네이티브)과 다른 토큰을 받았다면 스왑 (Activity 목록과 같은 기준)
+  const received = incoming[0];
+  const sold = outgoing.find(
+    t => !received || t.token.toLowerCase() !== received.token.toLowerCase(),
+  );
+  if (received && (sold || sentNativeWei > 0n)) {
+    const [receivedInfo, soldInfo] = await Promise.all([
+      describe(received),
+      sold ? describe(sold) : Promise.resolve(undefined),
+    ]);
+    const receivedAmount = receivedInfo.decimalsKnown
+      ? formatDisplayAmount(receivedInfo.amount)
+      : receivedInfo.amount;
+    return {
+      kind: 'swap',
+      tokenAddress: sold?.token,
+      amountDisplay: soldInfo ? soldInfo.amount : formatEther(sentNativeWei),
+      symbol: soldInfo?.symbol,
+      nativeSell: !sold,
+      receiveDisplay: `${receivedAmount} ${receivedInfo.symbol ?? ''}`.trim(),
+    };
+  }
+
+  const transfer = outgoing[0] ?? incoming[0] ?? transfers[0];
+  const info = await describe(transfer);
+  return {
+    kind: 'transfer',
+    tokenAddress: transfer.token,
+    counterparty: transfer.to,
+    amountDisplay: info.amount,
+    symbol: info.symbol,
+  };
+}
+
+/**
+ * @param owner 화면을 보는 계정 주소. 컨트랙트를 거쳐 받은 토큰처럼 내가 보내지 않은
+ *   거래의 토큰 이동을 영수증 로그에서 찾을 때 사용한다 (없으면 보낸 주소 기준).
+ */
 export async function loadTransactionDetail(
   hash: string,
   chainId: number,
+  owner?: string,
 ): Promise<TransactionDetail> {
   const local = await readLocal(hash, chainId);
   const swap = useSwapStore
@@ -350,7 +481,21 @@ export async function loadTransactionDetail(
       symbol: swap.sellToken.symbol,
       receiveDisplay: `${swap.buyToken.amount} ${swap.buyToken.symbol}`,
     };
-  } else if (!token && local?.tokenAddress && local.tokenAmount) {
+  }
+  const logOwner = owner ?? from;
+  if (!token && receipt && logOwner) {
+    try {
+      token = await movementFromLogs(
+        chainId,
+        (receipt as { logs?: readonly ReceiptLog[] }).logs,
+        logOwner,
+        tx && sameAddress(tx.from, logOwner) ? tx.value : 0n,
+      );
+    } catch {
+      token = undefined;
+    }
+  }
+  if (!token && local?.tokenAddress && local.tokenAmount) {
     token = {
       kind: local.type === 'approve' ? 'approve' : 'transfer',
       tokenAddress: local.tokenAddress,

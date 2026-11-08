@@ -120,6 +120,74 @@ describe('TransactionCacheService', () => {
     });
   });
 
+  describe('address queries', () => {
+    function captureQueries() {
+      const queries: { query: string; params: unknown[] }[] = [];
+      const results = Object.assign([], {
+        sorted: jest.fn(() => []),
+      });
+      (realmDB.getRealm as jest.Mock).mockResolvedValueOnce({
+        objects: jest.fn(() => ({
+          filtered: jest.fn((query: string, ...params: unknown[]) => {
+            queries.push({ query, params });
+            return results;
+          }),
+        })),
+      });
+      return queries;
+    }
+
+    it('groups the from/to clause so chain, status and type filters apply to outgoing rows', async () => {
+      const queries = captureQueries();
+      await transactionCacheService.getByAddress(
+        '0xABCDEF0123456789012345678901234567890ABC',
+        137,
+        { status: 'confirmed', type: 'approve' },
+      );
+      expect(queries[0].query).toBe(
+        '(from ==[c] $0 OR to ==[c] $0) AND chainId == $1 AND status == $2 AND type == $3',
+      );
+      expect(queries[0].params).toEqual([
+        '0xabcdef0123456789012345678901234567890abc',
+        137,
+        'confirmed',
+        'approve',
+      ]);
+    });
+
+    it('groups the from/to clause when counting by chain', async () => {
+      const queries = captureQueries();
+      await transactionCacheService.countByAddress(
+        '0x1234567890123456789012345678901234567890',
+        10,
+      );
+      expect(queries[0].query).toBe(
+        '(from ==[c] $0 OR to ==[c] $0) AND chainId == $1',
+      );
+    });
+  });
+
+  describe('updateStatus', () => {
+    it('persists a nonce learned while the transaction is pending', async () => {
+      const hash = `0x${'d'.repeat(64)}`;
+      await transactionCacheService.createLocalTransaction({
+        hash,
+        chainId: 1,
+        from: '0x1234567890123456789012345678901234567890',
+        to: '0xabcdef0123456789012345678901234567890123',
+        value: '1',
+        valueWei: '1000000000000000000',
+        gasPrice: '1',
+        type: 'send',
+      });
+      const updated = await transactionCacheService.updateStatus(hash, 1, {
+        nonce: 12,
+      });
+      expect(updated?.nonce).toBe(12);
+      expect(updated?.status).toBe('pending');
+    });
+  });
+
   describe('deleteAll', () => {
     it('should call deleteAllOf with TransactionCache', async () => {
       await transactionCacheService.deleteAll();

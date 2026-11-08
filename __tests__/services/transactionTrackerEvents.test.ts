@@ -194,6 +194,54 @@ it('marks a transaction replaced only after its nonce is consumed on two passes'
   );
 });
 
+it('persists the nonce it learns from the mempool on the stored record', async () => {
+  const { tracker } = track();
+  await tracker.reconcile();
+  expect(transactionCacheService.updateStatus).toHaveBeenCalledWith(
+    original,
+    1,
+    { nonce: 3 },
+  );
+});
+
+it('resolves a dropped transaction after a restart using the persisted nonce', async () => {
+  // 이전 세션에서 저장한 nonce가 있고, 앱이 꺼진 사이 mempool에서 사라졌다.
+  pendingRecords = [record({ nonce: 3 })];
+  client.getTransaction.mockRejectedValue(
+    Object.assign(new Error('gone'), { name: 'TransactionNotFoundError' }),
+  );
+  client.getTransactionCount.mockResolvedValue(4);
+  const { tracker, events } = track();
+  await tracker.reconcile(); // first observation: suspect only
+  expect(events).toHaveLength(0);
+  await tracker.reconcile(); // nonce still used and the node no longer knows it
+  expect(events).toEqual([
+    expect.objectContaining({ hash: original, status: 'replaced' }),
+  ]);
+  expect(transactionCacheService.updateStatus).toHaveBeenCalledWith(
+    original,
+    1,
+    expect.objectContaining({ status: 'cancelled' }),
+  );
+});
+
+it('keeps polling in memory when persisting the nonce fails', async () => {
+  (transactionCacheService.updateStatus as jest.Mock).mockRejectedValueOnce(
+    new Error('realm closed'),
+  );
+  const warn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+  const { tracker, events } = track();
+  await tracker.reconcile(); // learns the nonce; the write fails
+  client.getTransactionCount.mockResolvedValue(4);
+  client.getTransaction.mockRejectedValue(
+    Object.assign(new Error('gone'), { name: 'TransactionNotFoundError' }),
+  );
+  await tracker.reconcile();
+  await tracker.reconcile();
+  warn.mockRestore();
+  expect(events.map(event => event.status)).toEqual(['replaced']);
+});
+
 it('waits for its own pending replacement instead of guessing', async () => {
   pendingRecords = [
     record({ nonce: 3 }),
@@ -260,6 +308,47 @@ it('resolves a sped-up swap as successful in swap history', async () => {
       event => event.hash === original && event.status === 'replaced',
     ),
   ).toHaveLength(1);
+});
+
+it('resolves a cancelled swap as failed when the cancel was sped up', async () => {
+  // 취소 거래를 다시 가속한 거래도 replacement:cancel:<원본>으로 기록된다.
+  const bumpedCancel = `0x${'c'.repeat(64)}`;
+  pendingRecords = [
+    record({
+      hash: bumpedCancel,
+      nonce: 3,
+      method: encodeReplacementMethod('cancel', original),
+      tokenAmount: '0',
+    }),
+  ];
+  const id = useSwapStore.getState().addHistoryItem({
+    chainId: 1,
+    timestamp: 0,
+    sellToken: { address: 'a', symbol: 'A', amount: '1' },
+    buyToken: { address: 'b', symbol: 'B', amount: '2' },
+    txHash: original,
+    status: 'pending',
+    rate: '2',
+  });
+  client.getTransactionReceipt.mockImplementation(async ({ hash }) => {
+    if (hash === bumpedCancel) return receipt;
+    throw notFound();
+  });
+  const { tracker, events } = track();
+  await tracker.reconcile();
+  expect(
+    useSwapStore.getState().history.find(item => item.id === id)?.status,
+  ).toBe('failed');
+  expect(useSwapStore.getState().favoritePairs).toHaveLength(0);
+  expect(events).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        hash: original,
+        status: 'replaced',
+        replacedBy: { hash: bumpedCancel, kind: 'cancel' },
+      }),
+    ]),
+  );
 });
 
 it('reports a replaced original once, with its replacement, when both paths race', async () => {
