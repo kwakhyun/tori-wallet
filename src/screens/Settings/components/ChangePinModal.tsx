@@ -10,7 +10,9 @@ import { ActivityIndicator } from 'react-native';
 import styled, { useTheme } from 'styled-components/native';
 import { PinPad } from '@/components/common/PinPad';
 import { walletService } from '@/services/walletService';
+import { isWeakPin, WEAK_PIN_MESSAGE } from '@/services/pinAttemptService';
 import { showToast } from '@/store/toastStore';
+import { errorFeedback } from '@/utils/haptics';
 import { createLogger } from '@/utils/logger';
 import { PinPrompt } from './PinPrompt';
 import { ErrorMessage, SheetModal } from './SettingsUI';
@@ -118,7 +120,14 @@ function ChangePinFlow({ onClose }: { onClose: () => void }) {
 
       setEntry('');
       if (step === 'new') {
+        // 온보딩(PIN 설정)과 같은 정책으로 추측하기 쉬운 PIN을 거부한다.
+        if (isWeakPin(next)) {
+          errorFeedback();
+          setError(WEAK_PIN_MESSAGE);
+          return;
+        }
         if (next === secret.current?.currentPin) {
+          errorFeedback();
           setError('현재 PIN과 다른 PIN을 입력해주세요.');
           return;
         }
@@ -126,6 +135,7 @@ function ChangePinFlow({ onClose }: { onClose: () => void }) {
         setStep('confirm');
       } else if (step === 'confirm') {
         if (next !== newPin.current) {
+          errorFeedback();
           newPin.current = '';
           setError('PIN이 일치하지 않습니다. 새 PIN을 다시 입력해주세요.');
           setStep('new');

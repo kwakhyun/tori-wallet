@@ -11,6 +11,7 @@ import { DeleteWalletModal } from '../../../src/screens/Settings/components/Dele
 import { RecoveryPhraseModal } from '../../../src/screens/Settings/components/RecoveryPhraseModal';
 import { ChangePinModal } from '../../../src/screens/Settings/components/ChangePinModal';
 import { useWalletStore } from '../../../src/store/walletStore';
+import { WEAK_PIN_MESSAGE } from '../../../src/services/pinAttemptService';
 
 const MNEMONIC =
   'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about';
@@ -203,6 +204,35 @@ describe('ChangePinModal', () => {
     expect(onClose).toHaveBeenCalled();
     expect(queryByTestId('change-pin-error')).toBeNull();
   });
+
+  it.each(['123456', '111111', '121212'])(
+    'rejects the guessable new PIN %s with the onboarding policy',
+    async weakPin => {
+      const { getByTestId, queryByTestId } = wrap(
+        <ChangePinModal visible onClose={jest.fn()} />,
+      );
+
+      await enterPin(getByTestId, 'change-pin-current', CORRECT_PIN);
+      await waitFor(() =>
+        expect(getByTestId('change-pin-new-dots')).toBeTruthy(),
+      );
+
+      await enterPin(getByTestId, 'change-pin-new', weakPin);
+      expect(getByTestId('change-pin-error').props.children).toBe(
+        WEAK_PIN_MESSAGE,
+      );
+      // 확인 단계로 넘어가지 않고 새 PIN을 다시 입력받는다.
+      expect(queryByTestId('change-pin-confirm-dots')).toBeNull();
+      expect(getByTestId('change-pin-new-dots')).toBeTruthy();
+      expect(mockStoreMnemonic).not.toHaveBeenCalled();
+
+      // 안전한 PIN은 그대로 확인 단계로 진행한다.
+      await enterPin(getByTestId, 'change-pin-new', '246802');
+      await waitFor(() =>
+        expect(getByTestId('change-pin-confirm-dots')).toBeTruthy(),
+      );
+    },
+  );
 
   it('does not change the PIN when the current PIN is wrong', async () => {
     const { getByTestId } = wrap(

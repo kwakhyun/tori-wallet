@@ -24,7 +24,7 @@ import { walletService } from '@/services/walletService';
 import { signerVault } from '@/services/signerVault';
 import { useWalletStore } from '@/store/walletStore';
 import { onboardingVault } from '@/services/onboardingVault';
-import { isWeakPin } from '@/services/pinAttemptService';
+import { isWeakPin, WEAK_PIN_MESSAGE } from '@/services/pinAttemptService';
 import { PinPad } from '@/components/common/PinPad';
 import { ScreenHeader } from '@/components/common/ScreenHeader';
 import { showToast } from '@/store/toastStore';
@@ -38,8 +38,8 @@ type NavigationProp = NativeStackNavigationProp<AuthStackParamList, 'SetPin'>;
 type Step = 'create' | 'confirm';
 
 const PIN_LENGTH = 6;
-export const WEAK_PIN_MESSAGE =
-  '추측하기 쉬운 PIN입니다. 같은 숫자 반복(111111), 연속된 숫자(123456, 654321), 반복 패턴(121212)은 사용할 수 없습니다.';
+// PIN 변경(설정 화면)과 같은 문구를 쓴다. 기존 import 경로를 위해 다시 내보낸다.
+export { WEAK_PIN_MESSAGE };
 export const PIN_MISMATCH_MESSAGE =
   'PIN이 일치하지 않습니다. 처음부터 다시 입력해주세요.';
 
@@ -93,9 +93,15 @@ async function canOfferBiometric(): Promise<boolean> {
 function SetPinScreen(): React.JSX.Element {
   const { theme, isDarkMode } = useTheme();
   const navigation = useNavigation<NavigationProp>();
-  const snapshot = onboardingVault.getSnapshot();
-  const walletAddress = snapshot?.walletAddress || '';
-  const isImport = snapshot?.source === 'import';
+  // 표시용 정보만 마운트 시점에 한 번 읽는다 (복구 구문은 컴포넌트 상태에 두지 않는다).
+  // 화면을 떠나며 보관소를 비운 뒤 다시 그려져도 시작 화면으로 이동하지 않게 한다.
+  const [{ walletAddress, isImport }] = useState(() => {
+    const snapshot = onboardingVault.getSnapshot();
+    return {
+      walletAddress: snapshot?.walletAddress || '',
+      isImport: snapshot?.source === 'import',
+    };
+  });
 
   useEffect(() => {
     if (!walletAddress) navigation.navigate('Welcome');
@@ -159,6 +165,14 @@ function SetPinScreen(): React.JSX.Element {
         if (guard.current.step === 'confirm') {
           event.preventDefault();
           resetToCreate();
+          return;
+        }
+        // 가져오기 흐름에서 1단계를 떠나면 가져오기 화면은 이미 비워져 있으므로 복구 구문을
+        // 더 보관하지 않는다. (생성 흐름은 이전 화면이 구문을 다시 쓰므로 유지한다)
+        // 조용히 폐기해 이후 만료/백그라운드 폐기가 다시 입력 중인 가져오기 화면을
+        // 시작 화면으로 초기화하지 않게 한다.
+        if (onboardingVault.getSnapshot()?.source === 'import') {
+          onboardingVault.discard();
         }
       }),
     [navigation, resetToCreate],
