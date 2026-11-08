@@ -751,6 +751,56 @@ describe('auto-lock during the approve → swap flow', () => {
     expect(alertSpy).not.toHaveBeenCalled();
     expect(mockReviewProps.visible).toBe(true);
     expect(mockReviewProps.notice).toMatch(/지갑이 잠겨/);
+    // 이미 풀려 있으므로 '잠금을 해제하면 …' 토스트는 띄우지 않는다 (모달 안내가 설명).
+    expect(mockShowToast).not.toHaveBeenCalledWith(
+      expect.stringContaining('잠금을 해제하면'),
+      expect.anything(),
+    );
+  });
+
+  it('does not raise a failure Alert over another screen', async () => {
+    const view = render(<SwapScreen />);
+    await openUsdcReview(view);
+    // 승인 확정 후 다른 화면이 위에 올라온 상태에서 스왑 시뮬레이션이 실패한다.
+    waitForTransactionReceipt.mockImplementationOnce(async () => {
+      mockIsFocused = false;
+      return OK_RECEIPT;
+    });
+    estimateGas.mockRejectedValueOnce(new Error('execution reverted'));
+    await act(async () => {
+      mockReviewProps.onConfirm();
+    });
+    await flush(10);
+
+    expect(sentTransactions()).toHaveLength(1);
+    expect(alertSpy).not.toHaveBeenCalled();
+    expect(mockShowToast).toHaveBeenCalledWith(
+      expect.stringMatching(
+        /토큰 승인은 완료되었지만 스왑을 보내지 못했습니다.*시뮬레이션/,
+      ),
+      'error',
+    );
+  });
+
+  it('turns a plain swap failure into a toast when another screen is on top', async () => {
+    const view = render(<SwapScreen />);
+    await enterAmount(view, '5');
+    fireEvent.press(view.getByTestId('swap-review-button'));
+    await flush(10);
+    estimateGas.mockImplementationOnce(async () => {
+      mockIsFocused = false;
+      throw new Error('execution reverted');
+    });
+    await act(async () => {
+      mockReviewProps.onConfirm();
+    });
+    await flush(10);
+
+    expect(alertSpy).not.toHaveBeenCalled();
+    expect(mockShowToast).toHaveBeenCalledWith(
+      expect.stringContaining('시뮬레이션에 실패'),
+      'error',
+    );
   });
 
   it('turns a lock while sending into a held toast instead of an Alert', async () => {

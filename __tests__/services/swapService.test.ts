@@ -9,6 +9,7 @@ import {
   BaseError,
   EstimateGasExecutionError,
   ExecutionRevertedError,
+  HttpRequestError,
   InsufficientFundsError,
   TransactionExecutionError,
   UserRejectedRequestError,
@@ -430,6 +431,42 @@ describe('SwapService', () => {
         '유효하지 않은 승인 대상',
       );
       expect(describeSwapError('boom')).toBe('견적을 가져오지 못했습니다.');
+    });
+
+    it('reads app errors that viem wrapped while signing', () => {
+      const wrap = (cause: Error) =>
+        new TransactionExecutionError(cause as any, {
+          account: { address: from, type: 'json-rpc' } as any,
+          to: USDC_POLYGON,
+          data: calldata as `0x${string}`,
+        });
+      // 계정의 signTransaction이 던진 세션 폐기 오류는 viem이 감싼다 (shortMessage 없음).
+      const expired = describeSwapError(
+        wrap(new Error('Wallet signing session expired')),
+      );
+      expectReadable(expired);
+      expect(expired).toMatch(/지갑이 잠겨/);
+      // signingService의 서명 승인 취소 문구는 그대로 보여 준다.
+      expect(
+        describeSwapError(
+          wrap(new Error('서명 승인이 만료되거나 취소되었습니다.')),
+        ),
+      ).toBe('서명 승인이 만료되거나 취소되었습니다.');
+    });
+
+    it('reports an RPC outage during gas estimation as a network problem', () => {
+      const error = new EstimateGasExecutionError(
+        new HttpRequestError({
+          url: 'https://polygon-rpc.example',
+          status: 503,
+          details: 'Service Unavailable',
+        }),
+        { account: { address: from } as any, data: calldata as any },
+      );
+      const message = describeSwapError(error);
+      expectReadable(message);
+      expect(message).toMatch(/네트워크\(RPC\)에 연결할 수 없습니다/);
+      expect(message).not.toMatch(/시뮬레이션/);
     });
   });
 

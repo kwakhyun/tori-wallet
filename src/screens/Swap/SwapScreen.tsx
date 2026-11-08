@@ -898,9 +898,12 @@ function SwapScreen(): React.JSX.Element {
       return;
     }
     if (lockedDuringFlow) {
-      showToast(LOCKED_AFTER_APPROVAL_MESSAGE, 'warning');
+      // 아직 잠겨 있을 때만 알린다 (잠금 해제 후 표시). 이미 풀려 있으면 바로 다시
+      // 검토하고, 그 이유는 검토 모달 상단 안내가 설명한다.
+      if (isWalletLockedNow()) {
+        showToast(LOCKED_AFTER_APPROVAL_MESSAGE, 'warning');
+      }
       pendingReReview.current = 'locked';
-      // 이미 잠금이 풀려 있으면 바로 다시 검토한다.
       flushPendingReReview();
       return;
     }
@@ -1029,7 +1032,13 @@ function SwapScreen(): React.JSX.Element {
         return;
       }
       const message = describeSwapError(error, { nativeSymbol });
-      if (approvedNow) {
+      if (approvedNow && !navigation.isFocused()) {
+        // 다른 화면 위에는 Alert을 띄우지 않는다.
+        showToast(
+          `토큰 승인은 완료되었지만 스왑을 보내지 못했습니다. ${message}`,
+          'error',
+        );
+      } else if (approvedNow) {
         Alert.alert(
           '스왑을 보내지 못했습니다',
           `토큰 승인은 완료되었습니다. ${message}\n\n새 견적을 받아 다시 시도할 수 있습니다.`,
@@ -1042,7 +1051,7 @@ function SwapScreen(): React.JSX.Element {
           ],
         );
       } else {
-        Alert.alert('스왑 실패', message);
+        alertOrToast('스왑 실패', message);
       }
     } finally {
       if (mounted.current) {

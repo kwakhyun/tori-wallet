@@ -175,6 +175,19 @@ function findViemError(
   return Boolean(error.walk?.(matches));
 }
 
+/**
+ * viem이 cause로 감싼 앱 오류(viem 오류가 아닌 Error)의 메시지.
+ * 예: 계정의 signTransaction이 던진 'Wallet signing session expired'는
+ * TransactionExecutionError 안에 그대로 들어가고 shortMessage가 비어 있다.
+ */
+function findWrappedAppMessage(error: ViemErrorLike): string | null {
+  const inner = error.walk?.(
+    candidate =>
+      candidate instanceof Error && !(candidate instanceof BaseError),
+  );
+  return inner instanceof Error && inner.message ? inner.message : null;
+}
+
 /** viem 오류가 잔액(가스비 포함) 부족 때문인지 */
 export function isInsufficientFundsError(error: unknown): boolean {
   return isViemError(error) && findViemError(error, InsufficientFundsError);
@@ -193,8 +206,15 @@ export function isReceiptTimeoutError(error: unknown): boolean {
  * 'Details:'와 'Version: viem@…'이 들어 있어 그대로 보여 주지 않는다.
  */
 function describeViemError(error: ViemErrorLike, nativeSymbol: string): string {
+  // viem이 감싼 앱 오류 (서명 직전 잠금·세션 폐기, signingService의 서명 승인 취소)
+  const wrapped = findWrappedAppMessage(error);
+  if (wrapped && WALLET_LOCKED_MESSAGES.has(wrapped)) {
+    return WALLET_LOCKED_SWAP_MESSAGE;
+  }
+  if (wrapped && /[가-힣]/.test(wrapped)) return wrapped;
+
   if (findViemError(error, InsufficientFundsError)) {
-    return `가스비로 쓸 ${nativeSymbol} 잔액이 부족합니다. ${nativeSymbol}를 충전한 뒤 다시 시도해주세요.`;
+    return `가스비로 쓸 ${nativeSymbol} 잔액이 부족합니다. ${nativeSymbol}을(를) 충전한 뒤 다시 시도해주세요.`;
   }
   if (findViemError(error, UserRejectedRequestError)) {
     return '요청이 취소되었습니다.';
@@ -208,20 +228,28 @@ function describeViemError(error: ViemErrorLike, nativeSymbol: string): string {
   if (findViemError(error, FeeCapTooLowError, IntrinsicGasTooLowError)) {
     return '네트워크 수수료 설정이 너무 낮아 트랜잭션을 보낼 수 없습니다. 잠시 후 다시 시도해주세요.';
   }
+  const simulationFailed =
+    '트랜잭션 시뮬레이션이 실패해 전송하지 않았습니다. 잔액, 토큰 승인 상태 또는 가격 변동을 확인한 뒤 다시 시도해주세요.';
+  // 실제 되돌림(revert)을 먼저 본다.
+  if (
+    findViemError(error, ExecutionRevertedError, ContractFunctionRevertedError)
+  ) {
+    return simulationFailed;
+  }
+  // EstimateGas/Call 실행 오류는 RPC 장애도 감싸므로, 연결 실패를 그보다 먼저 구분한다
+  // (RPC가 죽었는데 '잔액·승인 상태를 확인하라'고 안내하지 않게).
+  if (findViemError(error, HttpRequestError, TimeoutError)) {
+    return '네트워크(RPC)에 연결할 수 없습니다. 연결을 확인한 뒤 다시 시도해주세요.';
+  }
   if (
     findViemError(
       error,
-      ExecutionRevertedError,
-      ContractFunctionRevertedError,
       ContractFunctionExecutionError,
       EstimateGasExecutionError,
       CallExecutionError,
     )
   ) {
-    return '트랜잭션 시뮬레이션이 실패해 전송하지 않았습니다. 잔액, 토큰 승인 상태 또는 가격 변동을 확인한 뒤 다시 시도해주세요.';
-  }
-  if (findViemError(error, HttpRequestError, TimeoutError)) {
-    return '네트워크(RPC)에 연결할 수 없습니다. 연결을 확인한 뒤 다시 시도해주세요.';
+    return simulationFailed;
   }
   // 알 수 없는 viem 오류: 요약 문구만 덧붙인다 (주소/calldata가 섞이면 생략).
   const summary = (error.shortMessage ?? '').split('\n')[0].trim();
