@@ -9,6 +9,7 @@ import {
   EnsError,
 } from '../../src/services/ensService';
 import { chainClient } from '../../src/services/chainClient';
+import { toCoinType } from 'viem/ens';
 
 jest.mock('../../src/services/chainClient', () => ({
   chainClient: { getClient: jest.fn() },
@@ -44,8 +45,10 @@ describe('ensService.resolve', () => {
     await expect(ensService.resolve('Vitalik.eth')).resolves.toEqual({
       name: 'vitalik.eth',
       address: resolved,
+      source: 'chain',
     });
     expect(chainClient.getClient).toHaveBeenCalledWith(1);
+    expect(getEnsAddress).toHaveBeenCalledTimes(1);
     expect(getEnsAddress).toHaveBeenCalledWith({ name: 'vitalik.eth' });
   });
 
@@ -75,5 +78,88 @@ describe('ensService.resolve', () => {
 
   it('rejects names that fail ENS normalization', () => {
     expect(() => normalizeEnsName('in valid.eth')).toThrow(EnsError);
+  });
+});
+
+describe('ensService.resolve on other networks (ENSIP-11/19)', () => {
+  const baseCoinType = toCoinType(8453);
+  const defaultEvmCoinType = 0x80000000n;
+  const baseAddress = '0x00000000219ab540356cBB839Cbe05303d7705Fa';
+  const evmAddress = '0x1111111111111111111111111111111111111111';
+
+  it('prefers the chain-specific record on the mainnet registry', async () => {
+    getEnsAddress.mockImplementation(async ({ coinType }) =>
+      coinType === baseCoinType ? baseAddress : resolved,
+    );
+    await expect(ensService.resolve('treasury.eth', 8453)).resolves.toEqual({
+      name: 'treasury.eth',
+      address: baseAddress,
+      source: 'chain',
+    });
+    expect(chainClient.getClient).toHaveBeenCalledWith(1);
+    expect(getEnsAddress).toHaveBeenCalledWith({
+      name: 'treasury.eth',
+      coinType: baseCoinType,
+    });
+  });
+
+  it('uses the default EVM record before the mainnet record', async () => {
+    getEnsAddress.mockImplementation(async ({ coinType }) =>
+      coinType === defaultEvmCoinType
+        ? evmAddress
+        : coinType === undefined
+        ? resolved
+        : null,
+    );
+    await expect(ensService.resolve('treasury.eth', 8453)).resolves.toEqual({
+      name: 'treasury.eth',
+      address: evmAddress,
+      source: 'chain',
+    });
+  });
+
+  it('falls back to the mainnet record and flags it', async () => {
+    getEnsAddress.mockImplementation(async ({ coinType }) =>
+      coinType === undefined ? resolved : null,
+    );
+    await expect(ensService.resolve('treasury.eth', 8453)).resolves.toEqual({
+      name: 'treasury.eth',
+      address: resolved,
+      source: 'default',
+    });
+  });
+
+  it('does not fall back to a lower-priority record when a lookup fails', async () => {
+    getEnsAddress.mockImplementation(async ({ coinType }) => {
+      if (coinType === baseCoinType) throw new Error('timeout');
+      return resolved;
+    });
+    await expect(ensService.resolve('treasury.eth', 8453)).rejects.toMatchObject(
+      { code: 'NETWORK' },
+    );
+  });
+
+  it('caches per name and network', async () => {
+    getEnsAddress.mockImplementation(async ({ coinType }) =>
+      coinType === baseCoinType ? baseAddress : resolved,
+    );
+    const onBase = await ensService.resolve('treasury.eth', 8453);
+    const onMainnet = await ensService.resolve('treasury.eth', 1);
+    expect(onBase.address).toBe(baseAddress);
+    expect(onMainnet.address).toBe(resolved);
+    const calls = getEnsAddress.mock.calls.length;
+    await ensService.resolve('treasury.eth', 8453);
+    await ensService.resolve('treasury.eth', 1);
+    expect(getEnsAddress).toHaveBeenCalledTimes(calls);
+  });
+
+  it('skips the chain-specific record for chain IDs outside ENSIP-11', async () => {
+    getEnsAddress.mockImplementation(async ({ coinType }) =>
+      coinType === undefined ? resolved : null,
+    );
+    await expect(
+      ensService.resolve('treasury.eth', 2 ** 31 + 5),
+    ).resolves.toMatchObject({ source: 'default' });
+    expect(getEnsAddress).toHaveBeenCalledTimes(2);
   });
 });

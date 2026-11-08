@@ -4,6 +4,7 @@ import { render, fireEvent, act, waitFor } from '@testing-library/react-native';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ThemeProvider } from 'styled-components/native';
 import { decodeFunctionData, erc20Abi, formatEther, parseEther } from 'viem';
+import { toCoinType } from 'viem/ens';
 import { darkTheme } from '../../src/styles/theme';
 import SendTransactionScreen from '../../src/screens/Send/SendTransactionScreen';
 import { signingService } from '../../src/services/signingService';
@@ -181,6 +182,8 @@ beforeEach(() => {
         decimals: isUsdc ? 6 : 18,
         symbol: isUsdc ? 'USDC' : 'TEST',
         balanceOf: isUsdc ? 5_000_000n : 9007199254740993123456789n,
+        // OP Stack GasPriceOracle (Base 테스트)
+        getL1Fee: 1_000_000_000_000n,
       } as Record<string, unknown>
     )[functionName as string];
   });
@@ -407,6 +410,50 @@ it('resolves an ENS name, sends to the resolved address and shows the name in re
     1,
     expect.any(Function),
   );
+});
+
+describe('ENS on other networks', () => {
+  const baseAddress = '0x00000000219ab540356cBB839Cbe05303d7705Fa';
+
+  it('uses the Base-specific ENS record when the send is on Base', async () => {
+    mockActiveChainId = 8453;
+    mockGetEnsAddress.mockImplementation(async ({ coinType }) =>
+      coinType === toCoinType(8453) ? baseAddress : ensAddress,
+    );
+    const view = mount();
+    await fill(view, '0.001', 'treasury.eth');
+    expect(view.getByTestId('send-ens-resolved')).toHaveTextContent(
+      new RegExp(`→ 아래 주소로 보냅니다${baseAddress}$`),
+    );
+    expect(view.queryByTestId('send-ens-mainnet-record')).toBeNull();
+    await review(view);
+    expect(view.queryByTestId('send-confirm-ens-mainnet-record')).toBeNull();
+    await confirmWithPin(view);
+    expect(signingService.sendTransaction).toHaveBeenCalledWith(
+      expect.objectContaining({ to: baseAddress }),
+      8453,
+      expect.any(Function),
+    );
+  });
+
+  it('warns when only the Ethereum mainnet record exists', async () => {
+    mockActiveChainId = 8453;
+    mockGetEnsAddress.mockImplementation(async ({ coinType }) =>
+      coinType === undefined ? ensAddress : null,
+    );
+    const view = mount();
+    await fill(view, '0.001', 'treasury.eth');
+    expect(view.getByTestId('send-ens-resolved')).toHaveTextContent(
+      new RegExp(`→ 아래 주소로 보냅니다${ensAddress}$`),
+    );
+    expect(view.getByTestId('send-ens-mainnet-record')).toHaveTextContent(
+      /이더리움 메인넷 기록의 주소입니다/,
+    );
+    await review(view);
+    expect(
+      view.getByTestId('send-confirm-ens-mainnet-record'),
+    ).toHaveTextContent(/이 네트워크에서도 이 주소를 쓰는지 확인하세요/);
+  });
 });
 
 it('shows an error for an ENS name without an address', async () => {

@@ -46,7 +46,12 @@ import {
   type TransferPlan,
   type RecipientKind,
 } from '@/services/transferService';
-import { ensService, isEnsName, normalizeEnsName } from '@/services/ensService';
+import {
+  ensService,
+  isEnsName,
+  normalizeEnsName,
+  type EnsRecordSource,
+} from '@/services/ensService';
 import { tokenService, type Token } from '@/services/tokenService';
 import { enhancedSwapService } from '@/services/enhancedSwapService';
 import { NATIVE_TOKEN_ADDRESS } from '@/services/swapService';
@@ -76,11 +81,23 @@ type NavigationProp = NativeStackNavigationProp<
 /** AddressBookScreen '최근' 탭이 실제 이름 대신 붙이는 임시 이름 */
 const RECENT_PLACEHOLDER_NAME = '최근 주소';
 
+/** 메인넷이 아닌 네트워크에서 ENS 이름을 메인넷 기록으로 대신 해석했을 때의 경고 */
+const ENS_MAINNET_RECORD_WARNING =
+  '이더리움 메인넷 기록의 주소입니다. 받는 사람이 이 네트워크에서도 이 주소를 쓰는지 확인하세요.';
+
+/** ENS 해석 상태. 입력과 네트워크가 모두 같을 때만 현재 결과로 쓴다. */
 type EnsState =
   | { status: 'idle' }
-  | { status: 'resolving'; input: string }
-  | { status: 'resolved'; input: string; name: string; address: `0x${string}` }
-  | { status: 'error'; input: string; message: string };
+  | { status: 'resolving'; input: string; chainId: number }
+  | {
+      status: 'resolved';
+      input: string;
+      chainId: number;
+      name: string;
+      address: `0x${string}`;
+      source: EnsRecordSource;
+    }
+  | { status: 'error'; input: string; chainId: number; message: string };
 
 function parseAmountRaw(value: string | undefined): bigint | null {
   if (!value || !/^\d+$/.test(value)) return null;
@@ -317,12 +334,14 @@ function SendTransactionScreen(): React.JSX.Element {
       setEns({ status: 'idle' });
       return;
     }
+    const chainId = activeNetworkChainId;
     try {
       normalizeEnsName(trimmedInput);
     } catch (error) {
       setEns({
         status: 'error',
         input: trimmedInput,
+        chainId,
         message:
           error instanceof Error
             ? error.message
@@ -331,17 +350,20 @@ function SendTransactionScreen(): React.JSX.Element {
       return;
     }
     let cancelled = false;
-    setEns({ status: 'resolving', input: trimmedInput });
+    setEns({ status: 'resolving', input: trimmedInput, chainId });
     const timer = setTimeout(() => {
+      // 보낼 네트워크의 주소 기록을 찾는다 (없으면 메인넷 기록 + 경고).
       ensService
-        .resolve(trimmedInput)
+        .resolve(trimmedInput, chainId)
         .then(result => {
           if (!cancelled)
             setEns({
               status: 'resolved',
               input: trimmedInput,
+              chainId,
               name: result.name,
               address: result.address,
+              source: result.source,
             });
         })
         .catch(error => {
@@ -349,6 +371,7 @@ function SendTransactionScreen(): React.JSX.Element {
             setEns({
               status: 'error',
               input: trimmedInput,
+              chainId,
               message:
                 error instanceof Error
                   ? error.message
@@ -360,12 +383,22 @@ function SendTransactionScreen(): React.JSX.Element {
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [isEns, trimmedInput]);
+  }, [isEns, trimmedInput, activeNetworkChainId]);
 
   const formatIssue =
     !trimmedInput || isEns ? null : getAddressFormatIssue(trimmedInput);
   const ensCurrent =
-    isEns && ens.status !== 'idle' && ens.input === trimmedInput ? ens : null;
+    isEns &&
+    ens.status !== 'idle' &&
+    ens.input === trimmedInput &&
+    ens.chainId === activeNetworkChainId
+      ? ens
+      : null;
+  // 다른 네트워크에서 이더리움 메인넷 기록으로 대신 해석한 주소
+  const ensFromMainnetRecord =
+    ensCurrent?.status === 'resolved' &&
+    ensCurrent.source === 'default' &&
+    activeNetworkChainId !== 1;
   const resolvedRecipient: `0x${string}` | null = isEns
     ? ensCurrent?.status === 'resolved'
       ? ensCurrent.address
@@ -443,6 +476,8 @@ function SendTransactionScreen(): React.JSX.Element {
   const prepareAmount = amountIsMax ? '' : amount;
   const ensName =
     ensCurrent?.status === 'resolved' ? ensCurrent.name : undefined;
+  const ensSource =
+    ensCurrent?.status === 'resolved' ? ensCurrent.source : undefined;
   const prepareTransfer = useCallback(async () => {
     if (!activeAddress) throw new Error('활성 계정을 찾을 수 없습니다.');
     if (!resolvedRecipient) throw new Error('유효하지 않은 주소입니다.');
@@ -455,6 +490,7 @@ function SendTransactionScreen(): React.JSX.Element {
       feeSpeed,
       sendMax: amountIsMax,
       ensName,
+      ensSource,
     });
   }, [
     activeAddress,
@@ -465,6 +501,7 @@ function SendTransactionScreen(): React.JSX.Element {
     feeSpeed,
     amountIsMax,
     ensName,
+    ensSource,
   ]);
 
   const hasAmount = amountIsMax || !!amount;
@@ -960,6 +997,15 @@ function SendTransactionScreen(): React.JSX.Element {
             <MonoText selectable>{ensCurrent.address}</MonoText>
           </InlineMessage>
         ) : null}
+        {ensFromMainnetRecord ? (
+          <InlineMessage
+            $tone="warning"
+            accessibilityRole="alert"
+            testID="send-ens-mainnet-record"
+          >
+            <InlineMessageText>{ENS_MAINNET_RECORD_WARNING}</InlineMessageText>
+          </InlineMessage>
+        ) : null}
         {knownName ? (
           <AddressNameBadge testID="send-address-name-badge">
             <AddressNameText>주소록: {knownName}</AddressNameText>
@@ -1222,6 +1268,15 @@ function SendTransactionScreen(): React.JSX.Element {
               {plan.ensName}
             </ConfirmValue>
           </ConfirmRow>
+        ) : null}
+        {plan?.ensName && plan.ensSource === 'default' && plan.chainId !== 1 ? (
+          <InlineMessage
+            $tone="warning"
+            accessibilityRole="alert"
+            testID="send-confirm-ens-mainnet-record"
+          >
+            <InlineMessageText>{ENS_MAINNET_RECORD_WARNING}</InlineMessageText>
+          </InlineMessage>
         ) : null}
         <ConfirmRow>
           <ConfirmLabel>받는 주소</ConfirmLabel>
