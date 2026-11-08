@@ -152,15 +152,17 @@ const Overlay = styled.View`
   padding: ${({ theme }) => theme.spacing.lg}px;
 `;
 
+// 계정 안내가 더해지면 작은 화면·큰 글꼴에서 높이가 넘칠 수 있으므로 본문은 스크롤한다.
 const Card = styled.View`
   background-color: ${({ theme }) => theme.colors.surface};
   border-radius: ${({ theme }) => theme.borderRadius.xl}px;
   overflow: hidden;
+  max-height: 90%;
 `;
 
-const Body = styled.View`
-  padding: ${({ theme }) => theme.spacing.lg}px;
-`;
+const Body = styled.ScrollView.attrs(({ theme }) => ({
+  contentContainerStyle: { padding: theme.spacing.lg },
+}))``;
 
 const Title = styled.Text`
   color: ${({ theme }) => theme.colors.textPrimary};

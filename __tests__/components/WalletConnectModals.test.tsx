@@ -5,7 +5,7 @@
  */
 
 import React from 'react';
-import { Modal } from 'react-native';
+import { Modal, ScrollView } from 'react-native';
 import { fireEvent, render } from '@testing-library/react-native';
 import { ThemeProvider } from 'styled-components/native';
 import { lightTheme } from '../../src/styles/theme';
@@ -112,5 +112,26 @@ describe('ChainSwitchModal connected account', () => {
     expect(chainProps.onApprove).not.toHaveBeenCalled();
     fireEvent.press(getByTestId('wc-chain-switch-switch-account'));
     expect(onSwitchAccount).toHaveBeenCalledTimes(1);
+  });
+
+  it('scrolls the body so the account notice cannot push the buttons off a small screen', () => {
+    const view = renderWithTheme(
+      <ChainSwitchModal
+        {...chainProps}
+        accountAddress={ADDRESS}
+        accountMismatch
+        onSwitchAccount={jest.fn()}
+      />,
+    );
+    const scroll = view.UNSAFE_getByType(ScrollView);
+    // 안내와 계정 정보는 스크롤 영역 안, 승인/거부 버튼은 그 밖에 있다.
+    expect(
+      scroll.findAll(
+        node => node.props.testID === 'wc-chain-switch-account-mismatch',
+      ).length,
+    ).toBeGreaterThan(0);
+    expect(
+      scroll.findAll(node => node.props.testID === 'wc-chain-switch-approve'),
+    ).toHaveLength(0);
   });
 });
