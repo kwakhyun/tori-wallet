@@ -27,6 +27,11 @@ interface SignRequestModalProps {
   isProcessing?: boolean;
   /** 대기 중인 요청이 여러 개일 때 "1/N" 표시 */
   queuePosition?: QueuePosition;
+  /**
+   * 요청 계정이 앱의 활성 계정과 다를 때: 승인을 막고 계정 전환을 안내한다.
+   * onSwitch가 있으면 해당 계정으로 전환하는 버튼을 보여준다.
+   */
+  inactiveAccount?: { name: string; onSwitch?: () => void };
 }
 
 export interface SignRequest {
@@ -54,6 +59,7 @@ export function SignRequestModal({
   onReject,
   isProcessing = false,
   queuePosition,
+  inactiveAccount,
 }: SignRequestModalProps): React.JSX.Element | null {
   const [riskAcknowledged, setRiskAcknowledged] = useState(false);
 
@@ -78,6 +84,7 @@ export function SignRequestModal({
     isProcessing ||
     intent.blocked ||
     verificationBlocked ||
+    !!inactiveAccount ||
     ((intent.requiresRiskAcknowledgement || verificationNeedsAcknowledgement) &&
       !riskAcknowledged);
   const icon =
@@ -222,6 +229,28 @@ export function SignRequestModal({
                   )}
               </DetailsSection>
             </DetailsScrollView>
+
+            {inactiveAccount && !intent.blocked && !verificationBlocked && (
+              <AccountNotice
+                accessibilityRole="alert"
+                testID="sign-request-inactive-account"
+              >
+                <AccountNoticeText>
+                  {`이 요청은 계정 "${inactiveAccount.name}"용입니다. 해당 계정으로 전환한 뒤 승인할 수 있습니다.`}
+                </AccountNoticeText>
+                {inactiveAccount.onSwitch && (
+                  <AccountSwitchButton
+                    onPress={inactiveAccount.onSwitch}
+                    disabled={isProcessing}
+                    accessibilityRole="button"
+                    accessibilityLabel={`계정 ${inactiveAccount.name}(으)로 전환`}
+                    testID="sign-request-switch-account"
+                  >
+                    <AccountSwitchText>이 계정으로 전환</AccountSwitchText>
+                  </AccountSwitchButton>
+                )}
+              </AccountNotice>
+            )}
 
             {/* 버튼 */}
             <ButtonSection>
@@ -487,6 +516,40 @@ const RiskAcknowledgeText = styled.Text`
   flex: 1;
   color: ${({ theme }) => theme.colors.textPrimary};
   font-size: 14px;
+`;
+
+const AccountNotice = styled.View`
+  margin: ${({ theme }) => theme.spacing.md}px
+    ${({ theme }) => theme.spacing.lg}px 0;
+  padding: ${({ theme }) => theme.spacing.md}px;
+  border-radius: ${({ theme }) => theme.borderRadius.md}px;
+  border-width: 1px;
+  border-color: ${({ theme }) => theme.colors.warning};
+  background-color: ${({ theme }) => theme.colors.warningSubtle};
+  gap: ${({ theme }) => theme.spacing.sm}px;
+`;
+
+const AccountNoticeText = styled.Text`
+  color: ${({ theme }) => theme.colors.textPrimary};
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 19px;
+`;
+
+const AccountSwitchButton = styled.TouchableOpacity`
+  min-height: 44px;
+  align-items: center;
+  justify-content: center;
+  border-radius: ${({ theme }) => theme.borderRadius.md}px;
+  border-width: 1px;
+  border-color: ${({ theme }) => theme.colors.border};
+  background-color: ${({ theme }) => theme.colors.surface};
+`;
+
+const AccountSwitchText = styled.Text`
+  color: ${({ theme }) => theme.colors.textPrimary};
+  font-size: 14px;
+  font-weight: 600;
 `;
 
 const ButtonSection = styled.View`

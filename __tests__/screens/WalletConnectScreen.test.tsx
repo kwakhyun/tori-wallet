@@ -7,7 +7,7 @@ import React from 'react';
 import { Alert, Clipboard } from 'react-native';
 import { act, fireEvent, render } from '@testing-library/react-native';
 import { ThemeProvider } from 'styled-components/native';
-import { darkTheme } from '../../src/styles/theme';
+import { darkTheme, lightTheme } from '../../src/styles/theme';
 
 const mockAddress = '0x1234567890123456789012345678901234567890';
 const VALID_URI = `wc:${'a'.repeat(
@@ -24,8 +24,9 @@ jest.mock('@react-navigation/native', () => ({
   useNavigation: () => ({ goBack: jest.fn(), canGoBack: () => true }),
   useRoute: () => ({ params: mockRouteParams }),
 }));
+let mockTheme: any;
 jest.mock('../../src/hooks/useTheme', () => ({
-  useTheme: () => ({ isDarkMode: true }),
+  useTheme: () => ({ isDarkMode: mockTheme.isDark, theme: mockTheme }),
 }));
 jest.mock('../../src/store/walletStore', () => ({
   useWalletStore: (selector: any) =>
@@ -72,7 +73,7 @@ import { wcService } from '../../src/services/wcService';
 
 const mount = () =>
   render(
-    <ThemeProvider theme={darkTheme}>
+    <ThemeProvider theme={mockTheme}>
       <WalletConnectScreen />
     </ThemeProvider>,
   );
@@ -84,6 +85,7 @@ const flush = async () => {
 
 beforeEach(() => {
   jest.clearAllMocks();
+  mockTheme = darkTheme;
   mockRouteParams = {};
   mockStatus = 'ready';
   mockSessionsListener = null;
@@ -159,6 +161,43 @@ describe('WalletConnectScreen', () => {
       view.getByTestId('wc-connect-button').props.accessibilityState,
     ).toMatchObject({
       disabled: true,
+    });
+  });
+
+  it('keeps the connect button readable while pairing in light mode', async () => {
+    mockTheme = lightTheme;
+    let finish: (() => void) | undefined;
+    (wcService.pairWithUri as jest.Mock).mockImplementationOnce(
+      () =>
+        new Promise<void>(resolve => {
+          finish = resolve;
+        }),
+    );
+    const view = mount();
+    await act(flush);
+    expect(view.getByTestId('wc-uri-input').props.placeholderTextColor).toBe(
+      lightTheme.colors.textMuted,
+    );
+    fireEvent.changeText(view.getByTestId('wc-uri-input'), VALID_URI);
+    await act(async () => {
+      fireEvent.press(view.getByTestId('wc-connect-button'));
+      await flush();
+    });
+    const button = view.getByTestId('wc-connect-button');
+    expect(button.props.accessibilityState).toMatchObject({
+      disabled: true,
+      busy: true,
+    });
+    // 회색(disabledBackground) 위 흰 스피너가 아니라 기본색 위 onPrimary 스피너
+    expect(button.props.style).toMatchObject({
+      backgroundColor: lightTheme.colors.primary,
+    });
+    expect(view.getByTestId('wc-connect-spinner').props.color).toBe(
+      lightTheme.colors.onPrimary,
+    );
+    await act(async () => {
+      finish?.();
+      await flush();
     });
   });
 

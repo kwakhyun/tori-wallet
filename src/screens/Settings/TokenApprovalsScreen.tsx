@@ -45,7 +45,7 @@ import { shortenAddress } from '@/utils/address';
 import type { Theme } from '@/styles/theme';
 
 export const APPROVAL_SCOPE_NOTE =
-  '알려진 토큰(기본·스왑·직접 추가한 토큰)과 알려진 지출 주소(0x AllowanceHolder, 이 앱에서 보낸 승인 거래)만 확인합니다. 다른 앱에서 부여한 승인까지 모두 찾으려면 온체인 인덱서가 필요합니다.';
+  '알려진 토큰(기본·스왑·직접 추가한 토큰)과, 0x AllowanceHolder 및 이 기기에 기록된 최근 승인 거래(앱 스왑, WalletConnect로 연결한 dApp)의 지출 주소만 확인합니다. 다른 앱·기기에서 부여했거나 기록이 남지 않은 승인은 보이지 않을 수 있으니, 모든 승인을 확인하려면 온체인 승인 조회 서비스를 함께 사용하세요.';
 
 /** 무제한/원시 단위 표기는 그대로, 숫자는 공통 표시 규칙으로 줄인다. */
 function displayAllowance(item: TokenApproval): string {

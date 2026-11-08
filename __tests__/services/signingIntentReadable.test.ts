@@ -10,8 +10,10 @@ import {
   fingerprintSigningRequest,
   formatDeadline,
   formatTokenAmount,
+  nativeSymbol,
   PERMIT2_ADDRESS,
 } from '../../src/services/signingIntentService';
+import { customNetworkRegistry } from '../../src/services/customNetworks';
 
 const ACCOUNT = '0x1234567890123456789012345678901234567890';
 const SPENDER = '0x111111125421ca6dc452d289314280a0f8842a65';
@@ -190,6 +192,52 @@ describe('EIP-2612 Permit', () => {
     expect(messages).toContain('권한 소유자');
   });
 
+  it('reads amounts sent as large JSON numbers the way viem signs them (1e77 is unlimited)', () => {
+    // JSON.parse('{"value":1e77}')와 같은 값. viem은 BigInt(1e77)로 서명한다.
+    const intent = analyzeSigningRequest(
+      typedData(
+        {
+          owner: ACCOUNT,
+          spender: SPENDER,
+          value: 1e77,
+          nonce: 0,
+          deadline: inThirtyDays(),
+        },
+        'Permit',
+        { name: 'USD Coin', chainId: 1, verifyingContract: USDC },
+      ),
+    );
+    expect(intent.summary).toBe('USDC 무제한 사용 권한을 부여합니다 (Permit)');
+    expect(detail(intent, '승인 수량')).toBe('사실상 무제한 (매우 큰 수량)');
+    expect(intent.warnings).toContainEqual(
+      expect.objectContaining({
+        level: 'critical',
+        message: expect.stringContaining('무제한 수량'),
+      }),
+    );
+  });
+
+  it('treats an amount it cannot read exactly as unlimited', () => {
+    const intent = analyzeSigningRequest(
+      typedData(
+        {
+          owner: ACCOUNT,
+          spender: SPENDER,
+          value: 1.5e3 + 0.5,
+          nonce: 0,
+          deadline: inThirtyDays(),
+        },
+        'Permit',
+        { name: 'USD Coin', chainId: 1, verifyingContract: USDC },
+      ),
+    );
+    expect(detail(intent, '승인 수량')).toBe('알 수 없음 (무제한으로 간주)');
+    expect(intent.summary).toContain('무제한');
+    expect(intent.warnings.map(warning => warning.message).join('\n')).toContain(
+      '무제한 수량',
+    );
+  });
+
   it('decodes DAI-style permits (allowed=true is unlimited)', () => {
     const intent = analyzeSigningRequest(
       typedData(
@@ -338,6 +386,100 @@ describe('orders', () => {
     );
   });
 
+  const seaport = (offer: unknown[], consideration: unknown[]) =>
+    analyzeSigningRequest(
+      typedData(
+        {
+          offerer: ACCOUNT,
+          offer,
+          consideration,
+          startTime: Math.floor(Date.now() / 1000) - 86400,
+          endTime: Math.floor(Date.now() / 1000) + 120,
+        },
+        'OrderComponents',
+        {
+          name: 'Seaport',
+          version: '1.5',
+          chainId: 1,
+          verifyingContract: SPENDER,
+        },
+      ),
+    );
+  const nft = {
+    itemType: 2,
+    token: UNKNOWN_TOKEN,
+    identifierOrCriteria: '1',
+    startAmount: '1',
+    endAmount: '1',
+  };
+
+  it('shows the worst case of a consideration that decays over time (10 ETH → 0)', () => {
+    const intent = seaport(
+      [nft],
+      [
+        {
+          itemType: 0,
+          token: '0x0000000000000000000000000000000000000000',
+          identifierOrCriteria: '0',
+          startAmount: '10000000000000000000',
+          endAmount: '0',
+          recipient: ACCOUNT,
+        },
+      ],
+    );
+    const received = detail(intent, '내가 받는 자산 1');
+    expect(received).toMatch(/^최소 0 ETH/);
+    expect(received).toContain('10 ETH → 0 ETH');
+    expect(received).toContain('주문 기간 동안 변동');
+    expect(detail(intent, '주문 시작')).toContain('이미 시작됨');
+    expect(intent.warnings).toContainEqual(
+      expect.objectContaining({
+        level: 'critical',
+        message: expect.stringContaining('시간에 따라 금액이 바뀌는 주문'),
+      }),
+    );
+  });
+
+  it('shows the maximum of an offer that grows over time', () => {
+    const intent = seaport(
+      [
+        {
+          itemType: 1,
+          token: USDC,
+          identifierOrCriteria: '0',
+          startAmount: '1000000',
+          endAmount: '500000000',
+        },
+      ],
+      [{ ...nft, recipient: ACCOUNT }],
+    );
+    const offered = detail(intent, '내가 제공하는 자산 1');
+    expect(offered).toMatch(/^최대 500 USDC/);
+    expect(offered).toContain('1 USDC → 500 USDC');
+    expect(intent.warnings.map(warning => warning.message).join('\n')).toContain(
+      '시간에 따라 금액이 바뀌는 주문',
+    );
+  });
+
+  it('does not flag fixed-price Seaport orders as changing', () => {
+    const intent = seaport(
+      [nft],
+      [
+        {
+          itemType: 0,
+          token: '0x0000000000000000000000000000000000000000',
+          startAmount: '2000000000000000000',
+          endAmount: '2000000000000000000',
+          recipient: ACCOUNT,
+        },
+      ],
+    );
+    expect(detail(intent, '내가 받는 자산 1')).toBe('2 ETH');
+    expect(intent.warnings.map(warning => warning.message).join('\n')).not.toContain(
+      '시간에 따라',
+    );
+  });
+
   it('shows sell/buy tokens for CoW-style orders', () => {
     const intent = analyzeSigningRequest(
       typedData(
@@ -365,6 +507,48 @@ describe('orders', () => {
         message: expect.stringContaining('받는 주소'),
       }),
     );
+  });
+});
+
+describe('native asset symbol', () => {
+  afterEach(() => customNetworkRegistry.set([]));
+
+  const nativeTransfer = (chainId: number) =>
+    analyzeSigningRequest({
+      method: 'eth_sendTransaction',
+      params: [
+        {
+          from: ACCOUNT,
+          to: SPENDER,
+          value: '2000000000000000000',
+          gas: '21000',
+          gasPrice: '1000000000',
+        },
+      ],
+      chainId,
+      account: ACCOUNT,
+    });
+
+  it('uses the symbol of a user-added network', () => {
+    customNetworkRegistry.set([
+      {
+        chainId: 56,
+        name: 'BNB Smart Chain',
+        rpcUrl: 'https://bsc.example',
+        symbol: 'BNB',
+      },
+    ]);
+    expect(nativeSymbol(56)).toBe('BNB');
+    const intent = nativeTransfer(56);
+    expect(detail(intent, '네이티브 자산')).toBe('2 BNB');
+    expect(detail(intent, '최대 네트워크 수수료')).toMatch(/ BNB$/);
+    expect(detail(intent, '최대 총지출액')).toMatch(/^2\.0+21 BNB$/);
+  });
+
+  it('keeps POL/ETH for built-in networks', () => {
+    expect(nativeSymbol(137)).toBe('POL');
+    expect(nativeSymbol(1)).toBe('ETH');
+    expect(detail(nativeTransfer(137), '네이티브 자산')).toBe('2 POL');
   });
 });
 

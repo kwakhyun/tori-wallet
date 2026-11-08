@@ -14,6 +14,13 @@ interface ChainSwitchModalProps {
   dAppUrl: string;
   fromNetworkName: string;
   toNetworkName: string;
+  /** 이 dApp에 연결된 계정 (세션에 승인된 계정) */
+  accountAddress?: string;
+  accountName?: string;
+  /** 앱의 활성 계정이 이 dApp에 연결된 계정이 아니면 승인을 막는다. */
+  accountMismatch?: boolean;
+  /** 연결된 계정으로 앱의 활성 계정을 바꾼다 */
+  onSwitchAccount?: () => void;
   isAddChain: boolean;
   queuePosition?: QueuePosition;
   expiresAt?: number;
@@ -28,6 +35,10 @@ export function ChainSwitchModal({
   dAppUrl,
   fromNetworkName,
   toNetworkName,
+  accountAddress,
+  accountName,
+  accountMismatch = false,
+  onSwitchAccount,
   isAddChain,
   queuePosition,
   expiresAt,
@@ -35,13 +46,16 @@ export function ChainSwitchModal({
   onApprove,
   onReject,
 }: ChainSwitchModalProps): React.JSX.Element {
+  const approveDisabled = isProcessing || accountMismatch;
+  const accountLabel = accountName || accountAddress || '';
   return (
     // 잠긴 동안에는 숨기기만 한다. 요청은 대기열에 남고 만료 처리는 계속된다.
     <AppModal
       visible={visible}
       transparent
       animationType="fade"
-      onRequestClose={onReject}
+      // 전환 처리 중에는 Android 뒤로 가기로 거부하지 않는다.
+      onRequestClose={isProcessing ? () => undefined : onReject}
     >
       <Overlay>
         <Card accessibilityViewIsModal testID="wc-chain-switch-modal">
@@ -67,6 +81,36 @@ export function ChainSwitchModal({
                 </NetworkName>
               </NetworkBox>
             </Row>
+            {accountAddress ? (
+              <AccountBox>
+                <Label>연결된 계정</Label>
+                {accountName ? <NetworkName>{accountName}</NetworkName> : null}
+                <AccountAddress selectable testID="wc-chain-switch-account">
+                  {accountAddress}
+                </AccountAddress>
+              </AccountBox>
+            ) : null}
+            {accountMismatch ? (
+              <Notice
+                accessibilityRole="alert"
+                testID="wc-chain-switch-account-mismatch"
+              >
+                <NoticeText>
+                  {`이 dApp은 계정 "${accountLabel}"에 연결되어 있습니다. 해당 계정으로 전환한 뒤 네트워크를 바꿀 수 있습니다.`}
+                </NoticeText>
+                {onSwitchAccount ? (
+                  <NoticeButton
+                    onPress={onSwitchAccount}
+                    disabled={isProcessing}
+                    accessibilityRole="button"
+                    accessibilityLabel={`계정 ${accountLabel}(으)로 전환`}
+                    testID="wc-chain-switch-switch-account"
+                  >
+                    <SecondaryText>이 계정으로 전환</SecondaryText>
+                  </NoticeButton>
+                ) : null}
+              </Notice>
+            ) : null}
             <Description>
               {isAddChain
                 ? '이 dApp이 네트워크 추가를 요청했습니다. 토리월렛이 이미 지원하는 네트워크이므로 전환만 진행합니다.'
@@ -85,14 +129,14 @@ export function ChainSwitchModal({
             </SecondaryButton>
             <PrimaryButton
               onPress={onApprove}
-              disabled={isProcessing}
-              $disabled={isProcessing}
+              disabled={approveDisabled}
+              $disabled={approveDisabled}
               accessibilityRole="button"
               accessibilityLabel={`${toNetworkName}(으)로 전환`}
-              accessibilityState={{ disabled: isProcessing }}
+              accessibilityState={{ disabled: approveDisabled }}
               testID="wc-chain-switch-approve"
             >
-              <PrimaryText $disabled={isProcessing}>전환</PrimaryText>
+              <PrimaryText $disabled={approveDisabled}>전환</PrimaryText>
             </PrimaryButton>
           </ButtonRow>
         </Card>
@@ -108,15 +152,17 @@ const Overlay = styled.View`
   padding: ${({ theme }) => theme.spacing.lg}px;
 `;
 
+// 계정 안내가 더해지면 작은 화면·큰 글꼴에서 높이가 넘칠 수 있으므로 본문은 스크롤한다.
 const Card = styled.View`
   background-color: ${({ theme }) => theme.colors.surface};
   border-radius: ${({ theme }) => theme.borderRadius.xl}px;
   overflow: hidden;
+  max-height: 90%;
 `;
 
-const Body = styled.View`
-  padding: ${({ theme }) => theme.spacing.lg}px;
-`;
+const Body = styled.ScrollView.attrs(({ theme }) => ({
+  contentContainerStyle: { padding: theme.spacing.lg },
+}))``;
 
 const Title = styled.Text`
   color: ${({ theme }) => theme.colors.textPrimary};
@@ -166,6 +212,47 @@ const Arrow = styled.Text`
   color: ${({ theme }) => theme.colors.textSecondary};
   font-size: 20px;
   margin: 0 ${({ theme }) => theme.spacing.sm}px;
+`;
+
+const AccountBox = styled.View`
+  margin-top: ${({ theme }) => theme.spacing.md}px;
+  padding: ${({ theme }) => theme.spacing.md}px;
+  border-radius: ${({ theme }) => theme.borderRadius.md}px;
+  background-color: ${({ theme }) => theme.colors.backgroundSecondary};
+`;
+
+const AccountAddress = styled.Text`
+  color: ${({ theme }) => theme.colors.textSecondary};
+  font-size: 12px;
+  font-family: monospace;
+  margin-top: 2px;
+`;
+
+const Notice = styled.View`
+  margin-top: ${({ theme }) => theme.spacing.md}px;
+  padding: ${({ theme }) => theme.spacing.md}px;
+  border-radius: ${({ theme }) => theme.borderRadius.md}px;
+  border-width: 1px;
+  border-color: ${({ theme }) => theme.colors.warning};
+  background-color: ${({ theme }) => theme.colors.warningSubtle};
+  gap: ${({ theme }) => theme.spacing.sm}px;
+`;
+
+const NoticeText = styled.Text`
+  color: ${({ theme }) => theme.colors.textPrimary};
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 19px;
+`;
+
+const NoticeButton = styled.TouchableOpacity`
+  min-height: 44px;
+  align-items: center;
+  justify-content: center;
+  border-radius: ${({ theme }) => theme.borderRadius.md}px;
+  border-width: 1px;
+  border-color: ${({ theme }) => theme.colors.border};
+  background-color: ${({ theme }) => theme.colors.surface};
 `;
 
 const Description = styled.Text`

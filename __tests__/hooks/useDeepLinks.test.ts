@@ -114,4 +114,48 @@ describe('useDeepLinks', () => {
     expect(onLink).toHaveBeenCalledTimes(1);
     hook.unmount();
   });
+
+  it('lets the dApp retry the same URI after pairing fails, but still dedupes a successful one', async () => {
+    const onLink = jest
+      .fn()
+      .mockRejectedValueOnce(new Error('relay unreachable'))
+      .mockResolvedValue(undefined);
+    const hook = renderHook(() => useDeepLinks(true, onLink));
+    await act(flush);
+
+    act(() => urlListener({ url: uri('f1') }));
+    await act(flush);
+    expect(onLink).toHaveBeenCalledTimes(1);
+
+    // 실패한 URI는 다시 열면 다시 페어링한다.
+    act(() => urlListener({ url: uri('f1') }));
+    await act(flush);
+    expect(onLink).toHaveBeenCalledTimes(2);
+
+    // 성공한 URI는 다시 전달돼도 처리하지 않는다.
+    act(() => urlListener({ url: uri('f1') }));
+    await act(flush);
+    expect(onLink).toHaveBeenCalledTimes(2);
+    hook.unmount();
+  });
+
+  it('ignores a duplicate delivery while the first pairing is still in flight', async () => {
+    let finish: (() => void) | undefined;
+    const onLink = jest.fn(
+      () =>
+        new Promise<void>(resolve => {
+          finish = resolve;
+        }),
+    );
+    const hook = renderHook(() => useDeepLinks(true, onLink));
+    await act(flush);
+    act(() => urlListener({ url: uri('g1') }));
+    act(() => urlListener({ url: uri('g1') }));
+    expect(onLink).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      finish?.();
+      await flush();
+    });
+    hook.unmount();
+  });
 });

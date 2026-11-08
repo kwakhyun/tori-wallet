@@ -9,6 +9,7 @@ import {
   toHex,
   type Hex,
 } from 'viem';
+import { customNetworkRegistry } from './customNetworks';
 
 const MAX_UINT256 = 2n ** 256n - 1n;
 const MAX_UINT160 = 2n ** 160n - 1n;
@@ -162,6 +163,16 @@ const KNOWN_TOKENS: Record<number, Record<string, TokenMetadata>> = {
   },
 };
 
+/**
+ * 체인의 네이티브 자산 기호. 사용자가 추가한 네트워크는 등록한 기호를, 기본 네트워크는
+ * Polygon(POL) 외에는 ETH를 쓴다. (커스텀 네트워크는 기본 네트워크 ID를 쓸 수 없다.)
+ */
+export function nativeSymbol(chainId: number): string {
+  const custom = customNetworkRegistry.get(chainId)?.symbol?.trim();
+  if (custom && /^[A-Za-z0-9.]{1,10}$/.test(custom)) return custom.toUpperCase();
+  return chainId === 137 ? 'POL' : 'ETH';
+}
+
 /** 내장 신뢰 목록에서 토큰 정보를 찾는다. */
 export function getKnownToken(
   chainId: number,
@@ -232,6 +243,13 @@ function relativeTime(diffSeconds: number): string {
   return diffSeconds >= 0 ? `${amount} 후` : `${amount} 전 만료됨`;
 }
 
+function formatDate(seconds: bigint): string {
+  const date = new Date(Number(seconds) * 1000);
+  return `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(
+    date.getDate(),
+  )} ${pad2(date.getHours())}:${pad2(date.getMinutes())}`;
+}
+
 /** 유닉스 초 단위 만료 시각을 "YYYY-MM-DD HH:mm (n일 후)" 형식으로 표시한다. */
 export function formatDeadline(
   seconds: bigint,
@@ -239,12 +257,18 @@ export function formatDeadline(
 ): string {
   if (seconds === 0n) return '없음 (0)';
   if (seconds >= NO_EXPIRY_SECONDS) return '만료 없음 (무기한)';
-  const date = new Date(Number(seconds) * 1000);
-  const formatted = `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(
-    date.getDate(),
-  )} ${pad2(date.getHours())}:${pad2(date.getMinutes())}`;
   const diff = Math.round(Number(seconds) - nowMs / 1000);
-  return `${formatted} (${relativeTime(diff)})`;
+  return `${formatDate(seconds)} (${relativeTime(diff)})`;
+}
+
+/** 주문 시작 시각 ("YYYY-MM-DD HH:mm (이미 시작됨 / n일 후 시작)") */
+function formatStartTime(seconds: bigint, nowMs: number): string {
+  if (seconds === 0n) return '즉시 (0)';
+  if (seconds >= NO_EXPIRY_SECONDS) return formatDate(NO_EXPIRY_SECONDS);
+  const diff = Math.round(Number(seconds) - nowMs / 1000);
+  return diff > 0
+    ? `${formatDate(seconds)} (${relativeTime(diff)} 시작)`
+    : `${formatDate(seconds)} (이미 시작됨)`;
 }
 
 // ---------------------------------------------------------------------------
@@ -302,11 +326,15 @@ function parseQuantity(value: string | undefined, field: string): bigint {
   }
 }
 
-/** 타입 데이터 안의 수치(10진/16진 문자열, 숫자)를 bigint로 읽는다. */
+/**
+ * 타입 데이터 안의 수치(10진/16진 문자열, 숫자)를 bigint로 읽는다.
+ * JSON 숫자는 안전 정수 범위를 넘어도(예: 1e77) 정수이면 viem이 서명하는 값과 같은
+ * BigInt(value)로 읽는다. 표시 값이 실제 서명 값과 달라지지 않게 하기 위해서다.
+ */
 function toBigIntOrNull(value: unknown): bigint | null {
   if (typeof value === 'bigint') return value;
   if (typeof value === 'number') {
-    return Number.isSafeInteger(value) && value >= 0 ? BigInt(value) : null;
+    return Number.isInteger(value) && value >= 0 ? BigInt(value) : null;
   }
   if (typeof value === 'string' && value.trim() !== '') {
     try {
@@ -568,7 +596,7 @@ function analyzeTransaction(input: SigningRequestInput): SigningIntent {
       message:
         '네트워크 수수료가 높습니다. 최대 수수료와 총지출액을 다시 확인하세요.',
     });
-  const nativeSymbol = input.chainId === 137 ? 'POL' : 'ETH';
+  const symbol = nativeSymbol(input.chainId);
   const hasL1DataFee = [10, 8453, 42161].includes(input.chainId);
   if (hasL1DataFee)
     warnings.push({
@@ -584,16 +612,16 @@ function analyzeTransaction(input: SigningRequestInput): SigningIntent {
   const details: SigningIntentDetail[] = [
     { label: '보내는 계정', value: tx.from },
     { label: '대상 주소', value: tx.to || '없음' },
-    { label: '네이티브 자산', value: `${formatEther(value)} ${nativeSymbol}` },
+    { label: '네이티브 자산', value: `${formatEther(value)} ${symbol}` },
     { label: '체인 ID', value: String(input.chainId) },
     { label: '가스 한도', value: gas.toString() },
     {
       label: hasL1DataFee ? '최대 실행 수수료' : '최대 네트워크 수수료',
-      value: `${formatEther(maximumFee)} ${nativeSymbol}`,
+      value: `${formatEther(maximumFee)} ${symbol}`,
     },
     {
       label: hasL1DataFee ? '실행비 포함 금액 (L1 비용 별도)' : '최대 총지출액',
-      value: `${formatEther(value + maximumFee)} ${nativeSymbol}`,
+      value: `${formatEther(value + maximumFee)} ${symbol}`,
     },
   ];
   let summary = value > 0n ? '네이티브 자산 전송' : '트랜잭션';
@@ -761,14 +789,15 @@ function grantDetails(
       label: `토큰${suffix}`,
       value: grant.token ? tokenLabel(grant.token, token) : '없음',
     });
+    // 수량을 정확히 읽을 수 없으면 가장 위험한 경우(무제한)로 본다.
     details.push({
       label: `승인 수량${suffix}`,
       value:
         grant.amount === null
-          ? '알 수 없음'
+          ? '알 수 없음 (무제한으로 간주)'
           : formatTokenAmount(grant.amount, token),
     });
-    if (grant.amount !== null && isEffectivelyUnlimited(grant.amount))
+    if (grant.amount === null || isEffectivelyUnlimited(grant.amount))
       unlimited = true;
     if (grant.expiration !== undefined) {
       details.push({
@@ -968,7 +997,7 @@ function assetLine(
   const type = toBigIntOrNull(itemType);
   if (type === 0n) {
     const value = toBigIntOrNull(amount);
-    const symbol = ctx.chainId === 137 ? 'POL' : 'ETH';
+    const symbol = nativeSymbol(ctx.chainId);
     return value === null ? `? ${symbol}` : `${formatEther(value)} ${symbol}`;
   }
   if (type === 2n || type === 4n) return `NFT (ERC-721) · ${asString(token)}`;
@@ -981,6 +1010,75 @@ function assetLine(
   const formatted = value === null ? '?' : formatTokenAmount(value, meta);
   return address ? `${formatted} · ${tokenLabel(address, meta)}` : formatted;
 }
+
+/** 자산 표시 없이 수량만 (Seaport 변동 금액 범위 표시용) */
+function assetAmount(
+  ctx: DisplayContext,
+  token: unknown,
+  amount: bigint | null,
+  itemType: unknown,
+): string {
+  const type = toBigIntOrNull(itemType);
+  if (type === 0n) {
+    const symbol = nativeSymbol(ctx.chainId);
+    return amount === null ? `? ${symbol}` : `${formatEther(amount)} ${symbol}`;
+  }
+  if (type !== null && type >= 2n) return amount === null ? '?개' : `${amount}개`;
+  if (amount === null) return '?';
+  const address = typeof token === 'string' ? token : undefined;
+  return formatTokenAmount(amount, resolveToken(ctx, address));
+}
+
+/**
+ * Seaport 주문 항목. 시작/종료 수량이 다르면(더치 옥션 등) 주문 기간 동안 선형으로 변하므로
+ * 사용자에게 가장 불리한 값을 앞에 보여준다: 받는 자산은 최소, 주는 자산은 최대.
+ */
+function seaportItemLine(
+  ctx: DisplayContext,
+  item: Record<string, unknown> | null,
+  worstCase: 'min' | 'max',
+): { value: string; varies: boolean } {
+  const start = toBigIntOrNull(item?.startAmount);
+  const end =
+    item?.endAmount === undefined ? start : toBigIntOrNull(item?.endAmount);
+  const varies =
+    start === null || end === null
+      ? item?.endAmount !== undefined && item?.endAmount !== item?.startAmount
+      : start !== end;
+  if (!varies) {
+    return {
+      value: assetLine(ctx, item?.token, item?.startAmount, item?.itemType),
+      varies: false,
+    };
+  }
+  let worst: bigint | null = null;
+  if (start !== null && end !== null) {
+    worst =
+      worstCase === 'min'
+        ? start < end
+          ? start
+          : end
+        : start > end
+        ? start
+        : end;
+  }
+  const headline = assetLine(ctx, item?.token, worst, item?.itemType);
+  const range = `${assetAmount(
+    ctx,
+    item?.token,
+    start,
+    item?.itemType,
+  )} → ${assetAmount(ctx, item?.token, end, item?.itemType)}`;
+  return {
+    value: `${
+      worstCase === 'min' ? '최소' : '최대'
+    } ${headline} (${range}, 주문 기간 동안 변동)`,
+    varies: true,
+  };
+}
+
+const VARYING_ORDER_WARNING =
+  '시간에 따라 금액이 바뀌는 주문입니다 (더치 옥션). 체결 시점에 따라 받는 금액이 줄거나 주는 금액이 늘 수 있으니, 표시된 최소/최대 금액을 기준으로 확인하세요.';
 
 function decodeOrder(
   primaryType: string,
@@ -1009,35 +1107,53 @@ function decodeOrder(
       value: String(domain.name || 'Seaport'),
     });
     details.push({ label: '주문자', value: asString(message.offerer) });
-    offer.forEach((item, index) =>
+    let varies = false;
+    offer.forEach((item, index) => {
+      const line = seaportItemLine(ctx, item, 'max');
+      varies = varies || line.varies;
       details.push({
         label: `내가 제공하는 자산 ${index + 1}`,
-        value: assetLine(ctx, item?.token, item?.startAmount, item?.itemType),
-      }),
-    );
+        value: line.value,
+      });
+    });
     const mine = consideration.filter(
       item =>
         typeof item?.recipient === 'string' &&
         item.recipient.toLowerCase() === account,
     );
-    mine.forEach((item, index) =>
+    mine.forEach((item, index) => {
+      const line = seaportItemLine(ctx, item, 'min');
+      varies = varies || line.varies;
       details.push({
         label: `내가 받는 자산 ${index + 1}`,
-        value: assetLine(ctx, item?.token, item?.startAmount, item?.itemType),
-      }),
-    );
+        value: line.value,
+      });
+    });
     const others = consideration.length - mine.length;
     if (others > 0)
       details.push({
         label: '다른 수령인에게 지급',
         value: `${others}건 (수수료/로열티 등)`,
       });
+    if (message.startTime !== undefined) {
+      const startTime = toBigIntOrNull(message.startTime);
+      details.push({
+        label: '주문 시작',
+        value:
+          startTime === null
+            ? '알 수 없음'
+            : formatStartTime(startTime, ctx.nowMs),
+      });
+    }
     const endTime = toBigIntOrNull(message.endTime);
     details.push({
       label: '주문 만료',
       value:
         endTime === null ? '알 수 없음' : formatDeadline(endTime, ctx.nowMs),
     });
+    if (varies) {
+      warnings.push({ level: 'critical', message: VARYING_ORDER_WARNING });
+    }
     if (mine.length === 0) {
       warnings.push({
         level: 'critical',
