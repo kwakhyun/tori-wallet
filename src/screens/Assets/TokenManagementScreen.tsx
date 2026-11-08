@@ -1,7 +1,10 @@
 /**
  * 토큰 관리 화면
  *
- * - 현재 네트워크의 기본 토큰 + 사용자 토큰을 보여 주고 표시/숨김을 바꾼다.
+ * - 현재 네트워크의 기본 토큰 + 사용자 토큰을 보여 주고 목록 표시/숨김을 바꾼다.
+ *   숨긴 토큰은 홈/포트폴리오/보내기 목록에서 빠진다. 표시 중이어도 잔액이 없는
+ *   기본 토큰은 홈에서는 보이지 않으므로(포트폴리오/보내기 목록에는 표시) 화면에 안내한다.
+ * - 직접 추가한 네트워크에서는 그 네트워크의 기본 통화를 기본 자산으로 보여 준다.
  * - 컨트랙트 주소로 사용자 토큰을 추가한다: 주소 검증 → 체인에서 심볼/이름/소수 자릿수 조회
  *   → 가짜 이름 경고와 함께 확인 → 저장
  * - 사용자 토큰은 삭제할 수 있다.
@@ -37,6 +40,9 @@ import { IconButton } from '@/components/common/IconButton';
 interface ManagedToken extends TokenConfig {
   isCustom: boolean;
 }
+
+export const HOME_ZERO_BALANCE_HINT =
+  '잔액이 없는 기본 토큰은 홈에서 숨겨집니다 (포트폴리오/보내기 목록에는 표시)';
 
 export const FAKE_TOKEN_WARNING =
   '누구나 원하는 이름과 심볼로 토큰을 만들 수 있습니다. 공식 사이트나 신뢰할 수 있는 출처에서 확인한 컨트랙트 주소만 추가하세요.';
@@ -293,7 +299,7 @@ export default function TokenManagementScreen(): React.JSX.Element {
                         value={visible}
                         disabled={isNative || busyAddress === token.address}
                         onValueChange={value => handleToggle(token, value)}
-                        accessibilityLabel={`${token.symbol} 홈에 표시`}
+                        accessibilityLabel={`${token.symbol} 목록에 표시`}
                         accessibilityHint={
                           isNative
                             ? '네트워크 기본 자산은 숨길 수 없습니다'
@@ -310,6 +316,9 @@ export default function TokenManagementScreen(): React.JSX.Element {
                 })}
               </Card>
             )}
+            <ListHint testID="token-manage-zero-balance-hint">
+              {HOME_ZERO_BALANCE_HINT}
+            </ListHint>
 
             <SectionTitle accessibilityRole="header">
               사용자 토큰 추가
@@ -384,6 +393,14 @@ const SectionTitle = styled.Text`
   font-weight: 600;
   margin-top: ${({ theme }) => theme.spacing.md}px;
   margin-bottom: ${({ theme }) => theme.spacing.sm}px;
+`;
+
+const ListHint = styled.Text`
+  color: ${({ theme }) => theme.colors.textTertiary};
+  font-size: ${({ theme }) => theme.typography.caption.fontSize}px;
+  line-height: 18px;
+  margin-top: ${({ theme }) => theme.spacing.xs}px;
+  margin-left: ${({ theme }) => theme.spacing.xs}px;
 `;
 
 const Card = styled.View`

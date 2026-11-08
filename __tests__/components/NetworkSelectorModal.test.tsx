@@ -8,19 +8,21 @@ import { render, screen, fireEvent } from '../test-utils';
 
 const mockSetActiveNetwork = jest.fn();
 let mockActiveChainId = 11155111;
+const BUILT_IN = [
+  { chainId: 1, name: 'Ethereum Mainnet', symbol: 'ETH', isTestnet: false },
+  { chainId: 8453, name: 'Base', symbol: 'ETH', isTestnet: false },
+  {
+    chainId: 11155111,
+    name: 'Sepolia Testnet',
+    symbol: 'ETH',
+    isTestnet: true,
+  },
+];
+let mockNetworks: Array<Record<string, unknown>> = BUILT_IN;
 
 jest.mock('../../src/store/walletStore', () => ({
   useWalletStore: () => ({
-    networks: [
-      { chainId: 1, name: 'Ethereum Mainnet', symbol: 'ETH', isTestnet: false },
-      { chainId: 8453, name: 'Base', symbol: 'ETH', isTestnet: false },
-      {
-        chainId: 11155111,
-        name: 'Sepolia Testnet',
-        symbol: 'ETH',
-        isTestnet: true,
-      },
-    ],
+    networks: mockNetworks,
     activeNetworkChainId: mockActiveChainId,
     setActiveNetwork: mockSetActiveNetwork,
   }),
@@ -33,6 +35,7 @@ describe('NetworkSelectorModal', () => {
     jest.clearAllMocks();
     jest.spyOn(Alert, 'alert').mockImplementation(() => undefined);
     mockActiveChainId = 11155111;
+    mockNetworks = BUILT_IN;
   });
 
   it('groups networks into mainnet and testnet sections', () => {
@@ -72,6 +75,81 @@ describe('NetworkSelectorModal', () => {
     expect(Alert.alert).not.toHaveBeenCalled();
     expect(mockSetActiveNetwork).toHaveBeenCalledWith(8453);
     expect(onSelected).toHaveBeenCalledWith(8453);
+  });
+
+  describe('user-added networks', () => {
+    beforeEach(() => {
+      mockActiveChainId = 1;
+      mockNetworks = [
+        ...BUILT_IN,
+        // 기본 네트워크와 이름/통화가 같은 커스텀 네트워크
+        {
+          chainId: 1337,
+          name: 'Ethereum Mainnet',
+          symbol: 'ETH',
+          isTestnet: false,
+          isCustom: true,
+          rpcUrl: 'https://rpc.example.com',
+        },
+      ];
+    });
+
+    it('lists custom networks in their own section with a badge and chain id', () => {
+      render(<NetworkSelectorModal visible onClose={jest.fn()} />);
+
+      expect(screen.getByText('내가 추가한 네트워크')).toBeTruthy();
+      // 메인넷 묶음에는 기본 네트워크만
+      const mainnets = screen.getByTestId('network-selector-group-mainnet');
+      expect(
+        mainnets.findAll(
+          node => node.props.testID === 'network-selector-item-1337',
+        ),
+      ).toHaveLength(0);
+      const custom = screen.getByTestId('network-selector-group-custom');
+      expect(
+        custom.findAll(
+          node => node.props.testID === 'network-selector-item-1337',
+        ).length,
+      ).toBeGreaterThan(0);
+
+      expect(
+        screen.getByTestId('network-selector-item-1337-custom'),
+      ).toHaveTextContent('커스텀');
+      expect(screen.queryByTestId('network-selector-item-1-custom')).toBeNull();
+      expect(screen.getByText('ETH · 체인 ID 1337')).toBeTruthy();
+      expect(screen.getByText('ETH · 체인 ID 1')).toBeTruthy();
+      expect(
+        screen.getByTestId('network-selector-item-1337').props
+          .accessibilityLabel,
+      ).toBe('Ethereum Mainnet, ETH, 메인넷, 직접 추가함');
+      expect(
+        screen.getByTestId('network-selector-item-1').props.accessibilityLabel,
+      ).toBe('Ethereum Mainnet, ETH, 메인넷');
+      expect(
+        screen.getByText(
+          '직접 추가한 네트워크에서는 잔액 조회와 기본 통화 송금만 지원합니다.',
+        ),
+      ).toBeTruthy();
+    });
+
+    it('switches to a custom network from the shared list', () => {
+      const onSelected = jest.fn();
+      render(
+        <NetworkSelectorModal
+          visible
+          onClose={jest.fn()}
+          onSelected={onSelected}
+        />,
+      );
+      fireEvent.press(screen.getByTestId('network-selector-item-1337'));
+      expect(mockSetActiveNetwork).toHaveBeenCalledWith(1337);
+      expect(onSelected).toHaveBeenCalledWith(1337);
+    });
+
+    it('does not offer deleting networks from the Home selector', () => {
+      render(<NetworkSelectorModal visible onClose={jest.fn()} />);
+      expect(screen.queryByTestId('network-remove-1337')).toBeNull();
+    });
   });
 
   it('closes from an accessible close button', () => {

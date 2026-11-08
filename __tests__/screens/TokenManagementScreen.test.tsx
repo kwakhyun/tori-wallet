@@ -71,6 +71,7 @@ jest.mock('../../src/realm/hooks/useTokenList', () => ({
 
 import TokenManagementScreen, {
   FAKE_TOKEN_WARNING,
+  HOME_ZERO_BALANCE_HINT,
 } from '../../src/screens/Assets/TokenManagementScreen';
 
 /** Alert.alert의 특정 버튼을 누른다 */
@@ -101,6 +102,19 @@ describe('TokenManagementScreen', () => {
     expect(screen.getByTestId(`token-manage-toggle-${USDT}`).props.value).toBe(
       true,
     );
+  });
+
+  it('labels the toggle as list visibility and explains the Home zero-balance rule', () => {
+    render(<TokenManagementScreen />);
+    expect(
+      screen.getByTestId(`token-manage-toggle-${USDT}`).props
+        .accessibilityLabel,
+    ).toBe('USDT 목록에 표시');
+    expect(screen.queryByLabelText('USDT 홈에 표시')).toBeNull();
+    expect(
+      screen.getByTestId('token-manage-zero-balance-hint'),
+    ).toHaveTextContent(HOME_ZERO_BALANCE_HINT);
+    expect(HOME_ZERO_BALANCE_HINT).toContain('홈에서 숨겨집니다');
   });
 
   it('hides a default token through the Realm token list', async () => {
