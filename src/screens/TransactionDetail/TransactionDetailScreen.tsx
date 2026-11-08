@@ -4,6 +4,13 @@
  * 해시로 거래를 조회해 상태, 방향, 주소, 금액, 수수료, nonce, 블록, 시각, 네트워크를 보여 준다.
  * 대기 중인 거래는 자동으로 새로고침하며, 현재 계정에서 보낸 대기 중 거래는
  * 검토 → (PIN) → 서명 단계를 거쳐 가속하거나 취소할 수 있다.
+ *
+ * - 호출 데이터가 있는 거래(토큰 전송, 승인, 스왑 등)를 가속하면 금액을 알 수 없는 거래로 보고
+ *   거래 PIN 정책을 적용한다 (WalletConnect와 같은 기준).
+ * - 취소 거래를 가속하면 '취소 가속'으로 표시하고 계속 취소 거래로 서명한다.
+ * - 서명 직전 검토의 비용은 잔액 숨기기와 관계없이 표시한다 (송금/스왑 검토와 같음).
+ * - 비동기 작업이 끝났을 때 지갑이 잠겨 있으면 Alert 대신 토스트로 알린다
+ *   (Alert은 잠금 화면 위에 뜨지만 토스트는 잠금 해제 후 표시된다).
  */
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
@@ -138,6 +145,7 @@ export default function TransactionDetailScreen(): React.JSX.Element {
   );
 
   const txHash = route.params?.txHash ?? '';
+  const ownerKey = (wallets[activeWalletIndex]?.address ?? '').toLowerCase();
   // 화면을 연 시점의 네트워크로 고정한다 (도중에 네트워크를 바꿔도 다른 체인을 조회하지 않음).
   const [chainId] = useState(
     () => route.params?.chainId ?? activeNetworkChainId,
@@ -152,8 +160,9 @@ export default function TransactionDetailScreen(): React.JSX.Element {
   const usdPrice = useNativeUsdPrice(chainId);
 
   const query = useQuery({
-    queryKey: ['transactionDetail', chainId, txHash.toLowerCase()],
-    queryFn: () => loadTransactionDetail(txHash, chainId),
+    queryKey: ['transactionDetail', chainId, txHash.toLowerCase(), ownerKey],
+    queryFn: () =>
+      loadTransactionDetail(txHash, chainId, ownerKey || undefined),
     enabled: !!txHash,
     retry: (count, error) =>
       !(error instanceof TransactionNotFoundError) && count < 1,
@@ -174,8 +183,7 @@ export default function TransactionDetailScreen(): React.JSX.Element {
           event.replacedBy?.hash,
           event.replacement?.originalHash,
         ];
-        if (related.some(hash => sameHex(hash, txHash)))
-          refetchRef.current();
+        if (related.some(hash => sameHex(hash, txHash))) refetchRef.current();
       }),
     [chainId, txHash],
   );
@@ -203,6 +211,15 @@ export default function TransactionDetailScreen(): React.JSX.Element {
   const isOwnPending =
     detail?.status === 'pending' && sameHex(detail.from, activeAddress);
   const canReplace = isOwnPending && chainId === activeNetworkChainId;
+  // 취소 거래는 다시 취소할 대상이 없으므로 '취소 가속'만 제공한다.
+  const isCancelTx = detail?.replacementOf?.kind === 'cancel';
+
+  /** 비동기 작업 결과 알림: 잠겨 있으면 Alert 대신 (잠금 해제 후 표시되는) 토스트 */
+  const notifyFailure = useCallback((title: string, message: string) => {
+    const { hasWallet, isLocked } = useWalletStore.getState();
+    if (hasWallet && isLocked) showToast(`${title} · ${message}`, 'error');
+    else Alert.alert(title, message);
+  }, []);
 
   const copy = useCallback((value: string, label: string) => {
     Clipboard.setString(value);
@@ -232,7 +249,7 @@ export default function TransactionDetailScreen(): React.JSX.Element {
         if (mounted.current) setPlan(next);
       } catch (error) {
         if (!mounted.current) return;
-        Alert.alert(
+        notifyFailure(
           kind === 'speedUp' ? '가속할 수 없습니다' : '취소할 수 없습니다',
           error instanceof Error ? error.message : '다시 시도해주세요.',
         );
@@ -241,7 +258,7 @@ export default function TransactionDetailScreen(): React.JSX.Element {
         if (mounted.current) setPreparing(null);
       }
     },
-    [activeAddress, chainId, preparing, txHash],
+    [activeAddress, chainId, notifyFailure, preparing, txHash],
   );
 
   const submitPlan = useCallback(async () => {
@@ -273,7 +290,7 @@ export default function TransactionDetailScreen(): React.JSX.Element {
       });
     } catch (error) {
       if (!mounted.current) return;
-      Alert.alert(
+      notifyFailure(
         '제출하지 못했습니다',
         error instanceof Error ? error.message : '다시 시도해주세요.',
       );
@@ -288,11 +305,15 @@ export default function TransactionDetailScreen(): React.JSX.Element {
       sending.current = false;
       if (mounted.current) setSubmitting(false);
     }
-  }, [navigation, plan, symbol]);
+  }, [navigation, notifyFailure, plan, symbol]);
 
   const handleConfirmPlan = useCallback(() => {
     if (!plan) return;
-    const usdValue = weiToUsd(plan.totalAtRiskWei, usdPrice) ?? undefined;
+    // 호출 데이터를 다시 서명하는 가속(토큰 전송, 승인, 스왑 등)은 옮겨지는 금액을
+    // 수수료만으로 알 수 없으므로 '알 수 없는 금액'으로 보고 PIN 정책을 적용한다.
+    const usdValue = plan.data
+      ? undefined
+      : weiToUsd(plan.totalAtRiskWei, usdPrice) ?? undefined;
     if (requiresTransactionPin(usdValue)) setPinVisible(true);
     else submitPlan();
   }, [plan, requiresTransactionPin, submitPlan, usdPrice]);
@@ -302,21 +323,31 @@ export default function TransactionDetailScreen(): React.JSX.Element {
     submitPlan();
   }, [submitPlan]);
 
-  const fiatText = (wei: bigint) => {
+  /** ignoreHidden: 서명 전에 승인하는 비용은 잔액 숨기기와 관계없이 보여 준다. */
+  const fiatText = (wei: bigint, ignoreHidden = false) => {
     const usd = weiToUsd(wei, usdPrice);
-    return usd === null ? null : formatFiat(usd, { showTinyAsLessThan: true });
+    return usd === null
+      ? null
+      : formatFiat(usd, { showTinyAsLessThan: true, ignoreHidden });
   };
-  const fiatOf = (wei: bigint) => {
-    const text = fiatText(wei);
+  const fiatOf = (wei: bigint, ignoreHidden = false) => {
+    const text = fiatText(wei, ignoreHidden);
     return text ? ` (${text})` : '';
   };
 
   const renderReview = (current: ReplacementPlan) => {
     const isSpeedUp = current.kind === 'speedUp';
+    const title = current.acceleratesCancel
+      ? '취소 가속 검토'
+      : isSpeedUp
+      ? '거래 가속 검토'
+      : '거래 취소 검토';
     const rows: ReviewRow[] = [
       {
         label: '작업',
-        value: isSpeedUp
+        value: current.acceleratesCancel
+          ? `취소 가속: 0 ${symbol} 취소 거래를 더 높은 수수료로 다시 제출`
+          : isSpeedUp
           ? '가속: 같은 거래를 더 높은 수수료로 다시 제출'
           : `취소: 0 ${symbol}을 내 주소로 보내 원래 거래를 대체`,
       },
@@ -331,13 +362,13 @@ export default function TransactionDetailScreen(): React.JSX.Element {
         label: '새 거래 최대 수수료',
         value:
           formatNative(current.newMaxCostWei, symbol) +
-          fiatOf(current.newMaxCostWei),
+          fiatOf(current.newMaxCostWei, true),
       },
       {
         label: '추가 비용 (최대)',
         value:
           formatNative(current.extraCostWei, symbol) +
-          fiatOf(current.extraCostWei),
+          fiatOf(current.extraCostWei, true),
         emphasis: true,
         testID: 'review-extra-cost',
       },
@@ -345,7 +376,7 @@ export default function TransactionDetailScreen(): React.JSX.Element {
     ];
     return (
       <TransactionReviewCard
-        title={isSpeedUp ? '거래 가속 검토' : '거래 취소 검토'}
+        title={title}
         description="아래 내용으로 새 거래에 서명합니다. 같은 nonce를 사용하므로 둘 중 하나만 처리됩니다."
         rows={rows}
         warning={
@@ -353,7 +384,13 @@ export default function TransactionDetailScreen(): React.JSX.Element {
             ? '원래 거래가 먼저 처리되면 가속 거래는 무시되고 수수료가 청구되지 않습니다.'
             : '취소는 보장되지 않습니다. 원래 거래가 먼저 처리되면 취소되지 않으며, 취소에 성공해도 취소 거래 수수료는 청구됩니다.'
         }
-        confirmLabel={isSpeedUp ? '가속하기' : '취소 거래 보내기'}
+        confirmLabel={
+          current.acceleratesCancel
+            ? '취소 가속하기'
+            : isSpeedUp
+            ? '가속하기'
+            : '취소 거래 보내기'
+        }
         onConfirm={handleConfirmPlan}
         onCancel={() => setPlan(null)}
         busy={submitting}
@@ -365,13 +402,16 @@ export default function TransactionDetailScreen(): React.JSX.Element {
   const renderDetail = (current: TransactionDetail) => {
     const colors = statusColors(theme, current.status);
     const isToken = current.token && current.token.kind !== 'swap';
+    // 네이티브 자산을 판 스왑은 기호를 네트워크 기호로 채운다.
+    const tokenSymbol =
+      current.token?.symbol ?? (current.token?.nativeSell ? symbol : '');
     const amountText =
       current.token?.kind === 'approve'
-        ? `${current.token.amountDisplay} ${current.token.symbol ?? ''}`.trim()
+        ? `${current.token.amountDisplay} ${tokenSymbol}`.trim()
         : current.token
-        ? `${formatDisplayAmount(current.token.amountDisplay)} ${
-            current.token.symbol ?? ''
-          }`.trim()
+        ? `${formatDisplayAmount(
+            current.token.amountDisplay,
+          )} ${tokenSymbol}`.trim()
         : formatNative(current.valueWei, symbol);
     const showNativeFiat = !current.token;
     return (
@@ -581,13 +621,14 @@ export default function TransactionDetailScreen(): React.JSX.Element {
           <Section testID="tx-replace-actions">
             <SectionTitle>대기 중인 거래</SectionTitle>
             <HintText>
-              수수료를 올려 더 빨리 처리되게 하거나, 같은 nonce의 빈 거래로
-              대체해 취소를 시도할 수 있습니다.
+              {isCancelTx
+                ? '취소 거래의 수수료를 올려 더 빨리 처리되게 할 수 있습니다.'
+                : '수수료를 올려 더 빨리 처리되게 하거나, 같은 nonce의 빈 거래로 대체해 취소를 시도할 수 있습니다.'}
             </HintText>
             <ActionRow $inset>
               <ActionSlot>
                 <Button
-                  title="가속하기"
+                  title={isCancelTx ? '취소 가속' : '가속하기'}
                   onPress={() => handlePrepare('speedUp')}
                   loading={preparing === 'speedUp'}
                   disabled={!!preparing}
@@ -595,17 +636,19 @@ export default function TransactionDetailScreen(): React.JSX.Element {
                   testID="tx-speed-up"
                 />
               </ActionSlot>
-              <ActionSlot>
-                <Button
-                  title="거래 취소"
-                  variant="outline"
-                  onPress={() => handlePrepare('cancel')}
-                  loading={preparing === 'cancel'}
-                  disabled={!!preparing}
-                  fullWidth
-                  testID="tx-cancel"
-                />
-              </ActionSlot>
+              {isCancelTx ? null : (
+                <ActionSlot>
+                  <Button
+                    title="거래 취소"
+                    variant="outline"
+                    onPress={() => handlePrepare('cancel')}
+                    loading={preparing === 'cancel'}
+                    disabled={!!preparing}
+                    fullWidth
+                    testID="tx-cancel"
+                  />
+                </ActionSlot>
+              )}
             </ActionRow>
           </Section>
         ) : isOwnPending ? (

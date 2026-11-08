@@ -310,6 +310,47 @@ it('resolves a sped-up swap as successful in swap history', async () => {
   ).toHaveLength(1);
 });
 
+it('resolves a cancelled swap as failed when the cancel was sped up', async () => {
+  // 취소 거래를 다시 가속한 거래도 replacement:cancel:<원본>으로 기록된다.
+  const bumpedCancel = `0x${'c'.repeat(64)}`;
+  pendingRecords = [
+    record({
+      hash: bumpedCancel,
+      nonce: 3,
+      method: encodeReplacementMethod('cancel', original),
+      tokenAmount: '0',
+    }),
+  ];
+  const id = useSwapStore.getState().addHistoryItem({
+    chainId: 1,
+    timestamp: 0,
+    sellToken: { address: 'a', symbol: 'A', amount: '1' },
+    buyToken: { address: 'b', symbol: 'B', amount: '2' },
+    txHash: original,
+    status: 'pending',
+    rate: '2',
+  });
+  client.getTransactionReceipt.mockImplementation(async ({ hash }) => {
+    if (hash === bumpedCancel) return receipt;
+    throw notFound();
+  });
+  const { tracker, events } = track();
+  await tracker.reconcile();
+  expect(
+    useSwapStore.getState().history.find(item => item.id === id)?.status,
+  ).toBe('failed');
+  expect(useSwapStore.getState().favoritePairs).toHaveLength(0);
+  expect(events).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        hash: original,
+        status: 'replaced',
+        replacedBy: { hash: bumpedCancel, kind: 'cancel' },
+      }),
+    ]),
+  );
+});
+
 it('reports a replaced original once, with its replacement, when both paths race', async () => {
   pendingRecords = [
     record({ nonce: 3 }),
