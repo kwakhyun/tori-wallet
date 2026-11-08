@@ -4,8 +4,8 @@
  * 지갑 백업(복구 구문) · 잠금(PIN 변경, 생체 인증, 자동 잠금) · 거래 승인(PIN 정책, 한도)
  * · dApp 권한(토큰 승인) · 주소 기록.
  *
- * 보안을 약하게 만드는 변경(거래 PIN 끄기, 한도 올리기/없애기)과 생체 인증 활성화는
- * PIN 확인을 거친다.
+ * 보안을 약하게 만드는 변경(거래 PIN 끄기, 한도 올리기/없애기, 자동 잠금 시간 늘리기)과
+ * 생체 인증 활성화는 PIN 확인을 거친다. 보안을 강화하는 변경은 바로 적용한다.
  */
 
 import React, { useCallback, useState } from 'react';
@@ -19,6 +19,7 @@ import { ScreenHeader } from '@/components/common/ScreenHeader';
 import { useTheme } from '@/hooks/useTheme';
 import {
   AUTO_LOCK_LABELS,
+  AUTO_LOCK_OPTIONS,
   formatTransactionLimitUsd,
   useSecurityStore,
   type AutoLockOption,
@@ -53,7 +54,25 @@ type ActiveModal =
   | 'limit'
   | 'biometricPin'
   | 'disableTxPin'
+  | 'lengthenAutoLock'
   | null;
+
+/** 자동 잠금까지의 시간이 길어지는(잠금 해제 상태와 서명 세션이 더 오래 유지되는) 변경인지 */
+export function isAutoLockWeakening(
+  current: AutoLockOption,
+  next: AutoLockOption,
+): boolean {
+  return AUTO_LOCK_OPTIONS[next] > AUTO_LOCK_OPTIONS[current];
+}
+
+/** 자동 잠금 시간 라벨 + 조사 '(으)로' (예: "15분으로", "30초로") */
+function autoLockLabelWithRo(option: AutoLockOption): string {
+  const label = AUTO_LOCK_LABELS[option];
+  const code = label.charCodeAt(label.length - 1) - 0xac00;
+  const batchim = code >= 0 && code <= 11171 ? code % 28 : 0;
+  // 받침이 없거나 ㄹ 받침이면 '로', 그 밖의 받침은 '으로'
+  return `${label}${batchim === 0 || batchim === 8 ? '로' : '으로'}`;
+}
 
 /** 현재 거래 PIN 정책을 한 문장으로 설명한다. */
 export function describeTransactionPinPolicy(
@@ -100,18 +119,44 @@ export function SecuritySettingsScreen(): React.JSX.Element {
   const biometric = useBiometricSetting();
   const toSelectedCurrency = useLimitInSelectedCurrency();
   const [activeModal, setActiveModal] = useState<ActiveModal>(null);
-  const closeModal = useCallback(() => setActiveModal(null), []);
+  const [pendingAutoLock, setPendingAutoLock] = useState<AutoLockOption | null>(
+    null,
+  );
+  const closeModal = useCallback(() => {
+    setActiveModal(null);
+    setPendingAutoLock(null);
+  }, []);
 
   const limitLabel = formatTransactionLimitUsd(transactionLimit);
   const limitConverted = toSelectedCurrency(transactionLimit);
 
   const handleSelectAutoLock = useCallback(
     (option: AutoLockOption) => {
+      // 시간을 늘리면 PIN을 확인한다. 선택 시트를 닫는 것과 PIN 시트를 여는 것을 같은
+      // 상태 변경으로 처리해 두 루트 모달이 동시에 뜨지 않게 한다.
+      if (isAutoLockWeakening(autoLockTimeout, option)) {
+        setPendingAutoLock(option);
+        setActiveModal('lengthenAutoLock');
+        return;
+      }
       setAutoLockTimeout(option);
       closeModal();
     },
-    [closeModal, setAutoLockTimeout],
+    [autoLockTimeout, closeModal, setAutoLockTimeout],
   );
+
+  const handleLengthenAutoLockVerified = useCallback(() => {
+    if (pendingAutoLock === null) {
+      closeModal();
+      return;
+    }
+    setAutoLockTimeout(pendingAutoLock);
+    closeModal();
+    showToast(
+      `자동 잠금 시간을 ${autoLockLabelWithRo(pendingAutoLock)} 늘렸습니다.`,
+      'success',
+    );
+  }, [closeModal, pendingAutoLock, setAutoLockTimeout]);
 
   const handleToggleTxPin = useCallback(
     (value: boolean) => {
@@ -370,6 +415,16 @@ export function SecuritySettingsScreen(): React.JSX.Element {
         onVerified={handleDisableTxPinVerified}
         onCancel={closeModal}
         testID="disable-tx-pin-modal"
+      />
+      <PinVerifyModal
+        visible={activeModal === 'lengthenAutoLock'}
+        title="자동 잠금 시간 늘리기"
+        description={`자동 잠금 시간을 ${
+          pendingAutoLock ? `${autoLockLabelWithRo(pendingAutoLock)} ` : ''
+        }늘리면 잠금 해제 상태가 더 오래 유지됩니다. 계속하려면 PIN을 입력하세요.`}
+        onVerified={handleLengthenAutoLockVerified}
+        onCancel={closeModal}
+        testID="lengthen-auto-lock-modal"
       />
     </Screen>
   );

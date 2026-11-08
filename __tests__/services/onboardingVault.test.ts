@@ -54,6 +54,32 @@ describe('onboardingVault', () => {
     });
   });
 
+  it('discards an abandoned flow quietly so later expiry or background clears do nothing', () => {
+    jest.useFakeTimers();
+    const listener = jest.fn();
+    const unsubscribe = onboardingVault.subscribe(listener);
+    onboardingVault.start(
+      MNEMONIC,
+      '0x1234567890123456789012345678901234567890',
+      'import',
+    );
+    const version = onboardingVault.getClearVersion();
+
+    onboardingVault.discard();
+
+    expect(onboardingVault.getSnapshot()).toBeNull();
+    // AuthNavigator가 다시 그려지지 않는다 (사용자가 있는 가져오기 화면 유지).
+    expect(listener).not.toHaveBeenCalled();
+    expect(onboardingVault.getClearVersion()).toBe(version);
+
+    // 만료 타이머도 해제되어 10분 뒤 시작 화면 초기화/안내가 생기지 않는다.
+    jest.advanceTimersByTime(10 * 60 * 1000);
+    onboardingVault.clear('background');
+    expect(listener).not.toHaveBeenCalled();
+    expect(onboardingVault.getResetNotice()).toBeNull();
+    unsubscribe();
+  });
+
   it('records why an in-progress flow was discarded for the welcome screen', () => {
     onboardingVault.start(
       MNEMONIC,

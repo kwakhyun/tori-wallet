@@ -14,7 +14,13 @@ import {
 import UnlockScreen from '../../src/screens/Auth/UnlockScreen';
 import { ThemeProvider } from 'styled-components/native';
 import { lightTheme } from '../../src/styles/theme';
-import { Alert, AppState, AppStateStatus, BackHandler } from 'react-native';
+import {
+  Alert,
+  AppState,
+  AppStateStatus,
+  BackHandler,
+  StyleSheet,
+} from 'react-native';
 import {
   UnlockBackHandlerContext,
   type UnlockBackHandlerRef,
@@ -409,6 +415,39 @@ describe('UnlockScreen', () => {
       });
 
       expect(mockWalletReset).toHaveBeenCalledTimes(1);
+    });
+
+    it('keeps the danger background while resetting so the spinner stays visible (light theme)', async () => {
+      let finishReset!: () => void;
+      mockWalletReset.mockReturnValue(
+        new Promise<void>(resolve => {
+          finishReset = resolve;
+        }),
+      );
+      const view = renderWithTheme(<UnlockScreen />);
+      fireEvent.press(view.getByTestId('unlock-forgot-pin'));
+      fireEvent.changeText(
+        view.getByTestId('forgot-pin-confirm-input'),
+        '초기화',
+      );
+      fireEvent.press(view.getByTestId('forgot-pin-reset'));
+
+      const button = view.getByTestId('forgot-pin-reset');
+      expect(view.getByTestId('forgot-pin-reset-spinner').props.color).toBe(
+        lightTheme.colors.onError,
+      );
+      // 흰 스피너가 비활성 회색(#E4E4E7) 위에 놓이지 않는다.
+      const background = StyleSheet.flatten(button.props.style).backgroundColor;
+      expect(background).toBe(lightTheme.colors.error);
+      expect(background).not.toBe(lightTheme.colors.disabledBackground);
+      expect(button.props.accessibilityState).toEqual({
+        disabled: true,
+        busy: true,
+      });
+
+      await act(async () => {
+        finishReset();
+      });
     });
 
     it('shows the reset failure inline and can return to PIN entry', async () => {

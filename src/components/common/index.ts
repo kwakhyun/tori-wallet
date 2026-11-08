@@ -13,10 +13,11 @@ export { PinConfirmModal } from './PinConfirmModal';
 export { PinPad } from './PinPad';
 export type { PinPadProps, PinPadAction } from './PinPad';
 export { Screen, TabScreen, TAB_SCREEN_EDGES } from './Screen';
+export type { ScreenProps } from './Screen';
 export { ScreenHeader } from './ScreenHeader';
 export { IconButton } from './IconButton';
 export { ToastHost } from './ToastHost';
-export { OfflineBanner } from './OfflineBanner';
+export { OfflineBanner, useIsOffline } from './OfflineBanner';
 export { ErrorState, EmptyState } from './StateViews';
 
 // Logo 컴포넌트

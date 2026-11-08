@@ -3,9 +3,10 @@
  */
 
 import React from 'react';
+import { StyleSheet } from 'react-native';
 import { render, screen, fireEvent } from '@testing-library/react-native';
 import { ThemeProvider } from 'styled-components/native';
-import { theme } from '../../src/styles/theme';
+import { lightTheme, theme } from '../../src/styles/theme';
 import { Button } from '../../src/components/common/Button';
 
 const renderWithTheme = (component: React.ReactElement) => {
@@ -109,5 +110,50 @@ describe('Button Component', () => {
     renderWithTheme(<Button title="Disabled" disabled={true} />);
     const button = screen.getByRole('button');
     expect(button.props.accessibilityState.disabled).toBe(true);
+  });
+
+  describe('loading contrast (light theme)', () => {
+    const renderLight = (component: React.ReactElement) =>
+      render(<ThemeProvider theme={lightTheme}>{component}</ThemeProvider>);
+
+    it.each(['primary', 'secondary'] as const)(
+      'keeps the %s background while loading so the spinner stays visible',
+      variant => {
+        renderLight(
+          <Button title="저장" variant={variant} loading testID="save" />,
+        );
+        const button = screen.getByTestId('save');
+        const style = StyleSheet.flatten(button.props.style);
+        expect(style.backgroundColor).toBe(lightTheme.colors[variant]);
+        expect(style.backgroundColor).not.toBe(
+          lightTheme.colors.disabledBackground,
+        );
+        expect(screen.getByTestId('save-spinner').props.color).toBe(
+          variant === 'primary'
+            ? lightTheme.colors.onPrimary
+            : lightTheme.colors.onSecondary,
+        );
+        // 로딩 중에는 여전히 누를 수 없다.
+        expect(button.props.accessibilityState).toEqual({
+          disabled: true,
+          busy: true,
+        });
+      },
+    );
+
+    it('uses the disabled text color for a spinner on the disabled background', () => {
+      renderLight(<Button title="저장" loading disabled testID="save" />);
+      const style = StyleSheet.flatten(screen.getByTestId('save').props.style);
+      expect(style.backgroundColor).toBe(lightTheme.colors.disabledBackground);
+      expect(screen.getByTestId('save-spinner').props.color).toBe(
+        lightTheme.colors.disabledText,
+      );
+    });
+
+    it('still shows the disabled background when disabled without loading', () => {
+      renderLight(<Button title="저장" disabled testID="save" />);
+      const style = StyleSheet.flatten(screen.getByTestId('save').props.style);
+      expect(style.backgroundColor).toBe(lightTheme.colors.disabledBackground);
+    });
   });
 });

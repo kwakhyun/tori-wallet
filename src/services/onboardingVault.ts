@@ -91,6 +91,22 @@ class OnboardingVault {
     this.listeners.forEach(listener => listener());
   }
 
+  /**
+   * 사용자가 흐름을 떠날 때 화면을 다시 그리지 않고 조용히 폐기한다.
+   * (예: 가져오기 흐름의 PIN 설정에서 뒤로 가기 — 입력 화면은 이미 비워져 있다)
+   * 구독자에게 알리지 않고 clearVersion도 바꾸지 않으므로 AuthNavigator가 시작 화면으로
+   * 초기화되지 않는다. 만료 타이머도 함께 해제되어, 나중에 만료나 백그라운드 전환이
+   * 이미 떠난 흐름 때문에 다른 화면(입력 중인 가져오기 화면 등)을 초기화하지 않는다.
+   */
+  discard(): void {
+    if (this.expiryTimer) {
+      clearTimeout(this.expiryTimer);
+      this.expiryTimer = null;
+    }
+    this.snapshot = null;
+    this.resetNotice = null;
+  }
+
   /** 진행 중이던 흐름이 보안상 폐기되었다면 그 이유. 새 흐름을 시작하면 사라진다. */
   getResetNotice(): OnboardingResetNotice | null {
     return this.resetNotice ? { ...this.resetNotice } : null;

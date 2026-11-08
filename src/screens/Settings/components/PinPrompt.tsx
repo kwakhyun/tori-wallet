@@ -2,6 +2,9 @@
  * 설정 화면 PIN 확인 단계 (공용 PinPad + usePinVerification)
  *
  * 6자리를 모두 입력하면 자동으로 확인한다. 실패/잠금 메시지는 화면 낭독기에 알린다.
+ * 잠금 해제 화면·거래 승인 PIN과 같은 영구 실패 제한 UX를 쓴다: 제한 중에는 남은 시간을
+ * 1초마다 갱신해 보여 주고 키패드를 막으며, 실패 기록이 있으면 남은 시도 횟수를 경고한다.
+ * (실제 제한은 pinAttemptService가 강제하며 여기서는 표시만 담당한다)
  */
 
 import React, { useCallback, useRef, useState } from 'react';
@@ -11,6 +14,9 @@ import { AppModal } from '@/components/common/AppModal';
 import { PinPad } from '@/components/common/PinPad';
 import { Screen } from '@/components/common/Screen';
 import { ScreenHeader } from '@/components/common/ScreenHeader';
+import { usePinLockout } from '@/hooks/useAuthentication';
+import { describePinAttemptWarning } from '@/services/pinAttemptService';
+import { errorFeedback } from '@/utils/haptics';
 import { PIN_LENGTH, usePinVerification } from '../hooks/usePinVerification';
 import { ErrorMessage } from './SettingsUI';
 
@@ -37,36 +43,78 @@ export function PinPrompt({
     setPinState(value);
   }, []);
   const { verify, isVerifying, error, clearError } = usePinVerification();
+  const lockout = usePinLockout();
+  const { refresh: refreshLockout, lockUntil } = lockout;
 
   const submit = useCallback(
     async (value: string) => {
       const result = await verify(value);
       setPin('');
-      if (result.status === 'verified') onVerified(result.mnemonic, value);
+      if (result.status === 'verified') {
+        onVerified(result.mnemonic, value);
+        return;
+      }
+      if (result.status !== 'failed') return;
+      if (result.reason === 'locked') {
+        errorFeedback();
+        // 고정된 시각이 담긴 오류 문구 대신 실시간 카운트다운을 표시한다.
+        if (result.retryAt) lockUntil(result.retryAt);
+        clearError();
+        refreshLockout();
+      } else if (result.reason === 'invalid') {
+        errorFeedback();
+        refreshLockout();
+      }
     },
-    [verify, onVerified, setPin],
+    [clearError, lockUntil, onVerified, refreshLockout, setPin, verify],
   );
+
+  const keypadDisabled = isVerifying || lockout.isLocked;
 
   const handleDigit = useCallback(
     (digit: string) => {
-      if (isVerifying || pinRef.current.length >= PIN_LENGTH) return;
+      if (keypadDisabled || pinRef.current.length >= PIN_LENGTH) return;
       clearError();
       const next = pinRef.current + digit;
       setPin(next);
       if (next.length === PIN_LENGTH) submit(next);
     },
-    [clearError, isVerifying, setPin, submit],
+    [clearError, keypadDisabled, setPin, submit],
   );
 
   const handleDelete = useCallback(() => {
     setPin(pinRef.current.slice(0, -1));
   }, [setPin]);
 
+  const attemptWarning =
+    !lockout.isLocked && !isVerifying
+      ? describePinAttemptWarning(lockout.failures)
+      : null;
+
   return (
     <Wrapper testID={`${testIDPrefix}-prompt`}>
       <Description>{description}</Description>
-      {error ? (
+      {lockout.isLocked ? (
+        <LockoutBox testID={`${testIDPrefix}-lockout`}>
+          {/* 바뀌지 않는 안내만 라이브 영역에 두어 제한이 시작될 때 한 번 낭독한다. */}
+          <ErrorMessage testID={`${testIDPrefix}-error`}>
+            PIN 입력이 제한되었습니다.
+          </ErrorMessage>
+          {/* 1초마다 바뀌는 남은 시간은 라이브 영역으로 두지 않는다 (매초 낭독 방지). */}
+          <LockoutCountdown testID={`${testIDPrefix}-lockout-countdown`}>
+            {`${lockout.countdown} 후 다시 시도해주세요.`}
+          </LockoutCountdown>
+        </LockoutBox>
+      ) : error ? (
         <ErrorMessage testID={`${testIDPrefix}-error`}>{error}</ErrorMessage>
+      ) : null}
+      {attemptWarning ? (
+        <WarningText
+          testID={`${testIDPrefix}-attempts-warning`}
+          $strong={lockout.remainingAttempts <= 2}
+        >
+          {attemptWarning}
+        </WarningText>
       ) : null}
       {isVerifying ? (
         <Busy accessibilityLiveRegion="polite" testID={`${testIDPrefix}-busy`}>
@@ -78,8 +126,8 @@ export function PinPrompt({
         value={pin}
         onDigit={handleDigit}
         onDelete={handleDelete}
-        disabled={isVerifying}
-        error={!!error}
+        disabled={keypadDisabled}
+        error={!!error || lockout.isLocked}
         testIDPrefix={testIDPrefix}
         maxKeySize={68}
       />
@@ -114,7 +162,8 @@ export function PinVerifyModal({
       onRequestClose={onCancel}
       onLock={onCancel}
     >
-      <Screen testID={testID}>
+      {/* PIN 확인은 네트워크와 무관하므로 오프라인 배너로 키패드 공간을 줄이지 않는다. */}
+      <Screen testID={testID} offlineBanner={false}>
         <ScreenHeader
           title={title}
           leftIcon="close"
@@ -146,6 +195,27 @@ const Description = styled.Text`
   line-height: 22px;
   text-align: center;
   margin-bottom: ${({ theme }) => theme.spacing.md}px;
+`;
+
+const LockoutBox = styled.View`
+  align-items: center;
+  margin-bottom: ${({ theme }) => theme.spacing.sm}px;
+`;
+
+const LockoutCountdown = styled.Text`
+  color: ${({ theme }) => theme.colors.error};
+  font-size: 14px;
+  font-variant: tabular-nums;
+  text-align: center;
+`;
+
+// 잠금 해제 화면과 같은 표현: 제한이 가까우면 경고색으로 강조한다.
+const WarningText = styled.Text<{ $strong: boolean }>`
+  color: ${({ theme, $strong }) =>
+    $strong ? theme.colors.warning : theme.colors.textSecondary};
+  font-size: 13px;
+  text-align: center;
+  margin-bottom: ${({ theme }) => theme.spacing.sm}px;
 `;
 
 const Busy = styled.View`

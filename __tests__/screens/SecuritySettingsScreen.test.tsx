@@ -14,6 +14,7 @@ import { ThemeProvider } from 'styled-components/native';
 import {
   SecuritySettingsScreen,
   describeTransactionPinPolicy,
+  isAutoLockWeakening,
 } from '../../src/screens/Settings/SecuritySettingsScreen';
 import { darkTheme } from '../../src/styles/theme';
 import {
@@ -200,6 +201,57 @@ describe('SecuritySettingsScreen', () => {
     await waitFor(() => expect(screen.getByText('PIN 변경')).toBeTruthy());
   });
 
+  it('requires the PIN before lengthening the auto-lock timeout', async () => {
+    useSecurityStore.setState({ autoLockTimeout: '1m' });
+    renderScreen();
+    fireEvent.press(screen.getByTestId('security-auto-lock'));
+    fireEvent.press(screen.getByTestId('auto-lock-option-15m'));
+
+    // 선택 시트가 닫히고 PIN 시트가 열린다. 확인 전에는 값이 바뀌지 않는다.
+    expect(screen.queryByTestId('auto-lock-modal')).toBeNull();
+    expect(screen.getByTestId('lengthen-auto-lock-modal')).toBeTruthy();
+    expect(screen.getByText(/자동 잠금 시간을 15분으로 늘리면/)).toBeTruthy();
+    expect(useSecurityStore.getState().autoLockTimeout).toBe('1m');
+
+    await enterPin('lengthen-auto-lock-modal-pin', '000000');
+    await waitFor(() =>
+      expect(
+        screen.getByTestId('lengthen-auto-lock-modal-pin-error'),
+      ).toBeTruthy(),
+    );
+    expect(useSecurityStore.getState().autoLockTimeout).toBe('1m');
+
+    await enterPin('lengthen-auto-lock-modal-pin', CORRECT_PIN);
+    await waitFor(() =>
+      expect(useSecurityStore.getState().autoLockTimeout).toBe('15m'),
+    );
+    expect(screen.queryByTestId('lengthen-auto-lock-modal')).toBeNull();
+  });
+
+  it('keeps the auto-lock timeout when the PIN prompt is cancelled', async () => {
+    useSecurityStore.setState({ autoLockTimeout: 'immediate' });
+    renderScreen();
+    fireEvent.press(screen.getByTestId('security-auto-lock'));
+    fireEvent.press(screen.getByTestId('auto-lock-option-30s'));
+    expect(screen.getByText(/자동 잠금 시간을 30초로 늘리면/)).toBeTruthy();
+    fireEvent.press(screen.getByTestId('lengthen-auto-lock-modal-close'));
+
+    expect(screen.queryByTestId('lengthen-auto-lock-modal')).toBeNull();
+    expect(useSecurityStore.getState().autoLockTimeout).toBe('immediate');
+    await waitFor(() => expect(screen.getByText('PIN 변경')).toBeTruthy());
+  });
+
+  it('shortens the auto-lock timeout without a PIN', async () => {
+    useSecurityStore.setState({ autoLockTimeout: '5m' });
+    renderScreen();
+    fireEvent.press(screen.getByTestId('security-auto-lock'));
+    fireEvent.press(screen.getByTestId('auto-lock-option-30s'));
+
+    expect(useSecurityStore.getState().autoLockTimeout).toBe('30s');
+    expect(screen.queryByTestId('lengthen-auto-lock-modal')).toBeNull();
+    await waitFor(() => expect(screen.getByText('PIN 변경')).toBeTruthy());
+  });
+
   it('requires the PIN before enabling biometrics', async () => {
     renderScreen();
     await waitFor(() =>
@@ -255,6 +307,14 @@ describe('transaction PIN policy helpers', () => {
     expect(isTransactionLimitWeakening(100, 101)).toBe(true);
     expect(isTransactionLimitWeakening(100, null)).toBe(true);
     expect(isTransactionLimitWeakening(0, null)).toBe(true);
+  });
+
+  it('flags only longer auto-lock timeouts as weakening', () => {
+    expect(isAutoLockWeakening('1m', '15m')).toBe(true);
+    expect(isAutoLockWeakening('immediate', '30s')).toBe(true);
+    expect(isAutoLockWeakening('5m', '30s')).toBe(false);
+    expect(isAutoLockWeakening('1m', '1m')).toBe(false);
+    expect(isAutoLockWeakening('15m', 'immediate')).toBe(false);
   });
 
   it('rejects invalid stored limits', () => {

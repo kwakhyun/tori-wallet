@@ -11,13 +11,20 @@ import { DeleteWalletModal } from '../../../src/screens/Settings/components/Dele
 import { RecoveryPhraseModal } from '../../../src/screens/Settings/components/RecoveryPhraseModal';
 import { ChangePinModal } from '../../../src/screens/Settings/components/ChangePinModal';
 import { useWalletStore } from '../../../src/store/walletStore';
+import { PinPrompt } from '../../../src/screens/Settings/components/PinPrompt';
+import {
+  PinLockedError,
+  WEAK_PIN_MESSAGE,
+  pinAttemptService,
+} from '../../../src/services/pinAttemptService';
 
 const MNEMONIC =
   'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about';
 const CORRECT_PIN = '135790';
 
-const mockRetrieveMnemonicWithPin = jest.fn(async (pin: string) =>
-  pin === CORRECT_PIN ? MNEMONIC : null,
+const mockRetrieveMnemonicWithPin = jest.fn(
+  async (pin: string): Promise<string | null> =>
+    pin === CORRECT_PIN ? MNEMONIC : null,
 );
 const mockStoreMnemonic = jest.fn(
   async (_mnemonic: string, _pin: string) => undefined,
@@ -204,6 +211,35 @@ describe('ChangePinModal', () => {
     expect(queryByTestId('change-pin-error')).toBeNull();
   });
 
+  it.each(['123456', '111111', '121212'])(
+    'rejects the guessable new PIN %s with the onboarding policy',
+    async weakPin => {
+      const { getByTestId, queryByTestId } = wrap(
+        <ChangePinModal visible onClose={jest.fn()} />,
+      );
+
+      await enterPin(getByTestId, 'change-pin-current', CORRECT_PIN);
+      await waitFor(() =>
+        expect(getByTestId('change-pin-new-dots')).toBeTruthy(),
+      );
+
+      await enterPin(getByTestId, 'change-pin-new', weakPin);
+      expect(getByTestId('change-pin-error').props.children).toBe(
+        WEAK_PIN_MESSAGE,
+      );
+      // 확인 단계로 넘어가지 않고 새 PIN을 다시 입력받는다.
+      expect(queryByTestId('change-pin-confirm-dots')).toBeNull();
+      expect(getByTestId('change-pin-new-dots')).toBeTruthy();
+      expect(mockStoreMnemonic).not.toHaveBeenCalled();
+
+      // 안전한 PIN은 그대로 확인 단계로 진행한다.
+      await enterPin(getByTestId, 'change-pin-new', '246802');
+      await waitFor(() =>
+        expect(getByTestId('change-pin-confirm-dots')).toBeTruthy(),
+      );
+    },
+  );
+
   it('does not change the PIN when the current PIN is wrong', async () => {
     const { getByTestId } = wrap(
       <ChangePinModal visible onClose={jest.fn()} />,
@@ -214,5 +250,129 @@ describe('ChangePinModal', () => {
       expect(getByTestId('change-pin-current-error')).toBeTruthy(),
     );
     expect(mockStoreMnemonic).not.toHaveBeenCalled();
+  });
+});
+
+describe('PinPrompt lockout UX', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    useWalletStore.setState({ isLocked: false });
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+    jest.useRealTimers();
+  });
+
+  it('warns how many attempts remain after a wrong PIN', async () => {
+    jest
+      .spyOn(pinAttemptService, 'getStatus')
+      .mockResolvedValue({ failures: 4, blockedUntil: 0 });
+    const { getByTestId } = wrap(
+      <PinPrompt
+        description="PIN을 입력하세요."
+        onVerified={jest.fn()}
+        testIDPrefix="prompt"
+      />,
+    );
+
+    await enterPin(getByTestId, 'prompt', '000000');
+
+    await waitFor(() =>
+      expect(getByTestId('prompt-error').props.children).toBe(
+        'PIN이 올바르지 않습니다.',
+      ),
+    );
+    expect(getByTestId('prompt-attempts-warning').props.children).toBe(
+      '1번 더 틀리면 PIN 입력이 30초 동안 제한됩니다.',
+    );
+  });
+
+  it('counts down the lockout, disables the keypad and re-enables it afterwards', async () => {
+    jest.useFakeTimers({ now: new Date('2026-01-01T00:00:00Z') });
+    const retryAt = Date.now() + 30_000;
+    const getStatus = jest
+      .spyOn(pinAttemptService, 'getStatus')
+      .mockResolvedValue({ failures: 4, blockedUntil: 0 });
+    // 다섯 번째 실패로 제한이 시작된다.
+    mockRetrieveMnemonicWithPin.mockImplementationOnce(async () => {
+      getStatus.mockResolvedValue({ failures: 5, blockedUntil: retryAt });
+      throw new PinLockedError(retryAt);
+    });
+    const onVerified = jest.fn();
+    const { getByTestId, queryByTestId } = wrap(
+      <PinPrompt
+        description="PIN을 입력하세요."
+        onVerified={onVerified}
+        testIDPrefix="prompt"
+      />,
+    );
+
+    await enterPin(getByTestId, 'prompt', '000000');
+
+    // 바뀌지 않는 안내만 라이브 영역으로 한 번 낭독하고, 남은 시간은 낭독 영역 밖에 둔다.
+    const notice = getByTestId('prompt-error');
+    expect(notice.props.children).toBe('PIN 입력이 제한되었습니다.');
+    expect(notice.props.accessibilityLiveRegion).toBe('polite');
+    const countdown = getByTestId('prompt-lockout-countdown');
+    expect(countdown.props.children).toBe('00:30 후 다시 시도해주세요.');
+    expect(countdown.props.accessibilityLiveRegion).toBeUndefined();
+    expect(getByTestId('prompt-key-1').props.accessibilityState.disabled).toBe(
+      true,
+    );
+
+    // 남은 시간이 1초마다 갱신된다.
+    await act(async () => {
+      jest.advanceTimersByTime(1000);
+    });
+    expect(getByTestId('prompt-lockout-countdown').props.children).toBe(
+      '00:29 후 다시 시도해주세요.',
+    );
+
+    // 제한 중에는 입력을 받지 않는다.
+    fireEvent.press(getByTestId('prompt-key-1'));
+    expect(mockRetrieveMnemonicWithPin).toHaveBeenCalledTimes(1);
+
+    getStatus.mockResolvedValue({ failures: 5, blockedUntil: 0 });
+    await act(async () => {
+      jest.advanceTimersByTime(30_000);
+    });
+
+    // 제한이 풀리면 고정된 오류 문구 대신 다음 실패 경고만 남고 키패드가 다시 열린다.
+    expect(getByTestId('prompt-key-1').props.accessibilityState.disabled).toBe(
+      false,
+    );
+    expect(getByTestId('prompt-attempts-warning').props.children).toBe(
+      '다시 틀리면 PIN 입력이 1분 동안 제한됩니다.',
+    );
+    expect(queryByTestId('prompt-error')).toBeNull();
+    expect(queryByTestId('prompt-lockout')).toBeNull();
+
+    await enterPin(getByTestId, 'prompt', CORRECT_PIN);
+    expect(onVerified).toHaveBeenCalledWith(MNEMONIC, CORRECT_PIN);
+  });
+
+  it('shows a lockout that started elsewhere as soon as the prompt opens', async () => {
+    // 예: 잠금 해제 화면에서 시작된 제한이 남아 있는 상태로 복구 구문 보기를 연다.
+    jest
+      .spyOn(pinAttemptService, 'getStatus')
+      .mockResolvedValue({ failures: 6, blockedUntil: Date.now() + 90_000 });
+    const { getByTestId, findByTestId } = wrap(
+      <PinPrompt
+        description="PIN을 입력하세요."
+        onVerified={jest.fn()}
+        testIDPrefix="prompt"
+      />,
+    );
+
+    await findByTestId('prompt-lockout');
+    expect(getByTestId('prompt-lockout-countdown').props.children).toMatch(
+      /^01:(30|29) 후 다시 시도해주세요\.$/,
+    );
+    expect(getByTestId('prompt-key-1').props.accessibilityState.disabled).toBe(
+      true,
+    );
+    fireEvent.press(getByTestId('prompt-key-1'));
+    expect(mockRetrieveMnemonicWithPin).not.toHaveBeenCalled();
   });
 });

@@ -67,6 +67,10 @@ export function describePinAttemptWarning(failures: number): string | null {
   )} 동안 제한됩니다.`;
 }
 
+/** 추측하기 쉬운 PIN을 거부할 때 표시하는 공통 문구 (PIN 설정·PIN 변경) */
+export const WEAK_PIN_MESSAGE =
+  '추측하기 쉬운 PIN입니다. 같은 숫자 반복(111111), 연속된 숫자(123456, 654321), 반복 패턴(121212)은 사용할 수 없습니다.';
+
 /**
  * 추측하기 쉬운 PIN인지 확인한다.
  *  - 같은 숫자 반복: 000000, 111111

@@ -1762,10 +1762,11 @@ const ButtonRow = styled.View`
   flex-direction: row;
 `;
 
-const FlexButton = styled.TouchableOpacity<{ disabled?: boolean }>`
+// 전송 버튼은 전송 중에만 비활성화되며 그동안 흰 스피너를 보여 주므로, 비활성 회색 대신
+// 활성 배경을 유지해 스피너가 보이게 한다 (누를 수 없는 상태는 disabled가 처리한다).
+const FlexButton = styled.TouchableOpacity`
   flex: 1;
-  background-color: ${({ theme, disabled }) =>
-    disabled ? theme.colors.disabledBackground : theme.colors.primary};
+  background-color: ${({ theme }) => theme.colors.primary};
   border-radius: ${({ theme }) => theme.borderRadius.md}px;
   min-height: 48px;
   justify-content: center;

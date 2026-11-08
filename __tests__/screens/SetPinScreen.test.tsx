@@ -77,11 +77,13 @@ const mockMnemonic =
 const mockSnapshot = jest.fn();
 const mockIsActive = jest.fn();
 const mockClear = jest.fn();
+const mockDiscard = jest.fn();
 jest.mock('../../src/services/onboardingVault', () => ({
   onboardingVault: {
     getSnapshot: () => mockSnapshot(),
     isActive: (id: number) => mockIsActive(id),
     clear: (reason?: string) => mockClear(reason),
+    discard: () => mockDiscard(),
   },
 }));
 
@@ -259,6 +261,50 @@ describe('SetPinScreen', () => {
       const preventDefault = jest.fn();
       mockBeforeRemove.forEach(listener => listener({ preventDefault }));
       expect(preventDefault).not.toHaveBeenCalled();
+      // 생성 흐름의 이전 화면(구문 확인)은 복구 구문을 다시 사용한다.
+      expect(mockDiscard).not.toHaveBeenCalled();
+      expect(mockClear).not.toHaveBeenCalled();
+    });
+
+    it('quietly discards the imported phrase when leaving the import flow from the create step', () => {
+      mockSnapshot.mockReturnValue({
+        sessionId: 1,
+        mnemonic: mockMnemonic,
+        walletAddress: '0x1234567890123456789012345678901234567890',
+        source: 'import',
+      });
+      const view = renderWithTheme(<SetPinScreen />);
+
+      fireEvent.press(view.getByTestId('set-pin-back'));
+      expect(mockGoBack).toHaveBeenCalledTimes(1);
+
+      // goBack이 일으키는 beforeRemove (Android 하드웨어 뒤로 가기도 같은 경로)
+      const preventDefault = jest.fn();
+      mockBeforeRemove.forEach(listener => listener({ preventDefault }));
+
+      expect(preventDefault).not.toHaveBeenCalled();
+      expect(mockDiscard).toHaveBeenCalledTimes(1);
+      // clear()는 AuthNavigator를 시작 화면으로 다시 그리므로 쓰지 않는다.
+      expect(mockClear).not.toHaveBeenCalled();
+    });
+
+    it('keeps the imported phrase when back on the confirm step only returns to the create step', () => {
+      mockSnapshot.mockReturnValue({
+        sessionId: 1,
+        mnemonic: mockMnemonic,
+        walletAddress: '0x1234567890123456789012345678901234567890',
+        source: 'import',
+      });
+      const view = renderWithTheme(<SetPinScreen />);
+      enterPin(view, STRONG_PIN);
+
+      const preventDefault = jest.fn();
+      act(() => {
+        mockBeforeRemove.forEach(listener => listener({ preventDefault }));
+      });
+
+      expect(preventDefault).toHaveBeenCalled();
+      expect(mockDiscard).not.toHaveBeenCalled();
     });
 
     it('uses import copy while importing a wallet', async () => {

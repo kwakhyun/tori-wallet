@@ -516,13 +516,17 @@ function ImportWalletScreen(): React.JSX.Element {
             testID="import-wallet-confirm"
             onPress={handleImport}
             disabled={!canImport}
-            $enabled={canImport}
+            // 가져오는 중에는 누를 수 없지만 활성 배경을 유지해 흰 스피너가 보이게 한다.
+            $enabled={canImport || isLoading}
             accessibilityRole="button"
             accessibilityLabel="지갑 가져오기"
             accessibilityState={{ disabled: !canImport, busy: isLoading }}
           >
             {isLoading ? (
-              <ActivityIndicator color={theme.colors.onPrimary} />
+              <ActivityIndicator
+                color={theme.colors.onPrimary}
+                testID="import-wallet-confirm-spinner"
+              />
             ) : (
               <ImportButtonText $enabled={canImport}>
                 지갑 가져오기
