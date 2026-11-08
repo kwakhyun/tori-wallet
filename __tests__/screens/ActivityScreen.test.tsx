@@ -8,6 +8,7 @@
 
 import React from 'react';
 import { act } from '@testing-library/react-native';
+import { focusManager } from '@tanstack/react-query';
 import { render, screen, fireEvent, waitFor } from '../test-utils';
 import { usePreferencesStore } from '../../src/store/preferencesStore';
 import { useSwapStore } from '../../src/store/swapStore';
@@ -327,6 +328,35 @@ describe('ActivityScreen', () => {
       expect(mockRefetchCache).toHaveBeenCalled();
       expect(mockClearCache).toHaveBeenCalledWith(ME, 1);
       await waitFor(() => expect(mockGetHistoryPage).toHaveBeenCalledTimes(2));
+    });
+
+    it('re-reads local records when a transaction leaves the pending list without a tracker event', async () => {
+      // 스왑 화면이 승인 거래 영수증을 직접 기다려 Realm에 확정을 기록하는 경우:
+      // 추적기 이벤트가 없어도 대기 목록에서 빠진 거래를 로컬 기록으로 계속 보여야 한다.
+      mockGetHistoryPage.mockResolvedValue({
+        transactions: [],
+        hasMore: false,
+      });
+      mockGetPending.mockResolvedValue([pendingEntry]);
+      render(<ActivityScreen />);
+      await waitFor(() => screen.getByTestId('activity-pending-badge'));
+      mockRefetchCache.mockClear();
+
+      mockGetPending.mockResolvedValue([]);
+      mockCached = [{ ...pendingEntry, status: 'confirmed' }];
+      // 대기 목록 쿼리만 다시 읽힌다 (포커스 복귀 → staleTime 0인 대기 목록만 재조회).
+      act(() => {
+        focusManager.setFocused(false);
+        focusManager.setFocused(true);
+      });
+
+      await waitFor(() => expect(mockRefetchCache).toHaveBeenCalled());
+      expect(screen.queryByTestId('activity-pending-badge')).toBeNull();
+      expect(screen.getByTestId('activity-tx-0xpending')).toBeTruthy();
+      expect(mockClearCache).not.toHaveBeenCalled();
+      act(() => {
+        focusManager.setFocused(undefined);
+      });
     });
 
     it('ignores tracker events for other networks', async () => {

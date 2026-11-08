@@ -462,6 +462,18 @@ function ActivityScreen(): React.JSX.Element {
     [activeNetworkChainId],
   );
 
+  // 대기 목록에서 빠진 거래는 로컬 기록을 다시 읽어 확정 상태로 계속 보이게 한다.
+  // 추적기를 거치지 않고 확정되는 거래(스왑 화면이 직접 기록하는 승인 거래 등)도 사라지지 않는다.
+  const previousPendingHashes = useRef<Set<string> | null>(null);
+  useEffect(() => {
+    if (!Array.isArray(pendingQuery.data)) return;
+    const next = new Set(pendingQuery.data.map(tx => lower(tx.hash)));
+    const previous = previousPendingHashes.current;
+    previousPendingHashes.current = next;
+    if (previous && [...previous].some(hash => !next.has(hash)))
+      refetchCache?.();
+  }, [pendingQuery.data, refetchCache]);
+
   // API 첫 페이지를 로컬 캐시에 반영 (대기 중이던 로컬 거래의 확정 상태 갱신 포함)
   const firstPage = historyQuery.data?.pages[0]?.transactions;
   useEffect(() => {
