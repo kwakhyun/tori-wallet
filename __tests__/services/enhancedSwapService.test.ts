@@ -512,6 +512,97 @@ describe('EnhancedSwapService', () => {
       expect(quote!.sellValueUsd).toBeNull();
     });
 
+    it('looks up the native price once and in parallel with token prices', async () => {
+      routeFetch({
+        quote: quoteFor('450000'),
+        nativeUsd: 0.5,
+        tokenUsd: { [usdc.address]: 1 },
+      });
+
+      await enhancedSwapService.getQuote(
+        {
+          sellToken: matic,
+          buyToken: usdc,
+          sellAmount: '1',
+          takerAddress: taker,
+        },
+        137,
+      );
+
+      const urls = (global.fetch as jest.Mock).mock.calls.map(
+        ([url]) => url as string,
+      );
+      expect(urls.filter(url => url.includes('/simple/price?'))).toHaveLength(
+        1,
+      );
+      expect(
+        urls.filter(url => url.includes('/simple/token_price/')),
+      ).toHaveLength(1);
+    });
+
+    it('does not let a stalled price lookup hold the quote', async () => {
+      jest.useFakeTimers();
+      try {
+        (global.fetch as jest.Mock).mockImplementation(async (url: string) => {
+          if (url.includes('/swap/allowance-holder/quote')) {
+            return {
+              ok: true,
+              status: 200,
+              json: async () => quoteFor('450000'),
+            };
+          }
+          // CoinGecko 연결이 멈춘다 (signal도 무시).
+          return new Promise(() => {});
+        });
+
+        const pending = enhancedSwapService.getQuote(
+          {
+            sellToken: matic,
+            buyToken: usdc,
+            sellAmount: '1',
+            takerAddress: taker,
+          },
+          137,
+        );
+        let settled = false;
+        pending.then(() => {
+          settled = true;
+        });
+        await jest.advanceTimersByTimeAsync(5_900);
+        expect(settled).toBe(false);
+        await jest.advanceTimersByTimeAsync(200);
+        expect(settled).toBe(true);
+
+        const quote = await pending;
+        expect(enhancedSwapService.calculatePriceImpact(quote!)).toEqual({
+          percent: null,
+          level: 'unknown',
+        });
+        expect(quote!.sellValueUsd).toBeNull();
+        expect(quote!.nativePriceUsd).toBeNull();
+      } finally {
+        jest.useRealTimers();
+        (global.fetch as jest.Mock).mockReset();
+      }
+    });
+
+    it('times out plain token price lookups', async () => {
+      jest.useFakeTimers();
+      try {
+        (global.fetch as jest.Mock).mockImplementation(
+          () => new Promise(() => {}),
+        );
+        const single = enhancedSwapService.getTokenPrice('stalled-coin');
+        const many = enhancedSwapService.getTokenPrices(['stalled-coin']);
+        await jest.advanceTimersByTimeAsync(6_000);
+        await expect(single).resolves.toBeNull();
+        await expect(many).resolves.toEqual({});
+      } finally {
+        jest.useRealTimers();
+        (global.fetch as jest.Mock).mockReset();
+      }
+    });
+
     it('has no USD prices on testnets', async () => {
       await expect(
         enhancedSwapService.getNativeUsdPrice(11155111),

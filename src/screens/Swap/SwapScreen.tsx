@@ -17,7 +17,7 @@ import { useShallow } from 'zustand/react/shallow';
 import { StatusBar, ScrollView, Alert, ActivityIndicator } from 'react-native';
 import styled, { useTheme as useStyledTheme } from 'styled-components/native';
 import { useTheme } from '@/hooks/useTheme';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, usePreventRemove } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import {
   encodeFunctionData,
@@ -33,6 +33,7 @@ import { useWalletStore } from '@/store/walletStore';
 import { useSwapStore, resolveSlippage } from '@/store/swapStore';
 import { useSecurityStore } from '@/store/securityStore';
 import { showToast } from '@/store/toastStore';
+import { useWalletLocked } from '@/hooks/useWalletLocked';
 import {
   useBalance,
   useMultipleBalances,
@@ -42,7 +43,9 @@ import { useFiat } from '@/hooks/useFiat';
 import {
   swapService,
   describeSwapError,
+  isInsufficientFundsError,
   isNativeSwapToken,
+  isReceiptTimeoutError,
   nativeSwapMax,
   SwapError,
   SWAP_GAS_LIMIT_ESTIMATE,
@@ -90,7 +93,49 @@ type PriceState =
   | { status: 'ready'; insufficientBalance: boolean }
   | { status: 'error'; message: string };
 
+/** 토큰 승인 후 다시 검토해야 하는 이유 */
+type ReReviewReason = 'expired' | 'locked';
+
+interface ReviewOptions {
+  /** 승인 트랜잭션 확정 후 다시 검토하는 경우 그 이유 */
+  afterApproval?: ReReviewReason;
+  /** 열려 있는 검토 모달의 '견적 새로고침' */
+  refreshing?: boolean;
+}
+
+interface ApprovalOutcome {
+  status: 'not-needed' | 'approved' | 'failed';
+  /** 보낸(또는 보내려던) 승인 관련 트랜잭션 수 (초기화 포함) */
+  transactions: number;
+}
+
 const UNKNOWN_IMPACT: PriceImpactInfo = { percent: null, level: 'unknown' };
+
+const RE_REVIEW_NOTICES: Record<ReReviewReason, string> = {
+  expired:
+    '토큰 승인이 완료되었습니다. 승인을 기다리는 동안 견적이 만료되어 새 견적을 받았습니다. 내용을 다시 확인한 뒤 스왑을 진행해주세요.',
+  locked:
+    '토큰 승인이 완료되었습니다. 그동안 지갑이 잠겨 스왑을 보내지 않았으므로 새 견적을 받았습니다. 내용을 다시 확인한 뒤 스왑을 진행해주세요.',
+};
+
+const LOCKED_AFTER_APPROVAL_MESSAGE =
+  '지갑이 잠겨 스왑을 보내지 않았습니다. 토큰 승인은 완료되었으며, 잠금을 해제하면 새 견적으로 다시 검토합니다.';
+const LOCKED_BEFORE_SWAP_MESSAGE =
+  '지갑이 잠겨 스왑을 보내지 않았습니다. 잠금을 해제한 뒤 다시 시도해주세요.';
+const APPROVED_NOT_SENT_MESSAGE =
+  '토큰 승인은 완료되었지만 스왑은 전송되지 않았습니다. 스왑 화면에서 다시 진행해주세요.';
+
+/**
+ * 비동기 흐름에서 읽는 현재 잠금 상태 (렌더링 시점 값이 아닌 스토어 값).
+ * 거래 서명은 잠금 해제가 확실할 때만 허용한다.
+ */
+function isWalletLockedNow(): boolean {
+  return useWalletStore.getState().isLocked !== false;
+}
+
+function withStep(label: string, step: number, total: number): string {
+  return total > 1 ? `${label} (${step}/${total})` : label;
+}
 
 function SwapScreen(): React.JSX.Element {
   const { isDarkMode } = useTheme();
@@ -106,6 +151,7 @@ function SwapScreen(): React.JSX.Element {
         networks: state.networks,
       })),
     );
+  const walletLocked = useWalletLocked();
 
   const activeWallet = wallets[activeWalletIndex];
   // 객체 참조가 아니라 주소 문자열에 의존해 불필요한 견적 초기화를 막는다.
@@ -113,16 +159,27 @@ function SwapScreen(): React.JSX.Element {
   const activeNetwork = networks.find(n => n.chainId === activeNetworkChainId);
   const nativeSymbol = activeNetwork?.symbol || 'ETH';
 
-  // 서명 중 계정/네트워크가 바뀌면 서명을 막는다.
+  // 서명 중 계정/네트워크가 바뀌거나 지갑이 잠기면 서명을 막는다.
   const mounted = useRef(true);
   const currentAccount = useRef(activeWallet?.address);
   currentAccount.current = activeWallet?.address;
   const currentChain = useRef(activeNetworkChainId);
   currentChain.current = activeNetworkChainId;
-  useEffect(
-    () => () => {
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
       mounted.current = false;
-    },
+    };
+  }, []);
+
+  // 잠길 때마다 증가한다. 진행 중인 승인→스왑 흐름은 도중에 한 번이라도 잠기면
+  // (잠금 해제 후라도) 이어서 서명하지 않고 다시 검토를 받는다.
+  const lockEpoch = useRef(0);
+  useEffect(
+    () =>
+      useWalletStore.subscribe((state, previous) => {
+        if (state.isLocked && !previous.isLocked) lockEpoch.current += 1;
+      }),
     [],
   );
 
@@ -161,6 +218,9 @@ function SwapScreen(): React.JSX.Element {
     chainId: number;
   } | null>(null);
 
+  // 견적을 받는 중이거나 스왑 중에는 입력을 바꿀 수 없다 (검토 내용과 실행 의도가 어긋나지 않게).
+  const inputsLocked = isPreparingReview || isSwapping;
+
   // 스왑 스토어
   const {
     settings,
@@ -190,7 +250,7 @@ function SwapScreen(): React.JSX.Element {
   );
 
   // 잔액
-  const { data: nativeBalance } = useBalance(
+  const { data: nativeBalance, isError: nativeBalanceError } = useBalance(
     activeWallet?.address,
     activeNetworkChainId,
   );
@@ -246,6 +306,12 @@ function SwapScreen(): React.JSX.Element {
         : null,
     [sellToken, buyToken, takerAddress, sellUnits, sellAmount, slippage],
   );
+  // 비동기 결과가 도착했을 때 그 사이 의도가 바뀌었는지 확인한다.
+  const swapIntentRef = useRef(swapIntent);
+  swapIntentRef.current = swapIntent;
+
+  // 승인 후 잠금/화면 이탈로 미뤄 둔 재검토
+  const pendingReReview = useRef<ReReviewReason | null>(null);
 
   // 네트워크 변경 시 초기화
   useEffect(() => {
@@ -288,6 +354,8 @@ function SwapScreen(): React.JSX.Element {
   useEffect(() => {
     setQuote(null);
     setApproval(null);
+    // 이전 의도에 대한 재검토는 더 이상 의미가 없다.
+    pendingReReview.current = null;
     if (!swapIntent || availability !== 'supported') {
       priceRequestId.current++;
       setBuyAmount('');
@@ -303,12 +371,30 @@ function SwapScreen(): React.JSX.Element {
     return () => clearTimeout(timeoutId);
   }, [swapIntent, availability, fetchPrice]);
 
-  const isAuthorizedFor = useCallback(
-    (account: string, chainId: number) => () =>
+  /** 서명 직전마다 확인: 화면, 계정, 네트워크가 그대로이고 그동안 잠긴 적이 없는지 */
+  const isAuthorizedFor = useCallback((account: string, chainId: number) => {
+    const epoch = lockEpoch.current;
+    return () =>
       mounted.current &&
       currentAccount.current === account &&
-      currentChain.current === chainId,
-    [],
+      currentChain.current === chainId &&
+      lockEpoch.current === epoch &&
+      !isWalletLockedNow();
+  }, []);
+
+  /**
+   * 실패 안내. 잠금 화면 위나 다른 화면 위에는 Alert을 띄우지 않고 토스트로 바꾼다
+   * (토스트는 잠긴 동안 보류되었다가 잠금 해제 후 표시된다).
+   */
+  const alertOrToast = useCallback(
+    (title: string, message: string) => {
+      if (!mounted.current || isWalletLockedNow() || !navigation.isFocused()) {
+        showToast(message, 'error');
+        return;
+      }
+      Alert.alert(title, message);
+    },
+    [navigation],
   );
 
   /** 현재 승인량을 읽어 승인 트랜잭션이 필요한지 판단한다. */
@@ -335,7 +421,15 @@ function SwapScreen(): React.JSX.Element {
               swapQuote.allowanceTarget as `0x${string}`,
             ],
           });
-        return allowance >= required ? null : requirement;
+        if (allowance >= required) return null;
+        // 남은 승인량을 먼저 0으로 초기화해야 하는 토큰 (메인넷 USDT 등)
+        return allowance > 0n &&
+          swapService.requiresAllowanceReset(
+            activeNetworkChainId,
+            sellToken.address,
+          )
+          ? { ...requirement, resetRequired: true }
+          : requirement;
       } catch {
         // 확인할 수 없으면 승인이 필요하다고 안내하고, 실행 직전에 다시 확인한다.
         return requirement;
@@ -344,43 +438,69 @@ function SwapScreen(): React.JSX.Element {
     [sellToken, takerAddress, sellAmount, activeNetworkChainId],
   );
 
+  // 검토 요청 번호: 입력 변경, 모달 닫기, 새 요청이 있으면 이전 결과를 버린다.
+  const reviewRequestId = useRef(0);
+  const cancelPendingReview = useCallback(() => {
+    reviewRequestId.current += 1;
+    setIsPreparingReview(false);
+    setIsRefreshingQuote(false);
+  }, []);
+
   /**
    * 실행 가능한 견적을 받아 검토 모달을 연다.
-   * afterApproval: 승인 후 견적이 만료되어 다시 검토해야 하는 경우
+   * afterApproval: 승인 후 견적이 만료되었거나 지갑이 잠겨 다시 검토해야 하는 경우
+   * refreshing: 열려 있는 검토 모달에서 견적을 새로 받는 경우
    */
   const prepareReview = useCallback(
-    async (options: { afterApproval?: boolean } = {}) => {
+    async (options: ReviewOptions = {}) => {
       if (!swapIntent || !buyToken) return;
-      const refreshing = showReviewModal;
+      const intent = swapIntent;
+      const requestId = ++reviewRequestId.current;
+      const refreshing = options.refreshing === true;
       if (refreshing) setIsRefreshingQuote(true);
       else setIsPreparingReview(true);
+
+      const isCurrent = () =>
+        mounted.current &&
+        requestId === reviewRequestId.current &&
+        swapIntentRef.current === intent;
+      // 잠겨 있거나 다른 화면이 위에 있으면 모달을 열지 않는다.
+      // 승인 후 재검토는 잠금 해제/화면 복귀 후 다시 시도한다.
+      const deferIfHidden = () => {
+        if (!isWalletLockedNow() && navigation.isFocused()) return false;
+        if (options.afterApproval) {
+          pendingReReview.current = options.afterApproval;
+        }
+        return true;
+      };
+
       try {
         const latest = await enhancedSwapService.getQuote(
-          swapIntent,
+          intent,
           activeNetworkChainId,
         );
         if (!latest) throw new SwapError('UNSUPPORTED_CHAIN');
         const requirement = await readApprovalRequirement(latest);
-        if (!mounted.current) return;
+        if (!isCurrent() || deferIfHidden()) return;
         setQuote(latest);
         setApproval(requirement);
         setBuyAmount(formatUnits(BigInt(latest.buyAmount), buyToken.decimals));
         setPriceImpact(enhancedSwapService.calculatePriceImpact(latest));
         setReviewNotice(
           options.afterApproval
-            ? '토큰 승인이 완료되었습니다. 승인을 기다리는 동안 견적이 만료되어 새 견적을 받았습니다. 내용을 다시 확인한 뒤 스왑을 진행해주세요.'
+            ? RE_REVIEW_NOTICES[options.afterApproval]
             : null,
         );
         setShowReviewModal(true);
       } catch (error) {
-        if (!mounted.current) return;
-        const message = describeSwapError(error);
+        if (!isCurrent() || deferIfHidden()) return;
+        const message = describeSwapError(error, { nativeSymbol });
         if (options.afterApproval) {
           // 만료된 견적으로는 진행하지 않는다.
           setQuote(null);
           setApproval(null);
           setPriceState({ status: 'error', message });
-          Alert.alert(
+          alertOrToast(
             '새 견적을 받지 못했습니다',
             `토큰 승인은 완료되었습니다. ${message}\n\n잠시 후 다시 검토해주세요.`,
           );
@@ -390,7 +510,7 @@ function SwapScreen(): React.JSX.Element {
           setPriceState({ status: 'error', message });
         }
       } finally {
-        if (mounted.current) {
+        if (mounted.current && requestId === reviewRequestId.current) {
           setIsRefreshingQuote(false);
           setIsPreparingReview(false);
         }
@@ -399,11 +519,57 @@ function SwapScreen(): React.JSX.Element {
     [
       swapIntent,
       buyToken,
-      showReviewModal,
       activeNetworkChainId,
       readApprovalRequirement,
+      navigation,
+      nativeSymbol,
+      alertOrToast,
     ],
   );
+  const prepareReviewRef = useRef(prepareReview);
+  prepareReviewRef.current = prepareReview;
+
+  /** 미뤄 둔 승인 후 재검토를 잠금 해제·화면 복귀 시 실행한다. */
+  const flushPendingReReview = useCallback(() => {
+    const reason = pendingReReview.current;
+    if (
+      !reason ||
+      !mounted.current ||
+      isWalletLockedNow() ||
+      !navigation.isFocused()
+    ) {
+      return;
+    }
+    pendingReReview.current = null;
+    prepareReviewRef.current({ afterApproval: reason });
+  }, [navigation]);
+
+  useEffect(() => {
+    if (!walletLocked) flushPendingReReview();
+  }, [walletLocked, flushPendingReReview]);
+
+  useEffect(
+    () => navigation.addListener('focus', flushPendingReReview),
+    [navigation, flushPendingReReview],
+  );
+
+  // 스왑 중에는 화면을 벗어나지 않게 한다 (헤더, Android 뒤로 가기, iOS 스와이프).
+  usePreventRemove(isSwapping, ({ data }) => {
+    // 잠금 화면 위에 Alert을 띄우지 않는다. 잠긴 동안에는 그대로 머문다.
+    if (isWalletLockedNow()) return;
+    Alert.alert(
+      '스왑 진행 중',
+      '스왑을 처리하고 있습니다. 지금 나가면 아직 보내지 않은 스왑은 전송되지 않습니다. 이미 보낸 토큰 승인은 그대로 처리됩니다.',
+      [
+        { text: '머무르기', style: 'cancel' },
+        {
+          text: '나가기',
+          style: 'destructive',
+          onPress: () => navigation.dispatch(data.action),
+        },
+      ],
+    );
+  });
 
   // 토큰 위치 스왑
   const handleSwapTokens = useCallback(() => {
@@ -490,6 +656,12 @@ function SwapScreen(): React.JSX.Element {
     nativeSymbol,
   ]);
 
+  // 검토 모달 닫기: 진행 중인 새로고침 결과로 모달이 다시 열리지 않게 한다.
+  const handleCloseReview = useCallback(() => {
+    setShowReviewModal(false);
+    cancelPendingReview();
+  }, [cancelPendingReview]);
+
   // 검토 모달에서 확인 → PIN (거래 USD 가치를 함께 전달)
   const handleConfirmSwap = () => {
     setShowReviewModal(false);
@@ -508,60 +680,59 @@ function SwapScreen(): React.JSX.Element {
   };
 
   /**
-   * 정확한 수량만 승인한다. 이미 충분하면 'not-needed'.
+   * approve(spender, amount) 한 건을 보내고 확정을 기다린다. 확정되면 true.
+   * amount가 0이면 기존 승인량 초기화 트랜잭션이다.
    */
-  const approveExactAmount = async (
-    swapQuote: SwapQuote,
-    isAuthorized: () => boolean,
-  ): Promise<'not-needed' | 'approved' | 'failed'> => {
-    if (!sellToken || !activeWallet) return 'failed';
-    const client = chainClient.getClient(activeNetworkChainId);
+  const sendApproval = async ({
+    token,
+    owner,
+    spender,
+    amount,
+    step,
+    total,
+    chainId,
+    isAuthorized,
+  }: {
+    token: SwapToken;
+    owner: string;
+    spender: `0x${string}`;
+    amount: bigint;
+    step: number;
+    total: number;
+    chainId: number;
+    isAuthorized: () => boolean;
+  }): Promise<boolean> => {
+    const isReset = amount === 0n;
+    const client = chainClient.getClient(chainId);
+    const subject = isReset ? '기존 승인 초기화' : '토큰 승인';
 
-    if (!isAddress(swapQuote.allowanceTarget)) {
-      throw new Error('유효하지 않은 승인 대상 주소입니다.');
-    }
-
-    const requiredAmount = parseUnits(sellAmount, sellToken.decimals);
-    const allowance = await client.readContract({
-      address: sellToken.address as `0x${string}`,
-      abi: erc20Abi,
-      functionName: 'allowance',
-      args: [
-        activeWallet.address as `0x${string}`,
-        swapQuote.allowanceTarget as `0x${string}`,
-      ],
-    });
-    if (allowance >= requiredAmount) return 'not-needed';
-
-    setSwapStage('토큰 승인 중… (1/2)');
+    setSwapStage(
+      withStep(isReset ? '기존 승인 초기화 중…' : '토큰 승인 중…', step, total),
+    );
     const approvalData = encodeFunctionData({
       abi: erc20Abi,
       functionName: 'approve',
-      args: [swapQuote.allowanceTarget as `0x${string}`, requiredAmount],
+      args: [spender, amount],
     });
     const approveTxHash = await signingService.sendTransaction(
-      {
-        from: activeWallet.address,
-        to: sellToken.address,
-        data: approvalData,
-      },
-      activeNetworkChainId,
+      { from: owner, to: token.address, data: approvalData },
+      chainId,
       isAuthorized,
     );
 
     try {
       await transactionCacheService.createLocalTransaction({
         hash: approveTxHash,
-        chainId: activeNetworkChainId,
-        from: activeWallet.address,
-        to: sellToken.address,
+        chainId,
+        from: owner,
+        to: token.address,
         value: '0',
         valueWei: '0',
         gasPrice: '0',
         type: 'approve',
-        tokenSymbol: sellToken.symbol,
-        tokenAmount: sellAmount,
-        tokenAddress: sellToken.address,
+        tokenSymbol: token.symbol,
+        tokenAmount: isReset ? '0' : sellAmount,
+        tokenAddress: token.address,
         method: 'approve',
       });
       transactionTracker.reconcile();
@@ -569,14 +740,33 @@ function SwapScreen(): React.JSX.Element {
       console.warn('Failed to cache approval:', cacheError);
     }
 
-    setSwapStage('승인 확정 대기 중… (1/2)');
-    const receipt = await client.waitForTransactionReceipt({
-      hash: approveTxHash as `0x${string}`,
-    });
+    setSwapStage(
+      withStep(
+        isReset ? '초기화 확정 대기 중…' : '승인 확정 대기 중…',
+        step,
+        total,
+      ),
+    );
+    let receipt: Awaited<ReturnType<typeof client.waitForTransactionReceipt>>;
+    try {
+      receipt = await client.waitForTransactionReceipt({
+        hash: approveTxHash as `0x${string}`,
+      });
+    } catch (error) {
+      // 대기 시간 초과·조회 실패: 트랜잭션은 아직 대기 중일 수 있으므로 '스왑 실패'로
+      // 안내하지 않고 활동 내역에서 확인하게 한다 (같은 승인을 다시 보내지 않도록).
+      alertOrToast(
+        '승인 확인 필요',
+        isReceiptTimeoutError(error)
+          ? `${subject} 트랜잭션이 아직 확정되지 않았습니다. 활동 내역에서 확인한 뒤 다시 시도해주세요. 스왑은 실행하지 않았습니다.`
+          : `${subject} 트랜잭션의 확정 여부를 확인하지 못했습니다. 활동 내역에서 확인한 뒤 다시 시도해주세요. 스왑은 실행하지 않았습니다.`,
+      );
+      return false;
+    }
     try {
       await transactionCacheService.updateStatus(
         approveTxHash,
-        activeNetworkChainId,
+        chainId,
         receipt.status === 'success'
           ? {
               status: 'confirmed',
@@ -590,19 +780,71 @@ function SwapScreen(): React.JSX.Element {
       console.warn('Failed to update approval status:', cacheError);
     }
     if (receipt.status !== 'success') {
-      Alert.alert(
-        '승인 실패',
-        '토큰 승인 트랜잭션이 실패했습니다. 스왑은 실행하지 않았습니다.',
+      alertOrToast(
+        isReset ? '승인 초기화 실패' : '승인 실패',
+        `${subject} 트랜잭션이 실패했습니다. 스왑은 실행하지 않았습니다.`,
       );
-      return 'failed';
+      return false;
     }
-    return 'approved';
+    return true;
+  };
+
+  /**
+   * 정확한 수량만 승인한다. 이미 충분하면 'not-needed'.
+   * 남은 승인량이 있으면 새로 승인할 수 없는 토큰(메인넷 USDT 등)은 먼저 0으로 초기화한다.
+   */
+  const approveExactAmount = async (
+    swapQuote: SwapQuote,
+    isAuthorized: () => boolean,
+  ): Promise<ApprovalOutcome> => {
+    if (!sellToken || !activeWallet)
+      return { status: 'failed', transactions: 0 };
+    const token = sellToken;
+    const owner = activeWallet.address;
+    const chainId = activeNetworkChainId;
+    const client = chainClient.getClient(chainId);
+
+    if (!isAddress(swapQuote.allowanceTarget)) {
+      throw new Error('유효하지 않은 승인 대상 주소입니다.');
+    }
+    const spender = swapQuote.allowanceTarget as `0x${string}`;
+
+    const requiredAmount = parseUnits(sellAmount, token.decimals);
+    const allowance = await client.readContract({
+      address: token.address as `0x${string}`,
+      abi: erc20Abi,
+      functionName: 'allowance',
+      args: [owner as `0x${string}`, spender],
+    });
+    if (allowance >= requiredAmount) {
+      return { status: 'not-needed', transactions: 0 };
+    }
+
+    const resetFirst =
+      allowance > 0n &&
+      swapService.requiresAllowanceReset(chainId, token.address);
+    const transactions = resetFirst ? 2 : 1;
+    // 승인 관련 트랜잭션 + 스왑
+    const total = transactions + 1;
+    const common = { token, owner, spender, total, chainId, isAuthorized };
+
+    if (resetFirst) {
+      const reset = await sendApproval({ ...common, amount: 0n, step: 1 });
+      if (!reset) return { status: 'failed', transactions };
+    }
+    const approved = await sendApproval({
+      ...common,
+      amount: requiredAmount,
+      step: transactions,
+    });
+    return { status: approved ? 'approved' : 'failed', transactions };
   };
 
   // 스왑 트랜잭션 전송 (전송 전 시뮬레이션)
   const sendSwap = async (
     swapQuote: SwapQuote,
     isAuthorized: () => boolean,
+    step: number,
   ): Promise<string> => {
     if (!activeWallet) throw new Error('활성 계정을 찾을 수 없습니다.');
     if (!isAddress(swapQuote.to) || !swapQuote.data.startsWith('0x')) {
@@ -617,18 +859,20 @@ function SwapScreen(): React.JSX.Element {
         data: swapQuote.data as `0x${string}`,
         value: BigInt(swapQuote.value || '0'),
       });
-    } catch {
+    } catch (error) {
+      if (isInsufficientFundsError(error)) {
+        throw new SwapError(
+          'INSUFFICIENT_BALANCE',
+          `가스비로 쓸 ${nativeSymbol} 잔액이 부족해 스왑을 전송하지 않았습니다.`,
+        );
+      }
       throw new SwapError(
         'SIMULATION_FAILED',
         '스왑 트랜잭션 시뮬레이션에 실패해 전송하지 않았습니다. 가격이 변했거나 잔액이 부족할 수 있습니다.',
       );
     }
 
-    setSwapStage(
-      swapService.needsApproval(sellToken!)
-        ? '스왑 전송 중… (2/2)'
-        : '스왑 전송 중…',
-    );
+    setSwapStage(withStep('스왑 전송 중…', step, step));
     return signingService.sendTransaction(
       {
         from: activeWallet.address,
@@ -643,6 +887,32 @@ function SwapScreen(): React.JSX.Element {
     );
   };
 
+  /**
+   * 승인은 확정됐지만 화면 이탈·잠금·계정/네트워크 변경으로 스왑을 보내지 않은 경우.
+   * 잠금이면 잠금 해제 후 새 견적으로 다시 검토한다.
+   */
+  const handleApprovedButStopped = (lockedDuringFlow: boolean) => {
+    if (!mounted.current) {
+      // 토스트는 전역이라 화면을 벗어난 뒤에도 표시된다.
+      showToast(APPROVED_NOT_SENT_MESSAGE, 'warning');
+      return;
+    }
+    if (lockedDuringFlow) {
+      // 아직 잠겨 있을 때만 알린다 (잠금 해제 후 표시). 이미 풀려 있으면 바로 다시
+      // 검토하고, 그 이유는 검토 모달 상단 안내가 설명한다.
+      if (isWalletLockedNow()) {
+        showToast(LOCKED_AFTER_APPROVAL_MESSAGE, 'warning');
+      }
+      pendingReReview.current = 'locked';
+      flushPendingReReview();
+      return;
+    }
+    alertOrToast(
+      '스왑을 보내지 않았습니다',
+      '토큰 승인은 완료되었지만 검토 후 계정 또는 네트워크가 바뀌어 스왑을 보내지 않았습니다.',
+    );
+  };
+
   // 실제 스왑 실행
   const executeSwapTransaction = async () => {
     if (!sellToken || !buyToken || !swapIntent || !activeWallet || !quote) {
@@ -650,21 +920,31 @@ function SwapScreen(): React.JSX.Element {
     }
 
     // 사용자가 검토한 견적과 현재 의도를 다시 바인딩한다. 승인 후 새 견적을
-    // 조용히 받아 실행하지 않으며, 변경/만료 시 처음부터 다시 검토한다.
+    // 조용히 받아 실행하지 않으며, 변경/만료/잠금 시 처음부터 다시 검토한다.
     const swapQuote = quote;
     const intent = swapIntent;
     const chainId = activeNetworkChainId;
+    const epoch = lockEpoch.current;
     const isAuthorized = isAuthorizedFor(activeWallet.address, chainId);
+    const lockedDuringFlow = () =>
+      lockEpoch.current !== epoch || isWalletLockedNow();
     let approvedNow = false;
 
     setIsSwapping(true);
     try {
       swapService.assertQuoteMatchesIntent(swapQuote, intent, chainId);
 
+      let approvalTransactions = 0;
       if (swapService.needsApproval(sellToken)) {
         const result = await approveExactAmount(swapQuote, isAuthorized);
-        if (result === 'failed') return;
-        approvedNow = result === 'approved';
+        if (result.status === 'failed') return;
+        approvedNow = result.status === 'approved';
+        approvalTransactions = result.transactions;
+        if (approvedNow && !isAuthorized()) {
+          // 승인을 기다리는 동안 잠겼거나 화면을 벗어남 → 스왑을 보내지 않는다.
+          handleApprovedButStopped(lockedDuringFlow());
+          return;
+        }
         if (
           approvedNow &&
           !swapService.isQuoteUsable(
@@ -674,16 +954,20 @@ function SwapScreen(): React.JSX.Element {
             QUOTE_EXECUTION_MARGIN_MS,
           )
         ) {
-          // 승인을 기다리는 동안 견적이 만료/변경됨 → 새 견적으로 다시 검토
-          setIsSwapping(false);
-          setSwapStage(null);
-          await prepareReview({ afterApproval: true });
+          // 승인을 기다리는 동안 견적이 만료/변경됨 → 새 견적으로 다시 검토.
+          // 새 견적을 받는 동안에도 진행 중으로 표시해 버튼을 다시 누르지 않게 한다.
+          setSwapStage('새 견적 확인 중…');
+          await prepareReview({ afterApproval: 'expired' });
           return;
         }
       }
 
       swapService.assertQuoteMatchesIntent(swapQuote, intent, chainId);
-      const txHash = await sendSwap(swapQuote, isAuthorized);
+      const txHash = await sendSwap(
+        swapQuote,
+        isAuthorized,
+        approvalTransactions + 1,
+      );
 
       const confirmedBuyAmount = formatUnits(
         BigInt(swapQuote.buyAmount),
@@ -737,19 +1021,37 @@ function SwapScreen(): React.JSX.Element {
         setApproval(null);
       }
     } catch (error: unknown) {
+      if (approvedNow && !isAuthorized()) {
+        handleApprovedButStopped(lockedDuringFlow());
+        return;
+      }
       if (!mounted.current) return;
-      const message = describeSwapError(error);
-      if (approvedNow) {
+      if (lockedDuringFlow()) {
+        // 잠금 화면 위에 Alert을 띄우지 않는다. 토스트는 잠금 해제 후 표시된다.
+        showToast(LOCKED_BEFORE_SWAP_MESSAGE, 'warning');
+        return;
+      }
+      const message = describeSwapError(error, { nativeSymbol });
+      if (approvedNow && !navigation.isFocused()) {
+        // 다른 화면 위에는 Alert을 띄우지 않는다.
+        showToast(
+          `토큰 승인은 완료되었지만 스왑을 보내지 못했습니다. ${message}`,
+          'error',
+        );
+      } else if (approvedNow) {
         Alert.alert(
           '스왑을 보내지 못했습니다',
           `토큰 승인은 완료되었습니다. ${message}\n\n새 견적을 받아 다시 시도할 수 있습니다.`,
           [
             { text: '닫기', style: 'cancel' },
-            { text: '새 견적 받기', onPress: () => prepareReview() },
+            {
+              text: '새 견적 받기',
+              onPress: () => prepareReviewRef.current(),
+            },
           ],
         );
       } else {
-        Alert.alert('스왑 실패', message);
+        alertOrToast('스왑 실패', message);
       }
     } finally {
       if (mounted.current) {
@@ -778,6 +1080,9 @@ function SwapScreen(): React.JSX.Element {
     !!buyAmount &&
     !isPreparingReview &&
     !isSwapping;
+  // 진행 중에는 비활성(회색) 대신 기본 색을 유지해 스피너/진행 문구가 보이게 한다.
+  const isBusy = isPreparingReview || isSwapping;
+  const reviewButtonLooksDisabled = !canReview && !isBusy;
 
   const buttonLabel = isSwapping
     ? swapStage || '처리 중…'
@@ -804,6 +1109,7 @@ function SwapScreen(): React.JSX.Element {
   }, [sellToken, buyToken, sellAmount, buyAmount]);
 
   // 토큰 선택 목록 (잔액 포함)
+  // balance: 문자열 = 표시, null = 조회 실패('잔액 알 수 없음'), undefined = 조회 중/표시 안 함
   const pickerTokens = useMemo<PickerToken[]>(
     () =>
       tokens.map(token => {
@@ -811,13 +1117,19 @@ function SwapScreen(): React.JSX.Element {
         if (isNativeSwapToken(token)) {
           balance = nativeBalance
             ? formatDisplayAmount(nativeBalance.formatted)
+            : nativeBalanceError
+            ? null
             : undefined;
         } else {
           const entry = tokenBalances?.find(
             item =>
               item.tokenAddress.toLowerCase() === token.address.toLowerCase(),
           );
-          balance = entry ? formatDisplayAmount(entry.formatted) : undefined;
+          balance = entry
+            ? entry.error || entry.formatted === null
+              ? null
+              : formatDisplayAmount(entry.formatted)
+            : undefined;
         }
         return {
           id: token.address,
@@ -828,7 +1140,7 @@ function SwapScreen(): React.JSX.Element {
           balance,
         };
       }),
-    [tokens, nativeBalance, tokenBalances],
+    [tokens, nativeBalance, nativeBalanceError, tokenBalances],
   );
 
   const header = (
@@ -836,6 +1148,7 @@ function SwapScreen(): React.JSX.Element {
       title="토큰 스왑"
       testID="swap-header"
       backTestID="swap-back-button"
+      backDisabled={isSwapping}
       right={
         availability === 'supported' ? (
           <>
@@ -843,12 +1156,14 @@ function SwapScreen(): React.JSX.Element {
               icon="📋"
               accessibilityLabel="스왑 내역"
               onPress={() => navigation.navigate('SwapHistory')}
+              disabled={inputsLocked}
               testID="swap-history-button"
             />
             <IconButton
               icon="⚙️"
               accessibilityLabel="스왑 설정"
               onPress={() => setShowSettingsModal(true)}
+              disabled={inputsLocked}
               testID="swap-settings-button"
             />
           </>
@@ -950,7 +1265,10 @@ function SwapScreen(): React.JSX.Element {
               <FavoritePairChip
                 key={pair.id}
                 hitSlop={{ top: 4, bottom: 4 }}
+                disabled={inputsLocked}
+                $disabled={inputsLocked}
                 accessibilityRole="button"
+                accessibilityState={{ disabled: inputsLocked }}
                 accessibilityLabel={`${pair.sellTokenSymbol}에서 ${pair.buyTokenSymbol}로 스왑 페어 선택`}
                 onPress={() => {
                   const sell = tokens.find(
@@ -1003,7 +1321,7 @@ function SwapScreen(): React.JSX.Element {
             <TokenRow>
               <TokenSelector
                 onPress={() => setShowTokenSelector('sell')}
-                disabled={isSwapping}
+                disabled={inputsLocked}
                 accessibilityRole="button"
                 accessibilityLabel={`보내는 토큰 ${
                   sellToken?.symbol ?? '선택'
@@ -1026,7 +1344,7 @@ function SwapScreen(): React.JSX.Element {
                 placeholder="0.0"
                 placeholderTextColor={theme.colors.textMuted}
                 keyboardType="decimal-pad"
-                editable={!isSwapping}
+                editable={!inputsLocked}
                 accessibilityLabel="보내는 수량"
                 testID="swap-sell-amount-input"
               />
@@ -1038,7 +1356,7 @@ function SwapScreen(): React.JSX.Element {
               </BalanceText>
               <MaxButton
                 onPress={handleSetMax}
-                disabled={isCalculatingMax || !sellBalance || isSwapping}
+                disabled={isCalculatingMax || !sellBalance || inputsLocked}
                 accessibilityRole="button"
                 accessibilityLabel={
                   sellTokenIsNative
@@ -1066,7 +1384,7 @@ function SwapScreen(): React.JSX.Element {
               filled
               accessibilityLabel="보내는 토큰과 받는 토큰 바꾸기"
               onPress={handleSwapTokens}
-              disabled={isSwapping}
+              disabled={inputsLocked}
               testID="swap-switch-tokens"
             />
           </SwapArrowWrapper>
@@ -1077,7 +1395,7 @@ function SwapScreen(): React.JSX.Element {
             <TokenRow>
               <TokenSelector
                 onPress={() => setShowTokenSelector('buy')}
-                disabled={isSwapping}
+                disabled={inputsLocked}
                 accessibilityRole="button"
                 accessibilityLabel={`받는 토큰 ${
                   buyToken?.symbol ?? '선택'
@@ -1125,7 +1443,10 @@ function SwapScreen(): React.JSX.Element {
           {/* 슬리피지 (설정 모달에서 변경, 영구 저장) */}
           <SlippageRow
             onPress={() => setShowSettingsModal(true)}
+            disabled={inputsLocked}
+            $disabled={inputsLocked}
             accessibilityRole="button"
+            accessibilityState={{ disabled: inputsLocked }}
             accessibilityLabel={`슬리피지 허용치 ${
               settings?.autoSlippage ? '자동 ' : ''
             }${slippage}%, 변경`}
@@ -1161,18 +1482,24 @@ function SwapScreen(): React.JSX.Element {
           <SwapButton
             onPress={() => prepareReview()}
             disabled={!canReview}
-            $disabled={!canReview}
+            $disabled={reviewButtonLooksDisabled}
             accessibilityRole="button"
+            accessibilityLabel={
+              isPreparingReview && !isSwapping ? '견적 확인 중' : undefined
+            }
             accessibilityState={{
               disabled: !canReview,
-              busy: isPreparingReview,
+              busy: isBusy,
             }}
             testID="swap-review-button"
           >
-            {isPreparingReview ? (
-              <ActivityIndicator color={theme.colors.onPrimary} />
+            {isPreparingReview && !isSwapping ? (
+              <ActivityIndicator
+                color={theme.colors.onPrimary}
+                testID="swap-review-button-spinner"
+              />
             ) : (
-              <SwapButtonText $disabled={!canReview}>
+              <SwapButtonText $disabled={reviewButtonLooksDisabled}>
                 {buttonLabel}
               </SwapButtonText>
             )}
@@ -1204,7 +1531,7 @@ function SwapScreen(): React.JSX.Element {
       {/* 리뷰 모달 */}
       <SwapReviewModal
         visible={showReviewModal}
-        onClose={() => setShowReviewModal(false)}
+        onClose={handleCloseReview}
         onConfirm={handleConfirmSwap}
         isLoading={isSwapping}
         sellToken={sellToken}
@@ -1217,7 +1544,7 @@ function SwapScreen(): React.JSX.Element {
         approval={approval}
         nativeSymbol={nativeSymbol}
         networkName={activeNetwork?.name}
-        onRefreshQuote={() => prepareReview()}
+        onRefreshQuote={() => prepareReview({ refreshing: true })}
         isRefreshing={isRefreshingQuote}
         notice={reviewNotice}
       />
@@ -1261,8 +1588,9 @@ const FavoritePairsRow = styled.View`
   gap: 8px;
 `;
 
-const FavoritePairChip = styled.TouchableOpacity`
+const FavoritePairChip = styled.TouchableOpacity<{ $disabled?: boolean }>`
   min-height: 36px;
+  opacity: ${({ $disabled }) => ($disabled ? 0.5 : 1)};
   justify-content: center;
   background-color: ${({ theme }) => theme.colors.surface};
   padding: 0 ${({ theme }) => theme.spacing.md}px;
@@ -1428,7 +1756,8 @@ const ErrorWrapper = styled.View`
   background-color: ${({ theme }) => theme.colors.errorSubtle};
 `;
 
-const SlippageRow = styled.TouchableOpacity`
+const SlippageRow = styled.TouchableOpacity<{ $disabled?: boolean }>`
+  opacity: ${({ $disabled }) => ($disabled ? 0.5 : 1)};
   flex-direction: row;
   justify-content: space-between;
   align-items: center;

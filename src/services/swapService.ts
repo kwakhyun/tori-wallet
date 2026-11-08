@@ -3,6 +3,21 @@
  */
 
 import {
+  BaseError,
+  CallExecutionError,
+  ContractFunctionExecutionError,
+  ContractFunctionRevertedError,
+  EstimateGasExecutionError,
+  ExecutionRevertedError,
+  FeeCapTooLowError,
+  HttpRequestError,
+  InsufficientFundsError,
+  IntrinsicGasTooLowError,
+  NonceTooHighError,
+  NonceTooLowError,
+  TimeoutError,
+  UserRejectedRequestError,
+  WaitForTransactionReceiptTimeoutError,
   formatUnits,
   isAddress,
   keccak256,
@@ -124,8 +139,139 @@ export function mapZeroXError(
   );
 }
 
+/** 서명 세션이 없거나(잠김) 도중에 폐기되었을 때 signerVault가 던지는 메시지 */
+const WALLET_LOCKED_MESSAGES = new Set([
+  'Wallet is locked',
+  'Wallet signing session expired',
+]);
+
+/** 지갑이 잠겨 서명하지 못했을 때의 안내 */
+export const WALLET_LOCKED_SWAP_MESSAGE =
+  '지갑이 잠겨 트랜잭션을 보내지 않았습니다. 잠금을 해제한 뒤 다시 시도해주세요.';
+
+/** 트랜잭션 확정 대기 시간이 끝났을 때의 안내 (트랜잭션은 아직 대기 중일 수 있다) */
+export const RECEIPT_PENDING_MESSAGE =
+  '트랜잭션이 아직 확정되지 않았습니다. 활동 내역에서 상태를 확인한 뒤 다시 시도해주세요.';
+
+type ViemErrorLike = Error & {
+  shortMessage?: string;
+  walk?: (fn?: (error: unknown) => boolean) => unknown;
+};
+
+function isViemError(error: unknown): error is ViemErrorLike {
+  return error instanceof BaseError;
+}
+
+/** viem 오류의 cause 체인에서 이름이 일치하는 오류를 찾는다. */
+function findViemError(
+  error: ViemErrorLike,
+  ...classes: (abstract new (...args: never[]) => Error)[]
+): boolean {
+  const names = new Set(classes.map(item => item.name));
+  const matches = (candidate: unknown) =>
+    classes.some(item => candidate instanceof item) ||
+    (candidate instanceof Error && names.has(candidate.name));
+  if (matches(error)) return true;
+  return Boolean(error.walk?.(matches));
+}
+
+/**
+ * viem이 cause로 감싼 앱 오류(viem 오류가 아닌 Error)의 메시지.
+ * 예: 계정의 signTransaction이 던진 'Wallet signing session expired'는
+ * TransactionExecutionError 안에 그대로 들어가고 shortMessage가 비어 있다.
+ */
+function findWrappedAppMessage(error: ViemErrorLike): string | null {
+  const inner = error.walk?.(
+    candidate =>
+      candidate instanceof Error && !(candidate instanceof BaseError),
+  );
+  return inner instanceof Error && inner.message ? inner.message : null;
+}
+
+/** viem 오류가 잔액(가스비 포함) 부족 때문인지 */
+export function isInsufficientFundsError(error: unknown): boolean {
+  return isViemError(error) && findViemError(error, InsufficientFundsError);
+}
+
+/** 트랜잭션 확정 대기 시간 초과인지 */
+export function isReceiptTimeoutError(error: unknown): boolean {
+  return (
+    isViemError(error) &&
+    findViemError(error, WaitForTransactionReceiptTimeoutError)
+  );
+}
+
+/**
+ * viem 오류를 한국어 문구로 바꾼다. viem의 message에는 요청 인자(주소, calldata),
+ * 'Details:'와 'Version: viem@…'이 들어 있어 그대로 보여 주지 않는다.
+ */
+function describeViemError(error: ViemErrorLike, nativeSymbol: string): string {
+  // viem이 감싼 앱 오류 (서명 직전 잠금·세션 폐기, signingService의 서명 승인 취소)
+  const wrapped = findWrappedAppMessage(error);
+  if (wrapped && WALLET_LOCKED_MESSAGES.has(wrapped)) {
+    return WALLET_LOCKED_SWAP_MESSAGE;
+  }
+  if (wrapped && /[가-힣]/.test(wrapped)) return wrapped;
+
+  if (findViemError(error, InsufficientFundsError)) {
+    return `가스비로 쓸 ${nativeSymbol} 잔액이 부족합니다. ${nativeSymbol}을(를) 충전한 뒤 다시 시도해주세요.`;
+  }
+  if (findViemError(error, UserRejectedRequestError)) {
+    return '요청이 취소되었습니다.';
+  }
+  if (findViemError(error, WaitForTransactionReceiptTimeoutError)) {
+    return RECEIPT_PENDING_MESSAGE;
+  }
+  if (findViemError(error, NonceTooLowError, NonceTooHighError)) {
+    return '트랜잭션 순서(nonce)가 맞지 않습니다. 대기 중인 트랜잭션이 확정된 뒤 다시 시도해주세요.';
+  }
+  if (findViemError(error, FeeCapTooLowError, IntrinsicGasTooLowError)) {
+    return '네트워크 수수료 설정이 너무 낮아 트랜잭션을 보낼 수 없습니다. 잠시 후 다시 시도해주세요.';
+  }
+  const simulationFailed =
+    '트랜잭션 시뮬레이션이 실패해 전송하지 않았습니다. 잔액, 토큰 승인 상태 또는 가격 변동을 확인한 뒤 다시 시도해주세요.';
+  // 실제 되돌림(revert)을 먼저 본다.
+  if (
+    findViemError(error, ExecutionRevertedError, ContractFunctionRevertedError)
+  ) {
+    return simulationFailed;
+  }
+  // EstimateGas/Call 실행 오류는 RPC 장애도 감싸므로, 연결 실패를 그보다 먼저 구분한다
+  // (RPC가 죽었는데 '잔액·승인 상태를 확인하라'고 안내하지 않게).
+  if (findViemError(error, HttpRequestError, TimeoutError)) {
+    return '네트워크(RPC)에 연결할 수 없습니다. 연결을 확인한 뒤 다시 시도해주세요.';
+  }
+  if (
+    findViemError(
+      error,
+      ContractFunctionExecutionError,
+      EstimateGasExecutionError,
+      CallExecutionError,
+    )
+  ) {
+    return simulationFailed;
+  }
+  // 알 수 없는 viem 오류: 요약 문구만 덧붙인다 (주소/calldata가 섞이면 생략).
+  const summary = (error.shortMessage ?? '').split('\n')[0].trim();
+  const safeSummary =
+    summary && !/0x[0-9a-fA-F]{8,}/.test(summary)
+      ? ` (${summary.slice(0, 120)})`
+      : '';
+  return `트랜잭션을 처리하지 못했습니다. 잠시 후 다시 시도해주세요.${safeSummary}`;
+}
+
 /** 화면 표시용 오류 문구 */
-export function describeSwapError(error: unknown): string {
+export function describeSwapError(
+  error: unknown,
+  options: { nativeSymbol?: string } = {},
+): string {
+  if (error instanceof SwapError) return error.message;
+  if (isViemError(error)) {
+    return describeViemError(error, options.nativeSymbol ?? '네이티브 토큰');
+  }
+  if (error instanceof Error && WALLET_LOCKED_MESSAGES.has(error.message)) {
+    return WALLET_LOCKED_SWAP_MESSAGE;
+  }
   if (error instanceof Error && error.message) return error.message;
   return SWAP_ERROR_MESSAGES.UNKNOWN;
 }
@@ -216,6 +362,14 @@ export function classifyPriceImpact(
   else if (percent >= 1) level = 'medium';
   return { percent: percent.toFixed(2), level };
 }
+
+/**
+ * 남은 승인량이 0이 아니면 approve가 되돌려지는 토큰 (chainId:소문자 주소).
+ * 메인넷 USDT: require(!(_value != 0 && allowed[msg.sender][_spender] != 0))
+ */
+const ALLOWANCE_RESET_TOKENS = new Set([
+  '1:0xdac17f958d2ee523a2206206994597c13d831ec7',
+]);
 
 /** 견적 전 네이티브 MAX 계산에 쓰는 보수적 스왑 가스 한도 */
 export const SWAP_GAS_LIMIT_ESTIMATE = 300_000n;
@@ -744,10 +898,19 @@ const ZERO_X_HEADERS: Record<string, string> = {
   '0x-version': 'v2',
 };
 
-async function fetchZeroX(url: string): Promise<unknown> {
+/**
+ * 0x 요청 제한 시간. RN의 fetch는 기본 제한 시간이 없어(Android OkHttp 0, iOS 약 60초)
+ * 응답이 멈추면 '견적 조회 중…'이나 검토 버튼이 끝없이 대기한다.
+ */
+export const ZERO_X_FETCH_TIMEOUT_MS = 15_000;
+
+async function fetchZeroXUnbounded(
+  url: string,
+  signal: AbortSignal | undefined,
+): Promise<unknown> {
   let response: Response;
   try {
-    response = await fetch(url, { headers: ZERO_X_HEADERS });
+    response = await fetch(url, { headers: ZERO_X_HEADERS, signal });
   } catch (error) {
     throw isNetworkFailure(error)
       ? new SwapError('NETWORK')
@@ -761,6 +924,27 @@ async function fetchZeroX(url: string): Promise<unknown> {
   }
   if (!response.ok) throw mapZeroXError(response.status, body);
   return body;
+}
+
+async function fetchZeroX(url: string): Promise<unknown> {
+  const controller =
+    typeof AbortController !== 'undefined' ? new AbortController() : null;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  // fetch 구현이 signal을 무시하더라도 제한 시간 안에 반드시 끝나도록 경쟁시킨다.
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      controller?.abort();
+      reject(new SwapError('NETWORK'));
+    }, ZERO_X_FETCH_TIMEOUT_MS);
+  });
+  try {
+    return await Promise.race([
+      fetchZeroXUnbounded(url, controller?.signal),
+      timeout,
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 class SwapService {
@@ -886,6 +1070,16 @@ class SwapService {
    */
   needsApproval(sellToken: SwapToken): boolean {
     return !isNativeSwapToken(sellToken);
+  }
+
+  /**
+   * 0이 아닌 승인량이 남아 있으면 approve(새 수량)가 실패하는 토큰인지.
+   * 이런 토큰은 먼저 approve(spender, 0)으로 초기화해야 한다.
+   */
+  requiresAllowanceReset(chainId: number, tokenAddress: string): boolean {
+    return ALLOWANCE_RESET_TOKENS.has(
+      `${chainId}:${tokenAddress.toLowerCase()}`,
+    );
   }
 
   /**
