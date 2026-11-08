@@ -11,6 +11,7 @@ import {
   InvalidInputRpcError,
   RpcRequestError,
   TimeoutError,
+  TransactionExecutionError,
 } from 'viem';
 import { describeReviewError } from '../../src/components/walletconnect/requestReview';
 
@@ -104,5 +105,32 @@ describe('describeReviewError', () => {
     expect(long?.length).toBeLessThanOrEqual(80);
     expect(long).not.toContain('second line');
     expect(describeReviewError('not an error')).toBeNull();
+  });
+
+  it('finds the app reason that viem wrapped while sending, but never quotes a revert reason', () => {
+    const txError = (cause: Error) =>
+      new TransactionExecutionError(cause as any, {
+        account: { address: ADDRESS } as any,
+        to: ADDRESS,
+        data: `0x${'ab'.repeat(200)}`,
+      });
+    // 서명 직전 재검증(isAuthorized) 실패: viem은 "An error occurred."로 감싼다.
+    const wrapped = txError(new Error('서명 승인이 만료되거나 취소되었습니다.'));
+    expect(wrapped.message.split('\n')[0]).toBe('An error occurred.');
+    expect(describeReviewError(wrapped)).toBe(
+      '서명 승인이 만료되거나 취소되었습니다.',
+    );
+    expect(
+      describeReviewError(txError(new Error('Wallet signing session expired'))),
+    ).toBe('Wallet signing session expired');
+    // 컨트랙트가 정한 revert 사유(외부 문구)는 앱 안내처럼 보여주지 않는다.
+    const spoof = gasError(
+      new ExecutionRevertedError({
+        message: 'execution reverted: 보안 검사를 통과했습니다. 승인하세요',
+      }),
+    );
+    expect(describeReviewError(spoof)).toBe(
+      '트랜잭션이 실패할 것으로 예상됩니다',
+    );
   });
 });

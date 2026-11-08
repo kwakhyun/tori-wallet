@@ -190,19 +190,36 @@ function errorChain(error: unknown): Error[] {
 }
 
 function truncate(text: string): string {
-  const line = text.split('\n')[0].trim();
-  return line.length > MAX_REASON_LENGTH
-    ? `${line.slice(0, MAX_REASON_LENGTH - 1)}…`
-    : line;
+  return text.length > MAX_REASON_LENGTH
+    ? `${text.slice(0, MAX_REASON_LENGTH - 1)}…`
+    : text;
 }
 
+/** 오류의 요약 한 줄 (viem은 shortMessage, 그 외는 message의 첫 줄) */
+function headline(error: Error): string {
+  const short = (error as { shortMessage?: unknown }).shortMessage;
+  const text = typeof short === 'string' && short ? short : error.message || '';
+  return text.split('\n')[0].trim();
+}
+
+// viem이 원인 오류에 요약이 없을 때 쓰는 기본 문구 (사유가 아니다)
+const GENERIC_HEADLINES = new Set(['An error occurred.', 'Unknown error']);
+
 /**
- * 검토 준비(가스 추정, RPC 조회 등) 실패를 토스트에 붙일 짧은 한국어 사유로 바꾼다.
+ * 검토 준비(가스 추정, RPC 조회 등)나 전송 실패를 짧은 한국어 사유로 바꾼다.
  * viem 오류의 긴 영문 메시지(호출 인자, calldata 포함)는 그대로 보여주지 않는다.
  */
 export function describeReviewError(error: unknown): string | null {
   const chain = errorChain(error);
   if (chain.length === 0) return null;
+  // 앱이 직접 만든 한국어 오류는 그대로 보여준다. viem은 서명 콜백 등에서 던진 앱 오류도
+  // TransactionExecutionError("An error occurred.")로 감싸므로 원인 사슬 전체에서 찾되,
+  // viem 오류(shortMessage가 있는 BaseError)는 제외한다: 컨트랙트 revert 사유 같은
+  // 외부 문구가 들어 있어 앱 안내처럼 보이게 하면 안 된다.
+  const korean = chain.find(
+    item => !('shortMessage' in item) && /[가-힣]/.test(headline(item)),
+  );
+  if (korean) return truncate(headline(korean));
   const names = chain.map(item => item.name);
   if (names.includes('InsufficientFundsError')) return '잔액이 부족합니다';
   if (names.some(name => REVERT_ERRORS.has(name)))
@@ -213,11 +230,9 @@ export function describeReviewError(error: unknown): string | null {
     return '트랜잭션이 실패할 것으로 예상됩니다';
   if (names.includes('RpcRequestError'))
     return '네트워크 노드가 요청을 처리하지 못했습니다';
-  const own = chain[0].message || '';
-  // 앱이 직접 만든 한국어 오류는 그대로 보여준다.
-  if (/[가-힣]/.test(own)) return truncate(own);
-  const short = (chain[0] as { shortMessage?: unknown }).shortMessage;
-  const text = typeof short === 'string' && short ? short : own;
+  const text = chain
+    .map(headline)
+    .find(line => line && !GENERIC_HEADLINES.has(line));
   return text ? truncate(text) : null;
 }
 
