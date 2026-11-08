@@ -266,7 +266,9 @@ export function SheetModal({
       onRequestClose={closeDisabled ? () => undefined : onClose}
       onLock={onLock ?? (closeDisabled ? undefined : onClose)}
     >
-      <Screen testID={testID}>
+      {/* 스크롤하지 않는 고정 레이아웃(PIN 패드)은 오프라인 배너만큼 키패드가 화면 밖으로
+          밀릴 수 있다. PIN 확인은 네트워크와 무관하므로 PinVerifyModal처럼 배너를 끈다. */}
+      <Screen testID={testID} offlineBanner={scrollable}>
         <ScreenHeader
           title={title}
           leftIcon="close"

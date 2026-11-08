@@ -7,13 +7,15 @@
 
 import React from 'react';
 import { StyleSheet } from 'react-native';
-import { act, render } from '@testing-library/react-native';
+import { act, render, within } from '@testing-library/react-native';
 import NetInfo from '@react-native-community/netinfo';
 import type { ReactTestRendererJSON } from 'react-test-renderer';
 import { ThemeProvider } from 'styled-components/native';
 import { lightTheme } from '../../src/styles/theme';
 import { Screen, TabScreen } from '../../src/components/common/Screen';
 import { ScreenHeader } from '../../src/components/common/ScreenHeader';
+import { SheetModal } from '../../src/screens/Settings/components/SettingsUI';
+import { useWalletStore } from '../../src/store/walletStore';
 
 jest.mock('@react-navigation/native', () => ({
   useNavigation: () => ({ goBack: jest.fn(), canGoBack: () => true }),
@@ -107,4 +109,40 @@ describe('OfflineBanner', () => {
     goOffline();
     expect(view.queryByTestId('offline-banner')).toBeNull();
   });
+
+  it.each([
+    [false, 'PIN 패드 시트', 0],
+    [true, '목록 시트', 1],
+  ] as const)(
+    'shows the banner in a sheet only when it scrolls (scrollable=%s, %s)',
+    (scrollable, title, expected) => {
+      act(() => {
+        useWalletStore.setState({ hasWallet: true, isLocked: false });
+      });
+      const view = wrap(
+        <>
+          {/* 시트 뒤의 화면이 오프라인 상태 구독을 유지한다. */}
+          <Screen testID="behind" />
+          <SheetModal
+            visible
+            title={title}
+            onClose={jest.fn()}
+            scrollable={scrollable}
+            testID="sheet"
+          >
+            <></>
+          </SheetModal>
+        </>,
+      );
+      goOffline();
+
+      expect(
+        within(view.getByTestId('behind')).getByTestId('offline-banner'),
+      ).toBeTruthy();
+      // 스크롤하지 않는 PIN 패드 시트는 배너만큼 키패드가 밀려나지 않게 배너를 그리지 않는다.
+      expect(
+        within(view.getByTestId('sheet')).queryAllByTestId('offline-banner'),
+      ).toHaveLength(expected);
+    },
+  );
 });
