@@ -32,8 +32,8 @@ Tori Wallet ("App") respects your privacy and is committed to protecting your pe
 
 ## 3. Data Retention and Deletion
 
-- **In-App Reset**: Reset Wallet attempts to disconnect WalletConnect sessions and delete the encrypted wallet storage, Realm records, and persisted state. The App reports an error if cleanup is incomplete.
-- **App Uninstallation**: Regular app data is removed according to operating-system policy, but iOS Keychain data may remain after uninstallation. If complete deletion is required, use Reset Wallet before uninstalling the App.
+- **In-App Deletion**: Settings (설정) > Danger zone (위험 영역) > "지갑 완전 삭제" (Delete wallet) attempts to disconnect WalletConnect sessions and delete the encrypted wallet storage, Realm records, and persisted state. The App reports an error if cleanup is incomplete. "다른 지갑 가져오기 (현재 지갑 삭제)" (Import another wallet, deleting the current one) in the same section, and the wallet reset offered from "PIN을 잊으셨나요?" (Forgot your PIN?) on the lock screen, perform the same deletion.
+- **App Uninstallation**: Regular app data is removed according to operating-system policy, but iOS Keychain data may remain after uninstallation. If complete deletion is required, use Settings > Danger zone > "지갑 완전 삭제" (Delete wallet) before uninstalling the App.
 - Requests sent to third-party services and on-chain transactions cannot be deleted by the App and remain subject to each service's policy and blockchain properties.
 
 ## 4. Third-Party Sharing
@@ -54,7 +54,7 @@ External services may process network metadata such as your IP address, and thei
 
 You have the following rights:
 
-- **Local Data Deletion**: Use Reset Wallet in the App
+- **Local Data Deletion**: Use Settings > Danger zone > "지갑 완전 삭제" (Delete wallet) in the App (or "PIN을 잊으셨나요?" on the lock screen if you forgot your PIN)
 - **Data Access**: View wallet addresses, address-book entries, transactions, connected sessions, and primary settings in the App
 - **Questions**: Contact us at the email address below
 
@@ -83,4 +83,4 @@ For privacy-related inquiries, please contact us at:
 ---
 
 **Tori Wallet**  
-Last Updated: August 30, 2026
+Last Updated: November 8, 2026

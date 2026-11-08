@@ -197,7 +197,10 @@ describe('biometric approval', () => {
   it('can retry biometrics during a PIN lockout after the first prompt failed', async () => {
     jest
       .spyOn(pinAttemptService, 'getStatus')
-      .mockResolvedValue({ failures: 7, blockedUntil: Date.now() + 8 * 60_000 });
+      .mockResolvedValue({
+        failures: 7,
+        blockedUntil: Date.now() + 8 * 60_000,
+      });
     retrieveBiometric.mockResolvedValueOnce(null);
     const view = render(element());
     await act(async () => {});
@@ -207,9 +210,9 @@ describe('biometric approval', () => {
     expect(view.getByTestId('pin-confirm-error').props.children).toContain(
       'PIN 입력이 제한',
     );
-    expect(view.getByTestId('pin-key-1').props.accessibilityState.disabled).toBe(
-      true,
-    );
+    expect(
+      view.getByTestId('pin-key-1').props.accessibilityState.disabled,
+    ).toBe(true);
 
     const retry = view.getByTestId('pin-confirm-biometric-during-lockout');
     expect(retry.props.accessibilityState.disabled).toBe(false);
