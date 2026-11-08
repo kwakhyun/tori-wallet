@@ -1,5 +1,5 @@
 import React from 'react';
-import { AppState, AppStateStatus } from 'react-native';
+import { AppState, AppStateStatus, StyleSheet } from 'react-native';
 import {
   render,
   renderHook,
@@ -84,6 +84,18 @@ it.each(['cancel', 'unmount', 'hidden', 'background'])(
     listener.mockRestore();
   },
 );
+
+it('draws its keys in a different color from the surface card behind them', async () => {
+  const view = render(element());
+  await act(async () => {});
+  const card = StyleSheet.flatten(
+    view.getByTestId('pin-confirm-container').props.style,
+  );
+  const key = StyleSheet.flatten(view.getByTestId('pin-key-5').props.style);
+  expect(card.backgroundColor).toBe(darkTheme.colors.surface);
+  expect(key.backgroundColor).not.toBe(card.backgroundColor);
+  expect(key.borderWidth).toBe(1);
+});
 
 it('unlocks and confirms once for successful PIN verification', async () => {
   retrieve.mockResolvedValue(mnemonic);

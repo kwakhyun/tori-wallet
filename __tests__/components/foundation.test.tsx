@@ -3,9 +3,10 @@
  */
 
 import React from 'react';
+import { StyleSheet } from 'react-native';
 import { act, fireEvent, render } from '@testing-library/react-native';
 import { ThemeProvider } from 'styled-components/native';
-import { darkTheme } from '../../src/styles/theme';
+import { darkTheme, lightTheme } from '../../src/styles/theme';
 import { PinPad } from '../../src/components/common/PinPad';
 import { ScreenHeader } from '../../src/components/common/ScreenHeader';
 import { ToastHost } from '../../src/components/common/ToastHost';
@@ -74,6 +75,41 @@ describe('PinPad', () => {
     fireEvent.press(getByLabelText('생체인증으로 잠금 해제'));
     expect(onPress).toHaveBeenCalled();
   });
+
+  it.each([
+    ['light', lightTheme],
+    ['dark', darkTheme],
+  ] as const)(
+    'gives digit keys a visible shape on screens and on surface cards (%s)',
+    (_name, theme) => {
+      const keyStyle = (onSurface: boolean) => {
+        const { getByTestId, unmount } = render(
+          <ThemeProvider theme={theme}>
+            <PinPad
+              value=""
+              onDigit={jest.fn()}
+              onDelete={jest.fn()}
+              onSurface={onSurface}
+            />
+          </ThemeProvider>,
+        );
+        const style = StyleSheet.flatten(getByTestId('pin-key-5').props.style);
+        unmount();
+        return style;
+      };
+
+      const onScreen = keyStyle(false);
+      expect(onScreen.borderWidth).toBe(1);
+      expect(onScreen.borderColor).toBe(theme.colors.borderLight);
+      expect(onScreen.backgroundColor).toBe(theme.colors.surface);
+
+      // PinConfirmModal 카드(surface) 위에서는 카드와 다른 채움색을 쓴다.
+      const onCard = keyStyle(true);
+      expect(onCard.borderWidth).toBe(1);
+      expect(onCard.backgroundColor).toBe(theme.colors.backgroundTertiary);
+      expect(onCard.backgroundColor).not.toBe(theme.colors.surface);
+    },
+  );
 });
 
 describe('ScreenHeader', () => {

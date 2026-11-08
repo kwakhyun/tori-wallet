@@ -227,6 +227,8 @@ export function PinConfirmModal({
               disabled={keypadDisabled}
               error={!!error}
               maxKeySize={64}
+              // 카드(surface) 위에 놓이므로 키를 카드와 다른 색으로 칠한다.
+              onSurface
               testIDPrefix="pin"
               leftAction={
                 biometricAvailable

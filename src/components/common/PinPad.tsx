@@ -35,6 +35,12 @@ export interface PinPadProps {
   testIDPrefix?: string;
   /** 키 크기 상한 */
   maxKeySize?: number;
+  /**
+   * 패드가 theme.colors.surface 컨테이너(예: PinConfirmModal 카드) 위에 놓이는지.
+   * true면 숫자 키를 컨테이너와 다른 색으로 칠해 키 모양이 사라지지 않게 한다.
+   * 기본값(false)은 화면 배경(theme.colors.background) 위에 놓인 경우다.
+   */
+  onSurface?: boolean;
 }
 
 const DIGIT_ROWS = [
@@ -54,6 +60,7 @@ export function PinPad({
   label = 'PIN',
   testIDPrefix = 'pin',
   maxKeySize = 76,
+  onSurface = false,
 }: PinPadProps): React.JSX.Element {
   const { height, width } = useWindowDimensions();
 
@@ -102,6 +109,7 @@ export function PinPad({
               <Key
                 key={digit}
                 $size={keySize}
+                $onSurface={onSurface}
                 onPress={() => handleDigit(digit)}
                 disabled={disabled}
                 accessibilityRole="keyboardkey"
@@ -132,6 +140,7 @@ export function PinPad({
           )}
           <Key
             $size={keySize}
+            $onSurface={onSurface}
             onPress={() => handleDigit('0')}
             disabled={disabled}
             accessibilityRole="keyboardkey"
@@ -197,15 +206,31 @@ const KeyRow = styled.View`
   margin-bottom: 12px;
 `;
 
-const Key = styled.TouchableOpacity<{ $size: number; $ghost?: boolean }>`
+/**
+ * 숫자 키는 채움색 + 1px 테두리로 모양을 드러낸다. 라이트 테마에서 surface(흰색)는
+ * 화면 배경(gray-50)과 거의 같고, PinConfirmModal 카드는 surface 자체이므로 채움색만으로는
+ * 키가 보이지 않는다. 카드 위에서는 채움색도 backgroundTertiary로 바꾼다.
+ */
+const Key = styled.TouchableOpacity<{
+  $size: number;
+  $ghost?: boolean;
+  $onSurface?: boolean;
+}>`
   width: ${({ $size }) => $size}px;
   height: ${({ $size }) => $size}px;
   border-radius: ${({ $size }) => $size / 2}px;
   margin: 0 8px;
   align-items: center;
   justify-content: center;
-  background-color: ${({ theme, $ghost }) =>
-    $ghost ? 'transparent' : theme.colors.surface};
+  border-width: ${({ $ghost }) => ($ghost ? 0 : 1)}px;
+  border-color: ${({ theme, $ghost }) =>
+    $ghost ? 'transparent' : theme.colors.borderLight};
+  background-color: ${({ theme, $ghost, $onSurface }) =>
+    $ghost
+      ? 'transparent'
+      : $onSurface
+      ? theme.colors.backgroundTertiary
+      : theme.colors.surface};
 `;
 
 const EmptyKey = styled.View<{ $size: number }>`

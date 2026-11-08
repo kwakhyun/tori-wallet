@@ -26,30 +26,39 @@ export function Button({
   ...props
 }: ButtonProps) {
   const theme = useTheme();
+  const filled = variant === 'primary' || variant === 'secondary';
+  // 로딩 중에는 누를 수 없지만 배경은 활성 색을 유지한다. 비활성 회색 배경 위의 흰 스피너는
+  // (라이트 테마 #E4E4E7 위 #FFF ≈ 1.3:1) 보이지 않아 앱이 멈춘 것처럼 보인다.
+  const spinnerColor =
+    disabled && filled
+      ? theme.colors.disabledText
+      : variant === 'primary'
+      ? theme.colors.onPrimary
+      : variant === 'secondary'
+      ? theme.colors.onSecondary
+      : theme.colors.primary;
 
   return (
     <StyledButton
       $variant={variant}
       $size={size}
       $fullWidth={fullWidth}
+      $disabledLook={!!disabled}
       disabled={disabled || loading}
       activeOpacity={0.7}
       testID={testID}
       accessibilityLabel={title}
       accessibilityRole="button"
-      accessibilityState={{ disabled: disabled || loading }}
+      accessibilityState={
+        loading ? { disabled: true, busy: true } : { disabled: !!disabled }
+      }
       {...props}
     >
       {loading ? (
         <ActivityIndicator
-          color={
-            variant === 'primary'
-              ? theme.colors.onPrimary
-              : variant === 'secondary'
-              ? theme.colors.onSecondary
-              : theme.colors.primary
-          }
+          color={spinnerColor}
           size="small"
+          testID={testID ? `${testID}-spinner` : undefined}
         />
       ) : (
         <ButtonText
@@ -68,6 +77,8 @@ const StyledButton = styled.TouchableOpacity<{
   $variant: string;
   $size: string;
   $fullWidth: boolean;
+  /** 명시적으로 비활성화된 경우에만 비활성 모양을 쓴다 (로딩 중은 제외) */
+  $disabledLook: boolean;
 }>`
   flex-direction: row;
   justify-content: center;
@@ -118,8 +129,8 @@ const StyledButton = styled.TouchableOpacity<{
     }
   }}
 
-  ${({ disabled, $variant, theme }) =>
-    disabled &&
+  ${({ $disabledLook, $variant, theme }) =>
+    $disabledLook &&
     ($variant === 'primary' || $variant === 'secondary'
       ? `
     background-color: ${theme.colors.disabledBackground};

@@ -5,7 +5,8 @@
  */
 
 import React from 'react';
-import { Alert, AlertButton, Clipboard } from 'react-native';
+import { Alert, AlertButton, Clipboard, StyleSheet } from 'react-native';
+import { lightTheme } from '../../src/styles/theme';
 import { entropyToMnemonic } from '@scure/bip39';
 import { wordlist } from '@scure/bip39/wordlists/english';
 import { render, fireEvent, act, waitFor } from '../test-utils';
@@ -232,6 +233,28 @@ describe('ImportWalletScreen', () => {
       expect(view.getByText(/체크섬/)).toBeTruthy();
       expect(mockStart).not.toHaveBeenCalled();
       expect(mockNavigate).not.toHaveBeenCalled();
+    });
+
+    it('keeps the primary background while importing so the spinner stays visible (light theme)', async () => {
+      const view = render(<ImportWalletScreen />, { theme: 'light' });
+      typeWords(view, mnemonicOf(12));
+
+      fireEvent.press(view.getByTestId('import-wallet-confirm'));
+
+      // 키 파생 전에 로딩 상태가 먼저 그려진다.
+      const button = view.getByTestId('import-wallet-confirm');
+      expect(view.getByTestId('import-wallet-confirm-spinner')).toBeTruthy();
+      expect(button.props.accessibilityState).toEqual({
+        disabled: true,
+        busy: true,
+      });
+      const background = StyleSheet.flatten(button.props.style).backgroundColor;
+      expect(background).toBe(lightTheme.colors.primary);
+      expect(background).not.toBe(lightTheme.colors.disabledBackground);
+
+      await waitFor(() => expect(mockNavigate).toHaveBeenCalledWith('SetPin'), {
+        timeout: 1000,
+      });
     });
 
     it.each([15, 18, 21])(
