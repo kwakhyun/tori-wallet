@@ -6,6 +6,7 @@ import {
   notificationFor,
 } from '../../src/components/transactions/TransactionNotifier';
 import { useToastStore } from '../../src/store/toastStore';
+import { usePreferencesStore } from '../../src/store/preferencesStore';
 import {
   transactionTracker,
   type TransactionStatusEvent,
@@ -24,7 +25,12 @@ const event = (
   ...overrides,
 });
 
-beforeEach(() => useToastStore.getState().reset());
+beforeEach(() => {
+  useToastStore.getState().reset();
+  usePreferencesStore.setState({ hideBalances: false });
+});
+
+afterAll(() => usePreferencesStore.setState({ hideBalances: false }));
 
 describe('notificationFor', () => {
   it('uses the three status messages with a short description', () => {
@@ -107,6 +113,71 @@ describe('notificationFor', () => {
         }),
       ),
     ).toBeNull();
+  });
+});
+
+describe('hide balances', () => {
+  const hidden = { hideAmounts: true };
+
+  it('drops amounts and token symbols from every description', () => {
+    expect(notificationFor(event({}), hidden)?.message).toBe(
+      '거래가 완료되었습니다 · 전송',
+    );
+    expect(
+      notificationFor(
+        event({
+          status: 'failed',
+          summary: { type: 'swap', amount: '10', symbol: 'USDC' },
+        }),
+        hidden,
+      )?.message,
+    ).toBe('거래가 실패했습니다 · 스왑');
+    expect(
+      describeTransaction(
+        event({ summary: { type: 'approve', amount: '5', symbol: 'USDC' } }),
+        hidden,
+      ),
+    ).toBe('토큰 승인');
+    expect(
+      describeTransaction(
+        event({ summary: { type: 'approve', amount: '0', symbol: 'USDC' } }),
+        hidden,
+      ),
+    ).toBe('토큰 승인 취소');
+    expect(
+      describeTransaction(
+        event({
+          summary: { type: 'contract', amount: '0.2', symbol: 'ETH' },
+        }),
+        hidden,
+      ),
+    ).toBe('');
+    expect(
+      notificationFor(
+        event({
+          status: 'replaced',
+          replacedBy: { hash: other, kind: 'cancel' },
+        }),
+        hidden,
+      )?.message,
+    ).toBe('거래가 대체되었습니다 · 전송 (취소됨)');
+  });
+
+  it('reads the hide-balances preference when a tracker event arrives', () => {
+    let listener: ((e: TransactionStatusEvent) => void) | undefined;
+    const subscribe = jest
+      .spyOn(transactionTracker, 'subscribe')
+      .mockImplementation(next => {
+        listener = next;
+        return jest.fn();
+      });
+    render(<TransactionNotifier />);
+    usePreferencesStore.setState({ hideBalances: true });
+    act(() => listener?.(event({})));
+    const message = useToastStore.getState().current?.message ?? '';
+    expect(message).toBe('거래가 완료되었습니다 · 전송');
+    expect(message).not.toMatch(/0\.5|ETH/);
+    subscribe.mockRestore();
   });
 });
 
