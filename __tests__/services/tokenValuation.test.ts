@@ -101,6 +101,29 @@ describe('tokenValuation', () => {
       expect(totalNoteKind(summary)).toBeNull();
     });
 
+    it('is unknown, not 0, when only zero-balance tokens are priced', () => {
+      // ETH 1.5개의 시세는 못 받았고, 잔액 0인 USDT의 시세만 받음 → ₩0이 아니라 '—'
+      const zeroUsdt = priced(0, { balance: '0', balanceRaw: '0' });
+      const lookup = summarizeTokenTotal([unpricedLookup(), zeroUsdt]);
+      expect(lookup).toMatchObject({
+        total: null,
+        unknownReason: 'lookupFailed',
+      });
+      expect(totalNoteKind(lookup)).toBe('lookupFailed');
+      expect(snapshotBlocker([unpricedLookup(), zeroUsdt])).toBe(
+        'lookupFailed',
+      );
+
+      // 잔액 0인 ETH + 시세 출처가 없는 보유 사용자 토큰 → '—' (기록도 하지 않음)
+      const zeroEth = priced(0, { balance: '0', balanceRaw: '0' });
+      const custom = summarizeTokenTotal([zeroEth, noSource()]);
+      expect(custom).toMatchObject({
+        total: null,
+        unknownReason: 'noPriceSource',
+      });
+      expect(snapshotBlocker([zeroEth, noSource()])).toBe('noPriceSource');
+    });
+
     it('is a real 0 when every token holds nothing', () => {
       expect(
         summarizeTokenTotal([noSource({ balance: '0', balanceRaw: '0' })])

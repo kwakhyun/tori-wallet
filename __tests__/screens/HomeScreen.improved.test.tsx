@@ -248,6 +248,26 @@ describe('HomeScreen', () => {
       );
     });
 
+    it('shows a dash (not ₩0) when only a zero-balance token is priced', async () => {
+      // 1.5 ETH의 시세 조회 실패 + 잔액 0인 USDC의 시세만 성공
+      mockGetTokens.mockResolvedValue([
+        nativeToken({
+          price: 0,
+          value: 0,
+          usdValue: null,
+          priceAvailable: false,
+          hasPriceSource: true,
+        }),
+        usdcToken({ balance: '0', balanceRaw: '0', value: 0, usdValue: 0 }),
+      ]);
+      render(<HomeScreen />);
+      await waitFor(() => {
+        expect(screen.getByTestId('home-total-lookupFailed')).toBeTruthy();
+      });
+      expect(screen.getByTestId('home-total-value')).toHaveTextContent('—');
+      expect(screen.queryByText('$0.00')).toBeNull();
+    });
+
     it('excludes a custom token without a price source without calling it a failure', async () => {
       const LINK = '0x514910771AF9Ca656af840dff83E8264EcF986CA';
       mockGetTokens.mockResolvedValue([

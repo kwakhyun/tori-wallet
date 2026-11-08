@@ -5,7 +5,8 @@
  *  1) 조회 실패: 잔액 조회가 실패했거나, 시세 출처(coingeckoId)가 있는데 가격을 받지 못함
  *  2) 시세 출처 없음: 사용자 토큰이나 커스텀 네트워크 기본 자산처럼 처음부터 가격을 알 수 없음
  *
- * - 가치를 아는 토큰이 하나도 없는데 가치를 모르는 보유 토큰이 있으면 총액은 모른다(null → '—').
+ * - 가치를 아는 보유 토큰이 하나도 없는데 가치를 모르는 보유 토큰이 있으면 총액은 모른다
+ *   (null → '—'). 잔액 0인 토큰의 시세만 아는 경우도 마찬가지다.
  * - 목록이 비어 있어도 총액은 모른다 (지원하지 않는 네트워크 등).
  * - 그 밖에는 가치를 아는 토큰만 더하고, 어떤 종류가 빠졌는지 함께 알려 준다.
  *
@@ -99,14 +100,16 @@ export function summarizeTokenTotal(
   }
 
   let total = 0;
-  let anyValued = false;
+  // 가치를 아는 "보유" 자산이 있는지. 잔액 0인 토큰의 가격만 안다고 총액을 아는 것은 아니다
+  // (ETH 1.5개의 시세를 못 받았는데 잔액 0인 USDT 시세만 받았을 때 ₩0으로 보이지 않게).
+  let anyHeldValued = false;
   let lookupFailed = 0;
   let unpriceable = 0;
   for (const token of tokens) {
     const usd = tokenUsdValue(token);
     if (usd !== null) {
       total += usd;
-      anyValued = true;
+      if (usd > 0 || mayHoldBalance(token)) anyHeldValued = true;
       continue;
     }
     if (!mayHoldBalance(token)) continue;
@@ -114,7 +117,7 @@ export function summarizeTokenTotal(
     else lookupFailed += 1;
   }
 
-  if (!anyValued && lookupFailed + unpriceable > 0) {
+  if (!anyHeldValued && lookupFailed + unpriceable > 0) {
     return {
       total: null,
       partial: false,
