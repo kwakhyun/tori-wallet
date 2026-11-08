@@ -49,7 +49,32 @@ export interface TransactionParams {
   nonce?: string;
 }
 
+/** 최근 전송한 트랜잭션의 서명 nonce (hash → nonce). 메모리에만 두고 개수를 제한한다. */
+const MAX_SUBMITTED_NONCES = 50;
+
 class SigningService {
+  private submittedNonces = new Map<string, number>();
+
+  /**
+   * 이 기기에서 방금 서명·전송한 트랜잭션의 nonce.
+   * 로컬 기록에 nonce를 함께 남기면, 추적기가 첫 확인 전에 멤풀에서 사라진 거래도
+   * 계정 nonce와 비교해 '대기 중'에서 정리할 수 있다. 모르면 undefined.
+   */
+  getSubmittedNonce(hash: string): number | undefined {
+    return this.submittedNonces.get(hash.toLowerCase());
+  }
+
+  private rememberNonce(hash: string, nonce: unknown): void {
+    if (typeof nonce !== 'number' || !Number.isSafeInteger(nonce) || nonce < 0)
+      return;
+    this.submittedNonces.set(hash.toLowerCase(), nonce);
+    while (this.submittedNonces.size > MAX_SUBMITTED_NONCES) {
+      const oldest = this.submittedNonces.keys().next().value;
+      if (oldest === undefined) break;
+      this.submittedNonces.delete(oldest);
+    }
+  }
+
   /**
    * 트랜잭션 서명 및 전송
    */
@@ -60,6 +85,7 @@ class SigningService {
   ): Promise<string> {
     if (!params.from) throw new Error('Transaction account is required');
     const account = await signerVault.getAccount(params.from);
+    let signedNonce: unknown;
     const guardedAccount = {
       ...account,
       signTransaction: (
@@ -67,6 +93,7 @@ class SigningService {
       ) => {
         if (!isAuthorized())
           throw new Error('서명 승인이 만료되거나 취소되었습니다.');
+        signedNonce = (args[0] as { nonce?: unknown } | undefined)?.nonce;
         return account.signTransaction(...args);
       },
     };
@@ -115,6 +142,7 @@ class SigningService {
       txParams as Parameters<typeof walletClient.sendTransaction>[0],
     );
 
+    this.rememberNonce(hash, signedNonce);
     logger.info('Transaction sent:', hash);
     return hash;
   }

@@ -66,7 +66,8 @@ interface SecurityState {
 
   // 자동 잠금 체크
   shouldAutoLock: () => boolean;
-  requiresTransactionPin: (usdValue?: number) => boolean;
+  /** 금액을 모르면(undefined·null·NaN·Infinity) 보수적으로 PIN을 요구한다. */
+  requiresTransactionPin: (usdValue?: number | null) => boolean;
   resetSecurityState: () => void;
 }
 
@@ -163,7 +164,9 @@ export const useSecurityStore = create<SecurityState>()(
         const { requirePinForTransaction, transactionLimit } = get();
         if (requirePinForTransaction) return true;
         if (transactionLimit === null) return false;
-        return usdValue === undefined || usdValue > transactionLimit;
+        // null/NaN은 '모르는 금액'이다. 비교식(NaN > limit === false)에 맡기면 PIN을 건너뛴다.
+        if (usdValue == null || !Number.isFinite(usdValue)) return true;
+        return usdValue > transactionLimit;
       },
 
       resetSecurityState: () => set(initialState),

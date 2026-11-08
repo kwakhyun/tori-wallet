@@ -2,11 +2,15 @@
  * WalletConnect 요청 검토 보조 함수 (호스트에서 사용)
  */
 
+import { signingService } from '@/services/signingService';
 import { formatEther, formatUnits } from 'viem';
 import { coinService } from '@/services/coinService';
 import { decodeApproveCalldata } from '@/services/approvalService';
 import { transactionTracker } from '@/services/transactionTracker';
-import { transactionCacheService, type TransactionType } from '@/realm/services';
+import {
+  transactionCacheService,
+  type TransactionType,
+} from '@/realm/services';
 import type { SignRequest } from '@/components/SignRequestModal';
 import type { DAppVerification } from '@/services/wcService';
 import {
@@ -307,10 +311,11 @@ export async function recordDAppTransaction(
     valueWei: valueWei.toString(),
     gasPrice: (quantity(tx.gasPrice ?? tx.maxFeePerGas) ?? 0n).toString(),
     gasLimit: gas === null ? undefined : gas.toString(),
+    // dApp이 nonce를 지정하지 않았으면 실제로 서명한 nonce를 쓴다.
     nonce:
       nonce !== null && nonce <= BigInt(Number.MAX_SAFE_INTEGER)
         ? Number(nonce)
-        : undefined,
+        : signingService.getSubmittedNonce?.(hash),
     type,
     method: `wc:${request.dApp.name}`.slice(0, 80),
     tokenSymbol: approve ? token?.symbol : nativeSymbol(request.chainId),

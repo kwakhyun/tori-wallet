@@ -14,8 +14,8 @@ import {
   Alert,
   ActivityIndicator,
   TextInput,
-  Clipboard,
 } from 'react-native';
+import { readClipboard } from '@/utils/clipboard';
 import { useRoute } from '@react-navigation/native';
 import type { RouteProp } from '@react-navigation/native';
 import type { RootStackParamList } from '@/navigation/RootNavigator';
@@ -167,7 +167,7 @@ function WalletConnectScreen(): React.JSX.Element {
 
   const handlePaste = useCallback(async () => {
     try {
-      const text = (await Clipboard.getString())?.trim() || '';
+      const text = (await readClipboard()).trim();
       if (!text) {
         showToast('클립보드가 비어 있습니다.', 'info');
         return;

@@ -5,7 +5,8 @@
  */
 
 import React from 'react';
-import { Clipboard, Linking } from 'react-native';
+import { Linking } from 'react-native';
+import { copyToClipboard } from '@/utils/clipboard';
 import styled from 'styled-components/native';
 import { showToast } from '@/store/toastStore';
 
@@ -46,7 +47,7 @@ export function TxSubmittedView({
   const txUrl = explorerTxUrl(explorerUrl, txHash);
 
   const handleCopy = () => {
-    Clipboard.setString(txHash);
+    copyToClipboard(txHash);
     showToast('트랜잭션 해시를 복사했습니다.', 'success');
   };
 

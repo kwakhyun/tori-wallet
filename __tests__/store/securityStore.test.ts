@@ -98,6 +98,18 @@ describe('SecurityStore', () => {
       expect(result.current.requiresTransactionPin(101)).toBe(true);
       expect(result.current.requiresTransactionPin(100)).toBe(false);
     });
+
+    it('treats null/NaN/Infinity as an unknown amount and requires the PIN', () => {
+      const { result } = renderHook(() => useSecurityStore());
+      act(() => {
+        result.current.setRequirePinForTransaction(false);
+        result.current.setTransactionLimit(100);
+      });
+      expect(result.current.requiresTransactionPin(null)).toBe(true);
+      expect(result.current.requiresTransactionPin(NaN)).toBe(true);
+      expect(result.current.requiresTransactionPin(Infinity)).toBe(true);
+      expect(result.current.requiresTransactionPin(5)).toBe(false);
+    });
   });
 
   describe('주소록', () => {

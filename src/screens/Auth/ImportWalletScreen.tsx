@@ -14,7 +14,6 @@ import styled from 'styled-components/native';
 import {
   ActivityIndicator,
   Alert,
-  Clipboard,
   Keyboard,
   Platform,
   ScrollView,
@@ -22,6 +21,7 @@ import {
   StyleSheet,
   TextInput,
 } from 'react-native';
+import { clearClipboard, readClipboard } from '@/utils/clipboard';
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import type { AuthStackParamList } from '@/navigation/AuthNavigator';
@@ -236,13 +236,13 @@ function ImportWalletScreen(): React.JSX.Element {
   const handlePasteAll = useCallback(async () => {
     let text = '';
     try {
-      text = await Clipboard.getString();
+      text = await readClipboard();
     } catch {
       showToast('클립보드에서 붙여넣기에 실패했습니다.', 'error');
       return;
     }
     // 복구 구문이 클립보드에 남아 다른 앱에 노출되지 않도록 바로 비운다.
-    Clipboard.setString('');
+    clearClipboard();
     const incoming = splitMnemonicInput(text);
     if (incoming.length === 0) {
       showToast('클립보드가 비어 있습니다.', 'info');

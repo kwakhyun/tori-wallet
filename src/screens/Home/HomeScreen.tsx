@@ -17,10 +17,10 @@ import {
   RefreshControl,
   ScrollView,
   Alert,
-  Clipboard,
   Image,
   Linking,
 } from 'react-native';
+import { copyToClipboard } from '@/utils/clipboard';
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useQuery } from '@tanstack/react-query';
@@ -164,7 +164,7 @@ function HomeScreen(): React.JSX.Element {
 
   const handleCopyAddress = useCallback(() => {
     if (activeWallet?.address) {
-      Clipboard.setString(activeWallet.address);
+      copyToClipboard(activeWallet.address);
       showToast('주소를 복사했습니다', 'success');
     }
   }, [activeWallet?.address]);

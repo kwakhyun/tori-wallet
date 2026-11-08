@@ -66,7 +66,9 @@ function formatChartLabel(timestamp: number, range: TimeRange): string {
  *  "BNB Chain의 자산이 아니다"라고 잘못 말하지 않는다)
  */
 export function buyAddressHint(
-  network: { name: string; isTestnet?: boolean; isCustom?: boolean } | undefined,
+  network:
+    | { name: string; isTestnet?: boolean; isCustom?: boolean }
+    | undefined,
 ): string {
   const name = network?.name ?? '현재 네트워크';
   if (network?.isTestnet) {

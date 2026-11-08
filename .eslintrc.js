@@ -40,6 +40,12 @@ module.exports = {
                 message:
                   "Use AppModal from '@/components/common/AppModal' (lock-aware, iOS-coordinated).",
               },
+              {
+                name: 'react-native',
+                importNames: ['Clipboard'],
+                message:
+                  "Use copyToClipboard/readClipboard/clearClipboard from '@/utils/clipboard'.",
+              },
             ],
           },
         ],

@@ -187,4 +187,35 @@ describe('SigningService', () => {
     ).rejects.toThrow('취소');
     expect(mockSignTransaction).not.toHaveBeenCalled();
   });
+
+  it('remembers the nonce viem signed so the local record can carry it', async () => {
+    const HASH = `0x${'ab'.repeat(32)}`;
+    mockSendTransaction.mockImplementationOnce(async ({ account }) => {
+      await account.signTransaction({ chainId: 1, to: TO_ADDRESS, nonce: 42 });
+      return HASH;
+    });
+    await signingService.sendTransaction(
+      { from: TEST_ADDRESS, to: TO_ADDRESS },
+      1,
+    );
+    expect(
+      signingService.getSubmittedNonce(HASH.toUpperCase().replace('0X', '0x')),
+    ).toBe(42);
+    expect(
+      signingService.getSubmittedNonce(`0x${'cd'.repeat(32)}`),
+    ).toBeUndefined();
+  });
+
+  it('records nothing when the signed request had no nonce', async () => {
+    const HASH = `0x${'ef'.repeat(32)}`;
+    mockSendTransaction.mockImplementationOnce(async ({ account }) => {
+      await account.signTransaction({ chainId: 1, to: TO_ADDRESS });
+      return HASH;
+    });
+    await signingService.sendTransaction(
+      { from: TEST_ADDRESS, to: TO_ADDRESS },
+      1,
+    );
+    expect(signingService.getSubmittedNonce(HASH)).toBeUndefined();
+  });
 });

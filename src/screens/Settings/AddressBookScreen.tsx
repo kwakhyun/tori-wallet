@@ -11,13 +11,8 @@
  */
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import {
-  ActivityIndicator,
-  Alert,
-  Clipboard,
-  FlatList,
-  StatusBar,
-} from 'react-native';
+import { ActivityIndicator, Alert, FlatList, StatusBar } from 'react-native';
+import { readClipboard } from '@/utils/clipboard';
 import styled, { useTheme as useStyledTheme } from 'styled-components/native';
 import { useShallow } from 'zustand/react/shallow';
 import { useNavigation, useRoute } from '@react-navigation/native';
@@ -293,7 +288,7 @@ export function AddressBookScreen({
 
   const handlePaste = useCallback(async () => {
     try {
-      const text = (await Clipboard.getString())?.trim();
+      const text = (await readClipboard()).trim();
       if (text && isAddress(text)) {
         setAddress(text);
         setFormErrors(previous => ({ ...previous, address: undefined }));

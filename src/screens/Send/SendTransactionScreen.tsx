@@ -20,9 +20,9 @@ import {
   Alert,
   ActivityIndicator,
   Keyboard,
-  Clipboard,
   Platform,
 } from 'react-native';
+import { readClipboard } from '@/utils/clipboard';
 import { useQuery } from '@tanstack/react-query';
 import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -611,7 +611,7 @@ function SendTransactionScreen(): React.JSX.Element {
   // 클립보드에서 주소 붙여넣기
   const handlePasteAddress = useCallback(async () => {
     try {
-      const clipboardContent = (await Clipboard.getString())?.trim();
+      const clipboardContent = (await readClipboard()).trim();
       if (
         clipboardContent &&
         (/^0x[0-9a-fA-F]{40}$/.test(clipboardContent) ||
@@ -821,6 +821,7 @@ function SendTransactionScreen(): React.JSX.Element {
             snapshot.transaction.maxFeePerGas ||
             '0',
           gasLimit: snapshot.transaction.gas,
+          nonce: signingService.getSubmittedNonce?.(hash),
           type: 'send',
           tokenSymbol: snapshot.symbol || activeNetwork?.symbol,
           tokenAmount: snapshot.amount,

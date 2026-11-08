@@ -17,11 +17,11 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
-  Clipboard,
   Linking,
   RefreshControl,
   ScrollView,
 } from 'react-native';
+import { copyToClipboard } from '@/utils/clipboard';
 import styled, { useTheme } from 'styled-components/native';
 import { useShallow } from 'zustand/react/shallow';
 import { useQuery } from '@tanstack/react-query';
@@ -222,7 +222,7 @@ export default function TransactionDetailScreen(): React.JSX.Element {
   }, []);
 
   const copy = useCallback((value: string, label: string) => {
-    Clipboard.setString(value);
+    copyToClipboard(value);
     showToast(`${label}를 복사했습니다`, 'success');
   }, []);
 

@@ -11,7 +11,7 @@
 
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import styled from 'styled-components/native';
-import { ActivityIndicator } from 'react-native';
+import { AccessibilityInfo, ActivityIndicator } from 'react-native';
 import {
   isBiometricUnlockAvailable,
   useAuthentication,
@@ -64,6 +64,18 @@ export function PinConfirmModal({
   } = useAuthentication({ requireUnlockedWallet: true });
   const lockout = usePinLockout(visible);
   const { refresh: refreshLockout, lockUntil } = lockout;
+
+  // 카운트다운 문구는 매초 바뀌어 라이브 영역에 둘 수 없다. 제한이 시작될 때 한 번만 낭독한다.
+  const wasLocked = useRef(false);
+  useEffect(() => {
+    const locked = visible && lockout.isLocked;
+    if (locked && !wasLocked.current) {
+      AccessibilityInfo.announceForAccessibility(
+        `PIN 입력이 제한되었습니다. ${lockout.countdown} 후 다시 시도해주세요.`,
+      );
+    }
+    wasLocked.current = locked;
+  }, [visible, lockout.isLocked, lockout.countdown]);
 
   useEffect(() => {
     cancel();

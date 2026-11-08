@@ -1,5 +1,10 @@
 import React from 'react';
-import { AppState, AppStateStatus, StyleSheet } from 'react-native';
+import {
+  AccessibilityInfo,
+  AppState,
+  AppStateStatus,
+  StyleSheet,
+} from 'react-native';
 import {
   render,
   renderHook,
@@ -127,6 +132,28 @@ it('shows the shared persistent lock error without confirming', async () => {
   expect(signerVault.isUnlocked()).toBe(false);
 });
 
+it('announces the lockout once when it starts, not on every countdown tick', async () => {
+  const announce = jest
+    .spyOn(AccessibilityInfo, 'announceForAccessibility')
+    .mockImplementation(() => undefined);
+  retrieve.mockRejectedValue(new PinLockedError(Date.now() + 30_000));
+  const view = render(element());
+  for (const digit of '123456')
+    fireEvent.press(view.getByTestId(`pin-key-${digit}`));
+  await act(async () => {});
+  const lockoutAnnouncements = () =>
+    announce.mock.calls.filter(([message]) =>
+      String(message).includes('PIN 입력이 제한'),
+    );
+  expect(lockoutAnnouncements()).toHaveLength(1);
+  expect(String(lockoutAnnouncements()[0][0])).toMatch(
+    /\d{2}:\d{2} 후 다시 시도/,
+  );
+  view.rerender(element());
+  await act(async () => {});
+  expect(lockoutAnnouncements()).toHaveLength(1);
+});
+
 it('shows the wrong PIN message with the remaining attempts', async () => {
   retrieve.mockResolvedValue(null);
   jest
@@ -195,12 +222,10 @@ describe('biometric approval', () => {
   });
 
   it('can retry biometrics during a PIN lockout after the first prompt failed', async () => {
-    jest
-      .spyOn(pinAttemptService, 'getStatus')
-      .mockResolvedValue({
-        failures: 7,
-        blockedUntil: Date.now() + 8 * 60_000,
-      });
+    jest.spyOn(pinAttemptService, 'getStatus').mockResolvedValue({
+      failures: 7,
+      blockedUntil: Date.now() + 8 * 60_000,
+    });
     retrieveBiometric.mockResolvedValueOnce(null);
     const view = render(element());
     await act(async () => {});
