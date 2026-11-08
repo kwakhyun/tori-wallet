@@ -9,6 +9,7 @@ import SendTransactionScreen from '../../src/screens/Send/SendTransactionScreen'
 import { signingService } from '../../src/services/signingService';
 import { chainClient } from '../../src/services/chainClient';
 import { ensService } from '../../src/services/ensService';
+import { transferService } from '../../src/services/transferService';
 
 const mockAddress = '0x1234567890123456789012345678901234567890';
 const recipient = '0x0987654321098765432109876543210987654321';
@@ -153,8 +154,9 @@ jest.mock('../../src/components/common', () => ({
 jest.mock(
   '../../src/screens/Settings/AddressBookScreen',
   () => (props: any) => {
+    const { View } = require('react-native');
     mockAddressBookProps = props;
-    return null;
+    return <View testID="mock-address-book" />;
   },
 );
 jest.mock('../../src/components/common/PinConfirmModal', () => (props: any) => {
@@ -463,6 +465,38 @@ it('calculates native MAX before a recipient is entered and reserves the fee', a
   ).toBe(parseEther('10'));
 });
 
+it('discards a slow native MAX result after the user switches to a token', async () => {
+  const prepare = jest.spyOn(transferService, 'prepare');
+  let resolveBalance!: (value: { wei: bigint; formatted: string }) => void;
+  (chainClient.getBalance as jest.Mock).mockReturnValueOnce(
+    new Promise(resolve => {
+      resolveBalance = resolve;
+    }),
+  );
+  const view = mount();
+  await flush(10);
+  fireEvent.press(view.getByTestId('send-max-button'));
+  expect(view.getByTestId('send-max-button')).toHaveTextContent('계산중...');
+
+  fireEvent.press(view.getByTestId('send-asset-button'));
+  fireEvent.press(view.getByTestId('send-token-picker-item-USDC'));
+  // 선택을 바꾸면 계산 표시도 바로 풀린다.
+  expect(view.getByTestId('send-max-button')).toHaveTextContent('최대');
+  await act(async () => {
+    resolveBalance({ wei: parseEther('10'), formatted: '10' });
+  });
+  await flush(10);
+
+  expect(view.getByTestId('send-asset-button')).toHaveTextContent(/USDC/);
+  expect(view.getByTestId('send-amount-input').props.value).toBe('');
+  fireEvent.changeText(view.getByTestId('send-address-input'), recipient);
+  await flush();
+  expect(prepare).not.toHaveBeenCalledWith(
+    expect.objectContaining({ sendMax: true }),
+  );
+  prepare.mockRestore();
+});
+
 it('reserves the L1 data fee for native MAX on Base and shows it in review', async () => {
   mockActiveChainId = 8453;
   const l1Fee = 1_000_000_000_000n;
@@ -537,6 +571,36 @@ describe('QR payment requests', () => {
     });
     expect(view.getByTestId('send-address-input').props.value).toBe(recipient);
     expect(view.getByTestId('send-amount-input').props.value).toBe('1.5');
+  });
+
+  it('clears the previous token amount and MAX when a native request has no amount', async () => {
+    const prepare = jest.spyOn(transferService, 'prepare');
+    const view = mount();
+    await flush(10);
+    fireEvent.press(view.getByTestId('send-asset-button'));
+    fireEvent.press(view.getByTestId('send-token-picker-item-USDC'));
+    await flush(10);
+    fireEvent.press(view.getByTestId('send-max-button'));
+    expect(view.getByTestId('send-amount-input').props.value).toBe('5');
+
+    await act(async () => {
+      await mockQrProps.onScan({
+        kind: 'payment',
+        recipient,
+        chainId: 1,
+        raw: `ethereum:${recipient}@1`,
+      });
+    });
+    expect(view.getByTestId('send-asset-button')).toHaveTextContent(/ETH/);
+    expect(view.getByTestId('send-address-input').props.value).toBe(recipient);
+    expect(view.getByTestId('send-amount-input').props.value).toBe('');
+    await flush();
+    // 이전 USDC의 MAX가 네이티브 전체 잔액 전송으로 이어지지 않는다.
+    expect(prepare).not.toHaveBeenCalledWith(
+      expect.objectContaining({ sendMax: true }),
+    );
+    expect(view.queryByText('수수료를 뺀 전체 잔액을 보냅니다.')).toBeNull();
+    prepare.mockRestore();
   });
 
   it('selects a known token and formats the amount with its decimals', async () => {
@@ -653,10 +717,29 @@ it('shows the active network on the input step', () => {
   expect(view.getByTestId('send-network-badge')).toHaveTextContent(/Ethereum/);
 });
 
+it('embeds the address book with its own close header instead of a second title bar', async () => {
+  const view = mount();
+  expect(view.queryByTestId('mock-address-book')).toBeNull();
+  fireEvent.press(view.getByTestId('send-address-book-button'));
+  expect(view.getByTestId('mock-address-book')).toBeTruthy();
+  expect(mockAddressBookProps).toMatchObject({
+    selectionMode: true,
+    onSelectAddress: expect.any(Function),
+    onClose: expect.any(Function),
+  });
+  // Send는 별도의 래퍼 헤더를 그리지 않는다 (AddressBookScreen 헤더 하나만).
+  expect(view.queryByTestId('send-address-book-close')).toBeNull();
+  expect(view.queryByText('받는 주소 선택')).toBeNull();
+  await act(async () => {
+    mockAddressBookProps.onClose();
+  });
+  expect(view.queryByTestId('mock-address-book')).toBeNull();
+});
+
 it('ignores the placeholder name for recent addresses from the address book', async () => {
   const view = mount();
   fireEvent.press(view.getByTestId('send-address-book-button'));
-  expect(view.getByTestId('send-address-book-close')).toBeTruthy();
+  expect(view.getByTestId('mock-address-book')).toBeTruthy();
   await act(async () => {
     mockAddressBookProps.onSelectAddress(recipient, '최근 주소');
   });

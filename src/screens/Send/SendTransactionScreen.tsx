@@ -247,6 +247,14 @@ function SendTransactionScreen(): React.JSX.Element {
   const [showTokenPicker, setShowTokenPicker] = useState(false);
   const [estimateError, setEstimateError] = useState<string | null>(null);
 
+  // 최대 금액 계산 요청 번호. 자산·금액·네트워크가 바뀌면 올려서 늦게 도착한
+  // 이전 결과(다른 자산의 최대 금액)가 새 입력을 덮어쓰지 않게 한다.
+  const maxRequestId = useRef(0);
+  const cancelMaxRequest = useCallback(() => {
+    maxRequestId.current += 1;
+    setIsCalculatingMax(false);
+  }, []);
+
   // 라우트로 받은 최소 단위 수량은 소수 자릿수를 알게 된 뒤 한 번만 적용한다.
   useEffect(() => {
     if (pendingAmountRaw.current === null) return;
@@ -261,12 +269,13 @@ function SendTransactionScreen(): React.JSX.Element {
   useEffect(() => {
     if (previousChain.current === activeNetworkChainId) return;
     previousChain.current = activeNetworkChainId;
+    cancelMaxRequest();
     setTokenAddress(undefined);
     setAmount('');
     setAmountIsMax(false);
     setPlan(null);
     setStep(current => (current === 'success' ? current : 'input'));
-  }, [activeNetworkChainId]);
+  }, [activeNetworkChainId, cancelMaxRequest]);
 
   // ── 수신자 해석/검증 ─────────────────────────────────────────
   const trimmedInput = recipientInput.trim();
@@ -481,6 +490,8 @@ function SendTransactionScreen(): React.JSX.Element {
     setToAddressName(null);
   }, []);
 
+  const closeAddressBook = useCallback(() => setShowAddressBook(false), []);
+
   // 주소록에서 주소 선택
   const handleSelectAddressFromBook = useCallback(
     (address: `0x${string}`, name: string) => {
@@ -575,6 +586,7 @@ function SendTransactionScreen(): React.JSX.Element {
           return;
         }
         const apply = () => {
+          cancelMaxRequest();
           setTokenAddress(requestedToken);
           handleRecipientChange(result.recipient);
           setAmountIsMax(false);
@@ -600,12 +612,15 @@ function SendTransactionScreen(): React.JSX.Element {
         return;
       }
 
+      // 결제 요청이 자산과 금액을 정한다. 금액이 없는 요청도 이전 자산의 금액이나
+      // 최대 금액(MAX)을 네이티브 금액으로 이어받지 않게 비운다.
+      cancelMaxRequest();
       setTokenAddress(undefined);
       handleRecipientChange(result.recipient);
-      if (result.amountRaw !== undefined) {
-        setAmountIsMax(false);
-        setAmount(formatUnits(result.amountRaw, 18));
-      }
+      setAmountIsMax(false);
+      setAmount(
+        result.amountRaw !== undefined ? formatUnits(result.amountRaw, 18) : '',
+      );
       showToast('결제 요청을 적용했습니다. 내용을 확인해주세요.', 'info');
     },
     [
@@ -615,17 +630,22 @@ function SendTransactionScreen(): React.JSX.Element {
       tokenList,
       activeAddress,
       handleRecipientChange,
+      cancelMaxRequest,
     ],
   );
 
-  const handleSelectToken = useCallback((token: PickerToken) => {
-    setTokenAddress(
-      token.id === 'native' ? undefined : (token.id as `0x${string}`),
-    );
-    setAmount('');
-    setAmountIsMax(false);
-    setShowTokenPicker(false);
-  }, []);
+  const handleSelectToken = useCallback(
+    (token: PickerToken) => {
+      cancelMaxRequest();
+      setTokenAddress(
+        token.id === 'native' ? undefined : (token.id as `0x${string}`),
+      );
+      setAmount('');
+      setAmountIsMax(false);
+      setShowTokenPicker(false);
+    },
+    [cancelMaxRequest],
+  );
 
   const handleContinue = useCallback(async () => {
     Keyboard.dismiss();
@@ -739,7 +759,9 @@ function SendTransactionScreen(): React.JSX.Element {
    * 받는 주소가 아직 없으면 내 주소로 가스를 추정한다.
    */
   const handleMaxAmount = useCallback(async () => {
+    const requestId = ++maxRequestId.current;
     if (tokenAddress) {
+      setIsCalculatingMax(false);
       if (tokenBalance) {
         setAmount(tokenBalance.formatted);
         setAmountIsMax(true);
@@ -747,6 +769,13 @@ function SendTransactionScreen(): React.JSX.Element {
       return;
     }
     if (!activeAddress) return;
+    const chainId = activeNetworkChainId;
+    // 계산 중에 자산·금액·네트워크·계정이 바뀌었으면 결과를 버린다.
+    const isCurrent = () =>
+      mounted.current &&
+      maxRequestId.current === requestId &&
+      currentChain.current === chainId &&
+      currentAccount.current === activeAddress;
     setIsCalculatingMax(true);
     try {
       const estimateTo =
@@ -754,11 +783,11 @@ function SendTransactionScreen(): React.JSX.Element {
       const result = await txService.calculateMaxSendable(
         activeAddress,
         estimateTo,
-        activeNetworkChainId,
+        chainId,
         undefined,
         feeSpeed,
       );
-      if (!mounted.current) return;
+      if (!isCurrent()) return;
       if (result.maxWei <= 0n) {
         showToast('수수료를 제외하면 보낼 수 있는 잔액이 없습니다.', 'warning');
         return;
@@ -766,12 +795,14 @@ function SendTransactionScreen(): React.JSX.Element {
       setAmount(result.maxAmount);
       setAmountIsMax(true);
     } catch {
+      if (!isCurrent()) return;
       showToast(
         '최대 금액을 계산하지 못했습니다. 네트워크를 확인해주세요.',
         'error',
       );
     } finally {
-      if (mounted.current) setIsCalculatingMax(false);
+      if (mounted.current && maxRequestId.current === requestId)
+        setIsCalculatingMax(false);
     }
   }, [
     tokenAddress,
@@ -783,10 +814,14 @@ function SendTransactionScreen(): React.JSX.Element {
     feeSpeed,
   ]);
 
-  const handleAmountChange = useCallback((text: string) => {
-    setAmount(text.replace(',', '.'));
-    setAmountIsMax(false);
-  }, []);
+  const handleAmountChange = useCallback(
+    (text: string) => {
+      cancelMaxRequest();
+      setAmount(text.replace(',', '.'));
+      setAmountIsMax(false);
+    },
+    [cancelMaxRequest],
+  );
 
   // ── 표시용 값 ─────────────────────────────────────────────
   const amountNumber = Number(amount);
@@ -1286,26 +1321,20 @@ function SendTransactionScreen(): React.JSX.Element {
         message="송금을 진행하려면 PIN을 입력하세요."
       />
 
-      {/* 주소록 모달 */}
+      {/* 주소록 모달: AddressBookScreen이 자체 헤더(주소 선택 + 닫기)를 그린다. */}
       <AppModal
         visible={showAddressBook}
         animationType="slide"
         presentationStyle="pageSheet"
-        onRequestClose={() => setShowAddressBook(false)}
-        onLock={() => setShowAddressBook(false)}
+        onRequestClose={closeAddressBook}
+        onLock={closeAddressBook}
+        testID="send-address-book-modal"
       >
-        <Screen testID="send-address-book-modal">
-          <ScreenHeader
-            title="받는 주소 선택"
-            leftIcon="close"
-            onBack={() => setShowAddressBook(false)}
-            backTestID="send-address-book-close"
-          />
-          <AddressBookScreen
-            selectionMode
-            onSelectAddress={handleSelectAddressFromBook}
-          />
-        </Screen>
+        <AddressBookScreen
+          selectionMode
+          onSelectAddress={handleSelectAddressFromBook}
+          onClose={closeAddressBook}
+        />
       </AppModal>
 
       <TokenPickerModal
