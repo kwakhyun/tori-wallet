@@ -159,8 +159,12 @@ describe('CoinDetailScreen', () => {
     await waitFor(() => screen.getByTestId('coin-detail-chart-loading'));
 
     resolveDay(history(2900));
+    // 실패할 때마다 거대한 엘리먼트를 직렬화하는 toBeNull() 대신 불리언으로 확인한다.
+    // (직렬화가 폴링 1회당 수백 ms를 써서 기본 1초 제한을 넘기곤 했다)
     await waitFor(() => {
-      expect(screen.queryByTestId('coin-detail-chart-loading')).toBeNull();
+      expect(screen.queryByTestId('coin-detail-chart-loading') === null).toBe(
+        true,
+      );
     });
     expect(mockGetPriceHistory).toHaveBeenCalledWith('ethereum', '1');
   });
