@@ -65,6 +65,15 @@ export function isAutoLockWeakening(
   return AUTO_LOCK_OPTIONS[next] > AUTO_LOCK_OPTIONS[current];
 }
 
+/** 자동 잠금 시간 라벨 + 조사 '(으)로' (예: "15분으로", "30초로") */
+function autoLockLabelWithRo(option: AutoLockOption): string {
+  const label = AUTO_LOCK_LABELS[option];
+  const code = label.charCodeAt(label.length - 1) - 0xac00;
+  const batchim = code >= 0 && code <= 11171 ? code % 28 : 0;
+  // 받침이 없거나 ㄹ 받침이면 '로', 그 밖의 받침은 '으로'
+  return `${label}${batchim === 0 || batchim === 8 ? '로' : '으로'}`;
+}
+
 /** 현재 거래 PIN 정책을 한 문장으로 설명한다. */
 export function describeTransactionPinPolicy(
   requirePin: boolean,
@@ -144,7 +153,7 @@ export function SecuritySettingsScreen(): React.JSX.Element {
     setAutoLockTimeout(pendingAutoLock);
     closeModal();
     showToast(
-      `자동 잠금 시간을 ${AUTO_LOCK_LABELS[pendingAutoLock]}(으)로 늘렸습니다.`,
+      `자동 잠금 시간을 ${autoLockLabelWithRo(pendingAutoLock)} 늘렸습니다.`,
       'success',
     );
   }, [closeModal, pendingAutoLock, setAutoLockTimeout]);
@@ -411,8 +420,8 @@ export function SecuritySettingsScreen(): React.JSX.Element {
         visible={activeModal === 'lengthenAutoLock'}
         title="자동 잠금 시간 늘리기"
         description={`자동 잠금 시간을 ${
-          pendingAutoLock ? AUTO_LOCK_LABELS[pendingAutoLock] : ''
-        }(으)로 늘리면 잠금 해제 상태가 더 오래 유지됩니다. 계속하려면 PIN을 입력하세요.`}
+          pendingAutoLock ? `${autoLockLabelWithRo(pendingAutoLock)} ` : ''
+        }늘리면 잠금 해제 상태가 더 오래 유지됩니다. 계속하려면 PIN을 입력하세요.`}
         onVerified={handleLengthenAutoLockVerified}
         onCancel={closeModal}
         testID="lengthen-auto-lock-modal"

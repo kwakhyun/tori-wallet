@@ -210,6 +210,7 @@ describe('SecuritySettingsScreen', () => {
     // 선택 시트가 닫히고 PIN 시트가 열린다. 확인 전에는 값이 바뀌지 않는다.
     expect(screen.queryByTestId('auto-lock-modal')).toBeNull();
     expect(screen.getByTestId('lengthen-auto-lock-modal')).toBeTruthy();
+    expect(screen.getByText(/자동 잠금 시간을 15분으로 늘리면/)).toBeTruthy();
     expect(useSecurityStore.getState().autoLockTimeout).toBe('1m');
 
     await enterPin('lengthen-auto-lock-modal-pin', '000000');
@@ -228,14 +229,15 @@ describe('SecuritySettingsScreen', () => {
   });
 
   it('keeps the auto-lock timeout when the PIN prompt is cancelled', async () => {
-    useSecurityStore.setState({ autoLockTimeout: '1m' });
+    useSecurityStore.setState({ autoLockTimeout: 'immediate' });
     renderScreen();
     fireEvent.press(screen.getByTestId('security-auto-lock'));
-    fireEvent.press(screen.getByTestId('auto-lock-option-5m'));
+    fireEvent.press(screen.getByTestId('auto-lock-option-30s'));
+    expect(screen.getByText(/자동 잠금 시간을 30초로 늘리면/)).toBeTruthy();
     fireEvent.press(screen.getByTestId('lengthen-auto-lock-modal-close'));
 
     expect(screen.queryByTestId('lengthen-auto-lock-modal')).toBeNull();
-    expect(useSecurityStore.getState().autoLockTimeout).toBe('1m');
+    expect(useSecurityStore.getState().autoLockTimeout).toBe('immediate');
     await waitFor(() => expect(screen.getByText('PIN 변경')).toBeTruthy());
   });
 
