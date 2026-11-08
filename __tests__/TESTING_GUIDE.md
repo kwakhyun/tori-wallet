@@ -88,6 +88,14 @@ it('로딩 상태를 종료한다', async () => {
 });
 ```
 
+큰 화면에서 요소가 사라지기를 기다릴 때는 `toBeNull()` 대신 불리언으로 단언합니다. `toBeNull()`은 실패할 때마다 남아 있는 엘리먼트 트리 전체를 직렬화해 폴링 한 번에 수백 ms가 걸리고, 기본 1초 제한을 넘겨 간헐적으로 실패할 수 있습니다.
+
+```tsx
+await waitFor(() => {
+  expect(screen.queryByTestId('coin-detail-chart-loading') === null).toBe(true);
+});
+```
+
 ### 서비스와 내비게이션 모킹
 
 ```tsx
@@ -165,19 +173,26 @@ it('접근 가능한 전송 버튼을 제공한다', () => {
 
 ## 커버리지 기준과 현재 상태
 
-`jest.config.js`의 임계값은 회귀 방지를 위한 최소 기준입니다. 현재 수치는 2026년 8월 30일 `yarn test:coverage` 실행 결과입니다.
+`jest.config.js`의 임계값은 회귀 방지를 위한 최소 기준입니다. 현재 수치는 2026년 11월 8일 `yarn test:coverage` 실행 결과입니다.
 
 | 범위           | Statements | Branches | Functions |  Lines |
 | -------------- | ---------: | -------: | --------: | -----: |
 | 전역 최소 기준 |        53% |      38% |       48% |    53% |
-| 전체 현재      |     60.85% |   49.04% |    55.41% | 61.38% |
-| 서비스 현재    |     89.22% |   77.68% |    97.10% | 90.64% |
-| 스토어 현재    |     93.62% |   77.36% |    95.12% | 93.50% |
-| 유틸리티 현재  |     91.25% |   86.71% |    93.06% | 92.21% |
+| 전체 현재      |     86.39% |   78.21% |    88.63% | 87.75% |
+| 서비스 현재    |     90.90% |   82.32% |    93.81% | 93.12% |
+| 스토어 현재    |     96.48% |   88.00% |    96.75% | 96.85% |
+| 유틸리티 현재  |     90.84% |   86.46% |    94.12% | 91.67% |
 
 서비스와 스토어에는 전역보다 높은 별도 최소 기준이 적용됩니다. Statements와 Lines는 75%, Branches는 55%, Functions는 80%입니다.
 
-같은 날짜 기준으로 91개 테스트 스위트, 1,339개 테스트와 스냅샷 2개가 통과했습니다.
+같은 날짜 기준으로 139개 테스트 스위트, 2,209개 테스트와 스냅샷 2개가 통과했습니다.
+
+## 잠금 인식 모달과 공용 유틸
+
+- 화면 코드는 `react-native`의 `Modal` 대신 `@/components/common/AppModal`을, `Clipboard` 대신 `@/utils/clipboard`를 사용합니다. ESLint `no-restricted-imports`가 직접 import를 막습니다.
+- `jest.setup.js`의 `Modal` 모의 객체는 `onShow`/`onDismiss`를 호출해 iOS의 한 번에 하나씩 표시하는 순서를 흉내 내며, 테스트마다 `resetModalPresence()`로 표시 기록을 초기화합니다.
+- 지갑 잠금 동작은 `useWalletStore.setState({ hasWallet: true, isLocked: true })`로 재현합니다. 잠긴 동안에는 `AppModal`이 내용을 그리지 않고 `onLock`을 호출하며, `ToastHost`는 토스트를 보류합니다.
+- 화면 테스트에서 `walletStore`를 모킹할 때 비동기 경로가 `useWalletStore.getState()`로 잠금 여부를 확인하므로 `getState`도 함께 제공해야 합니다.
 
 ## `testID` 네이밍
 
