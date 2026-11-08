@@ -8,8 +8,8 @@
  *  - 예상 가스비 (네트워크 네이티브 단위 + 법정화폐)
  */
 
-import React, { useEffect, useState } from 'react';
-import { ActivityIndicator } from 'react-native';
+import React, { useEffect, useRef, useState } from 'react';
+import { AccessibilityInfo, ActivityIndicator } from 'react-native';
 import { AppModal } from '@/components/common/AppModal';
 import styled, { useTheme } from 'styled-components/native';
 import { formatEther } from 'viem';
@@ -27,7 +27,30 @@ export interface ApprovalRequirement {
   amount: string;
   /** 승인 대상 (0x AllowanceHolder) */
   spender: string;
+  /**
+   * 남은 승인량을 먼저 0으로 초기화하는 트랜잭션이 추가로 필요한지
+   * (남은 승인량이 있으면 새 수량을 승인할 수 없는 메인넷 USDT 등)
+   */
+  resetRequired?: boolean;
 }
+
+type TimerAnnouncement = 60 | 30 | 10 | 'expired' | null;
+
+/** 화면 낭독기에 알릴 남은 시간 구간 (매초가 아니라 이 구간이 바뀔 때만 알린다) */
+function timerAnnouncement(remainingSeconds: number): TimerAnnouncement {
+  if (remainingSeconds <= 0) return 'expired';
+  if (remainingSeconds <= 10) return 10;
+  if (remainingSeconds <= 30) return 30;
+  if (remainingSeconds <= 60) return 60;
+  return null;
+}
+
+const TIMER_ANNOUNCEMENTS: Record<Exclude<TimerAnnouncement, null>, string> = {
+  60: '견적 유효 시간이 1분 남았습니다.',
+  30: '견적 유효 시간이 30초 남았습니다.',
+  10: '견적 유효 시간이 10초 남았습니다.',
+  expired: '견적이 만료되었습니다. 새로고침 후 다시 확인해주세요.',
+};
 
 interface Props {
   visible: boolean;
@@ -95,15 +118,34 @@ export function SwapReviewModal({
     return () => clearInterval(timer);
   }, [visible, quote]);
 
+  const remainingSeconds = quote
+    ? Math.max(0, Math.ceil(quoteRemainingMs(quote, now) / 1000))
+    : 0;
+  const isExpired = remainingSeconds <= 0;
+
+  // 매초 바뀌는 카운트다운은 라이브 영역에 두지 않는다 (TalkBack이 매초 읽어 다른 내용을
+  // 끊는다). 1분·30초·10초·만료 구간에 들어설 때만 알린다. 처음 열 때는 알리지 않는다.
+  const announcement =
+    visible && quote ? timerAnnouncement(remainingSeconds) : null;
+  const lastAnnouncement = useRef<TimerAnnouncement | undefined>(undefined);
+  useEffect(() => {
+    if (!visible || !quote) {
+      lastAnnouncement.current = undefined;
+      return;
+    }
+    const previous = lastAnnouncement.current;
+    lastAnnouncement.current = announcement;
+    if (previous === undefined || announcement === previous) return;
+    if (announcement !== null) {
+      AccessibilityInfo.announceForAccessibility(
+        TIMER_ANNOUNCEMENTS[announcement],
+      );
+    }
+  }, [announcement, visible, quote]);
+
   if (!sellToken || !buyToken || !quote) {
     return <></>;
   }
-
-  const remainingSeconds = Math.max(
-    0,
-    Math.ceil(quoteRemainingMs(quote, now) / 1000),
-  );
-  const isExpired = remainingSeconds <= 0;
   const rate = parseFloat(buyAmount) / parseFloat(sellAmount);
   const isCritical = priceImpact.level === 'critical';
   const isHigh = priceImpact.level === 'high';
@@ -156,10 +198,7 @@ export function SwapReviewModal({
 
           {/* 견적 유효 시간 */}
           <QuoteTimerRow $expired={isExpired} testID="swap-quote-timer">
-            <QuoteTimerText
-              $expired={isExpired}
-              accessibilityLiveRegion="polite"
-            >
+            <QuoteTimerText $expired={isExpired} testID="swap-quote-timer-text">
               {isExpired
                 ? '견적이 만료되었습니다. 새로고침 후 다시 확인해주세요.'
                 : `견적 유효 시간 ${remainingSeconds}초`}
@@ -191,8 +230,18 @@ export function SwapReviewModal({
               <ApprovalText>
                 스왑 전에 {approval.tokenSymbol}을(를) 0x AllowanceHolder가
                 정확히 아래 수량만 사용할 수 있도록 승인하는 트랜잭션을 먼저
-                보냅니다. 승인과 스왑, 두 번의 네트워크 수수료가 발생합니다.
+                보냅니다.{' '}
+                {approval.resetRequired
+                  ? '초기화, 승인, 스왑까지 세 번의 네트워크 수수료가 발생합니다.'
+                  : '승인과 스왑, 두 번의 네트워크 수수료가 발생합니다.'}
               </ApprovalText>
+              {approval.resetRequired ? (
+                <ApprovalText testID="swap-review-approval-reset">
+                  {approval.tokenSymbol}은(는) 이전 승인 수량이 남아 있으면 새
+                  수량을 승인할 수 없습니다. 그래서 먼저 기존 승인을 0으로
+                  초기화하는 트랜잭션을 한 번 더 보냅니다.
+                </ApprovalText>
+              ) : null}
               <DetailRow>
                 <DetailLabel>승인 토큰</DetailLabel>
                 <DetailValue>{approval.tokenSymbol}</DetailValue>
@@ -365,13 +414,20 @@ export function SwapReviewModal({
           <ConfirmButton
             onPress={onConfirm}
             disabled={confirmDisabled}
+            // 처리 중에는 회색 대신 기본 색을 유지해 흰 스피너가 보이게 한다.
+            $looksDisabled={confirmDisabled && !isLoading}
             $warning={isCritical}
             accessibilityRole="button"
-            accessibilityState={{ disabled: confirmDisabled }}
+            accessibilityState={{ disabled: confirmDisabled, busy: isLoading }}
             testID="swap-review-confirm"
           >
             {isLoading ? (
-              <ActivityIndicator color={theme.colors.onPrimary} />
+              <ActivityIndicator
+                color={
+                  isCritical ? theme.colors.onError : theme.colors.onPrimary
+                }
+                testID="swap-review-confirm-spinner"
+              />
             ) : (
               <ConfirmButtonText $disabled={confirmDisabled}>
                 {confirmLabel}
@@ -676,11 +732,11 @@ const BottomContainer = styled.View`
 `;
 
 const ConfirmButton = styled.TouchableOpacity<{
-  disabled?: boolean;
+  $looksDisabled?: boolean;
   $warning?: boolean;
 }>`
-  background-color: ${({ theme, disabled, $warning }) =>
-    disabled
+  background-color: ${({ theme, $looksDisabled, $warning }) =>
+    $looksDisabled
       ? theme.colors.disabledBackground
       : $warning
       ? theme.colors.error
