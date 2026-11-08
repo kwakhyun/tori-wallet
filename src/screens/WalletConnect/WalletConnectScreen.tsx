@@ -59,7 +59,7 @@ function uniqueAccountAddresses(accounts: string[]): string[] {
 }
 
 function WalletConnectScreen(): React.JSX.Element {
-  const { isDarkMode } = useTheme();
+  const { theme, isDarkMode } = useTheme();
   const route = useRoute<WalletConnectRouteProp>();
   const routeUri = route.params?.uri;
 
@@ -283,7 +283,7 @@ function WalletConnectScreen(): React.JSX.Element {
                 if (inputError) setInputError(null);
               }}
               placeholder="wc:..."
-              placeholderTextColor="#71717A"
+              placeholderTextColor={theme.colors.textMuted}
               autoCapitalize="none"
               autoCorrect={false}
               editable={!notConfigured}
@@ -322,7 +322,9 @@ function WalletConnectScreen(): React.JSX.Element {
               <ConnectButton
                 onPress={handleConnect}
                 disabled={pairingDisabled}
-                $disabled={pairingDisabled}
+                // 연결 중에는 누를 수 없게만 하고 기본 색은 유지한다 (회색 배경 위
+                // 흰 스피너는 라이트 모드에서 보이지 않는다).
+                $disabled={notConfigured}
                 accessibilityRole="button"
                 accessibilityLabel="연결"
                 accessibilityState={{
@@ -332,9 +334,13 @@ function WalletConnectScreen(): React.JSX.Element {
                 testID="wc-connect-button"
               >
                 {isPairing ? (
-                  <ActivityIndicator color="#fff" size="small" />
+                  <ActivityIndicator
+                    color={theme.colors.onPrimary}
+                    size="small"
+                    testID="wc-connect-spinner"
+                  />
                 ) : (
-                  <ConnectButtonText $disabled={pairingDisabled}>
+                  <ConnectButtonText $disabled={notConfigured}>
                     연결
                   </ConnectButtonText>
                 )}
