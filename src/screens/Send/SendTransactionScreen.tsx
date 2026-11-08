@@ -47,7 +47,7 @@ import {
   type RecipientKind,
 } from '@/services/transferService';
 import { ensService, isEnsName, normalizeEnsName } from '@/services/ensService';
-import { tokenService } from '@/services/tokenService';
+import { tokenService, type Token } from '@/services/tokenService';
 import { enhancedSwapService } from '@/services/enhancedSwapService';
 import { NATIVE_TOKEN_ADDRESS } from '@/services/swapService';
 import { transactionTracker } from '@/services/transactionTracker';
@@ -93,6 +93,34 @@ function parseAmountRaw(value: string | undefined): bigint | null {
 
 function shortAddress(address: string): string {
   return `${address.slice(0, 8)}…${address.slice(-6)}`;
+}
+
+/**
+ * 선택 모달에 보여 줄 잔액. 조회에 실패했거나 모르는 잔액은 null('—')로 두고
+ * 0으로 꾸미지 않는다. tokenService의 예전 형태(실패 시 balanceRaw '0')와 새 형태를
+ * 모두 처리한다.
+ */
+function pickerBalanceOf(token: Token): string | null {
+  if (token.balanceError) return null;
+  const raw: unknown = token.balanceRaw;
+  if (typeof raw !== 'string' || !raw.trim() || token.balance === '—')
+    return null;
+  const display = formatDisplayAmount(raw);
+  return display === '—' ? null : display;
+}
+
+/** 선택 모달에 보여 줄 USD 가치. 가격이나 잔액을 모르면 null */
+function pickerUsdValueOf(token: Token): number | null {
+  if (token.balanceError) return null;
+  if (token.usdValue !== undefined) {
+    return typeof token.usdValue === 'number' &&
+      Number.isFinite(token.usdValue)
+      ? token.usdValue
+      : null;
+  }
+  // usdValue가 없는 예전 형태: 가격을 알 때만 value를 쓴다.
+  const priceKnown = token.priceAvailable ?? token.price > 0;
+  return priceKnown && Number.isFinite(token.value) ? token.value : null;
 }
 
 function SendTransactionScreen(): React.JSX.Element {
@@ -168,19 +196,21 @@ function SendTransactionScreen(): React.JSX.Element {
     enabled: !!activeAddress && !!tokenAddress,
   });
 
-  // 토큰 목록 (선택 모달, QR 토큰 확인용)
+  // 토큰 목록 (선택 모달, QR 토큰 확인용). 홈/포트폴리오와 같은 캐시 키를 써서
+  // 토큰 관리에서 숨기거나 추가한 토큰(['tokens'] 무효화)이 바로 반영되게 한다.
   const {
-    data: tokenList,
-    isLoading: tokensLoading,
+    data: tokenData,
+    isFetching: tokensFetching,
     error: tokensError,
     refetch: refetchTokens,
   } = useQuery({
-    queryKey: ['sendTokens', activeAddress, activeNetworkChainId],
+    queryKey: ['tokens', activeAddress, activeNetworkChainId],
     queryFn: () =>
-      tokenService.getTokens(activeAddress as string, activeNetworkChainId),
+      tokenService.getTokens(activeAddress || '', activeNetworkChainId),
     enabled: !!activeAddress,
     staleTime: 30_000,
   });
+  const tokenList = Array.isArray(tokenData) ? tokenData : undefined;
 
   // 시세 (테스트넷/조회 실패 시 null → '—')
   const { data: assetPriceUsd = null } = useQuery({
@@ -836,24 +866,27 @@ function SendTransactionScreen(): React.JSX.Element {
   };
 
   const pickerTokens = useMemo<PickerToken[]>(() => {
-    const items: PickerToken[] = (tokenList ?? []).map(token => ({
-      id: token.address,
-      symbol: token.symbol,
-      name: token.name,
-      address: token.address === 'native' ? undefined : token.address,
-      logoUrl: token.logoUrl,
-      balance: formatDisplayAmount(token.balanceRaw),
-      fiatValue:
-        !activeNetwork?.isTestnet && token.price > 0
-          ? formatFiat(token.value)
-          : undefined,
-    }));
+    const items: PickerToken[] = (tokenList ?? []).map(token => {
+      const usdValue =
+        activeNetwork?.isTestnet || token.isTestnet
+          ? null
+          : pickerUsdValueOf(token);
+      return {
+        id: token.address,
+        symbol: token.symbol,
+        name: token.name,
+        address: token.address === 'native' ? undefined : token.address,
+        logoUrl: token.logoUrl,
+        balance: pickerBalanceOf(token),
+        fiatValue: usdValue !== null ? formatFiat(usdValue) : undefined,
+      };
+    });
     if (!items.some(item => item.id === 'native')) {
       items.unshift({
         id: 'native',
         symbol: nativeSymbol,
         name: activeNetwork?.name,
-        balance: balance ? formatDisplayAmount(balance.formatted) : undefined,
+        balance: balance ? formatDisplayAmount(balance.formatted) : null,
       });
     }
     if (
@@ -866,7 +899,7 @@ function SendTransactionScreen(): React.JSX.Element {
         address: tokenAddress,
         balance: tokenBalance
           ? formatDisplayAmount(tokenBalance.formatted)
-          : undefined,
+          : null,
       });
     }
     return items;
@@ -1071,7 +1104,8 @@ function SendTransactionScreen(): React.JSX.Element {
         />
         <AmountMetaRow>
           <BalanceText testID="send-balance-text">
-            잔액: {assetBalance?.formatted || '0'} {assetSymbol}
+            {/* 불러오는 중이거나 조회에 실패한 잔액은 0이 아니라 '—'로 표시한다. */}
+            잔액: {assetBalance ? assetBalance.formatted : '—'} {assetSymbol}
           </BalanceText>
           {amount ? (
             <FiatText testID="send-amount-fiat">
@@ -1342,7 +1376,8 @@ function SendTransactionScreen(): React.JSX.Element {
         title="보낼 자산 선택"
         tokens={pickerTokens}
         selectedId={tokenAddress ?? 'native'}
-        isLoading={tokensLoading}
+        // 다시 시도 중에도 표시되도록 isLoading 대신 '목록 없이 불러오는 중'을 넘긴다.
+        isLoading={tokensFetching && !tokenList}
         error={
           tokensError
             ? tokensError instanceof Error

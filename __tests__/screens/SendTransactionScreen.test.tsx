@@ -10,6 +10,7 @@ import { signingService } from '../../src/services/signingService';
 import { chainClient } from '../../src/services/chainClient';
 import { ensService } from '../../src/services/ensService';
 import { transferService } from '../../src/services/transferService';
+import { tokenService } from '../../src/services/tokenService';
 
 const mockAddress = '0x1234567890123456789012345678901234567890';
 const recipient = '0x0987654321098765432109876543210987654321';
@@ -196,10 +197,12 @@ beforeEach(() => {
 });
 afterEach(() => jest.useRealTimers());
 
+let queryClient: QueryClient;
 function mount() {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false, gcTime: 0 } },
   });
+  queryClient = client;
   return render(
     <QueryClientProvider client={client}>
       <ThemeProvider theme={darkTheme}>
@@ -710,6 +713,129 @@ it('lets the user pick an ERC-20 token from the active chain list', async () => 
   expect(
     decodeFunctionData({ abi: erc20Abi, data: transaction.data }).args,
   ).toEqual([recipient, 1_000_000n]);
+});
+
+describe('token picker and balances', () => {
+  const token = (overrides: Record<string, unknown>) => ({
+    name: 'Token',
+    decimals: 18,
+    priceChange24h: 0,
+    ...overrides,
+  });
+
+  it("shows unknown balances as '—' without a fiat value instead of 0", async () => {
+    (tokenService.getTokens as jest.Mock).mockResolvedValueOnce([
+      token({
+        symbol: 'ETH',
+        name: 'Ethereum',
+        address: 'native',
+        balance: '10',
+        balanceRaw: '10',
+        price: 2000,
+        value: 20000,
+        usdValue: 20000,
+        priceAvailable: true,
+        balanceError: false,
+      }),
+      // 잔액 조회 실패: tokenService는 예전 필드에 '0'/0을 남긴다.
+      token({
+        symbol: 'USDC',
+        name: 'USD Coin',
+        address: USDC,
+        decimals: 6,
+        balance: '—',
+        balanceRaw: '0',
+        price: 1,
+        value: 0,
+        usdValue: null,
+        priceAvailable: true,
+        balanceError: true,
+      }),
+      // 새 형태: 실패 시 balanceRaw가 null
+      token({
+        symbol: 'DAI',
+        address: '0x6B175474E89094C44Da98b954EedeAC495271d0F',
+        balance: '—',
+        balanceRaw: null,
+        price: 1,
+        value: 0,
+        usdValue: null,
+        priceAvailable: true,
+        balanceError: true,
+      }),
+      // 잔액은 알지만 시세를 모름
+      token({
+        symbol: 'NEW',
+        address: '0x2222222222222222222222222222222222222222',
+        balance: '3',
+        balanceRaw: '3',
+        price: 0,
+        value: 0,
+        usdValue: null,
+        priceAvailable: false,
+        balanceError: false,
+      }),
+    ]);
+    const view = mount();
+    await flush(10);
+    fireEvent.press(view.getByTestId('send-asset-button'));
+
+    // 행 텍스트: 로고 대체 글자 + 심볼 + 이름 + 잔액 + 법정화폐 가치 (+ 선택 표시)
+    expect(view.getByTestId('send-token-picker-item-ETH')).toHaveTextContent(
+      /^EETHEthereum10\$20000\.00✓$/,
+    );
+    expect(view.getByTestId('send-token-picker-item-USDC')).toHaveTextContent(
+      /^UUSDCUSD Coin—$/,
+    );
+    expect(view.getByTestId('send-token-picker-item-DAI')).toHaveTextContent(
+      /^DDAIToken—$/,
+    );
+    expect(view.getByTestId('send-token-picker-item-NEW')).toHaveTextContent(
+      /^NNEWToken3$/,
+    );
+  });
+
+  it("shows the form balance as '—' while it is unknown", async () => {
+    mockRouteParams = { tokenAddress: contract };
+    mockReadContract.mockRejectedValue(new Error('metadata unavailable'));
+    const view = mount();
+    await flush(10);
+    expect(
+      view.getByTestId('send-balance-text').props.children.join(''),
+    ).toBe('잔액: — 토큰');
+  });
+
+  it('shows the token list error with retry next to the native entry', async () => {
+    (tokenService.getTokens as jest.Mock).mockRejectedValueOnce(
+      new Error('잔액을 불러오지 못했습니다.'),
+    );
+    const view = mount();
+    await flush(10);
+    fireEvent.press(view.getByTestId('send-asset-button'));
+    expect(view.getByTestId('send-token-picker-item-ETH')).toBeTruthy();
+    expect(
+      view.getByTestId('send-token-picker-error-inline'),
+    ).toHaveTextContent(/잔액을 불러오지 못했습니다/);
+
+    fireEvent.press(view.getByTestId('send-token-picker-retry-inline'));
+    await flush(10);
+    expect(tokenService.getTokens).toHaveBeenCalledTimes(2);
+    expect(view.getByTestId('send-token-picker-item-USDC')).toBeTruthy();
+    expect(view.queryByTestId('send-token-picker-error-inline')).toBeNull();
+  });
+
+  it('shares the token list cache that Token Management invalidates', async () => {
+    mount();
+    await flush(10);
+    expect(tokenService.getTokens).toHaveBeenCalledTimes(1);
+    expect(
+      queryClient.getQueryData(['tokens', mockAddress, 1]),
+    ).toBeDefined();
+    await act(async () => {
+      await queryClient.invalidateQueries({ queryKey: ['tokens'] });
+    });
+    expect(tokenService.getTokens).toHaveBeenCalledTimes(2);
+  });
 });
 
 it('shows the active network on the input step', () => {
