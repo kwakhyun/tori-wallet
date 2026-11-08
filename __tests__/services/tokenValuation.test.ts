@@ -137,6 +137,20 @@ describe('tokenValuation', () => {
       expect(snapshotBlocker([noSource()])).toBe('noPriceSource');
       expect(snapshotBlocker([priced(1), noSource()])).toBeNull();
     });
+
+    it('does not record $0 on a network with no priceable asset, even at a zero balance', () => {
+      // 커스텀 네트워크: 기본 통화(시세 출처 없음) 잔액 0
+      const emptyNative = noSource({ balance: '0', balanceRaw: '0' });
+      expect(summarizeTokenTotal([emptyNative]).total).toBe(0);
+      expect(snapshotBlocker([emptyNative])).toBe('noPriceSource');
+      // 시세 출처가 있는 자산이 있으면 잔액 0이어도 기록한다 (진짜 ₩0)
+      expect(
+        snapshotBlocker([
+          priced(0, { balance: '0', balanceRaw: '0' }),
+          emptyNative,
+        ]),
+      ).toBeNull();
+    });
   });
 
   describe('isTestnetChainId', () => {

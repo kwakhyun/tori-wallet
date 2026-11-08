@@ -60,6 +60,24 @@ function formatChartLabel(timestamp: number, range: TimeRange): string {
   return `${date.getMonth() + 1}/${date.getDate()}`;
 }
 
+/**
+ * 현재 네트워크로 받을 수 없는 코인을 살 때의 안내
+ * (테스트넷/직접 추가한 네트워크/그 밖의 네트워크를 구분해, 예컨대 BNB Chain의 BNB를
+ *  "BNB Chain의 자산이 아니다"라고 잘못 말하지 않는다)
+ */
+export function buyAddressHint(
+  network: { name: string; isTestnet?: boolean; isCustom?: boolean } | undefined,
+): string {
+  const name = network?.name ?? '현재 네트워크';
+  if (network?.isTestnet) {
+    return `${name}은(는) 테스트넷이라 구매한 자산을 받을 수 없습니다. 받을 주소와 네트워크를 결제 화면에서 직접 입력하세요.`;
+  }
+  if (network?.isCustom) {
+    return `직접 추가한 네트워크(${name})는 결제 서비스가 지원하지 않아, 받을 주소와 네트워크를 결제 화면에서 직접 입력해야 합니다.`;
+  }
+  return `${name}에서 받을 수 있는 자산으로 확인되지 않아, 받을 주소와 네트워크를 결제 화면에서 직접 입력해야 합니다.`;
+}
+
 function isHeld(token: Token): boolean {
   if (token.balanceError) return false;
   const amount = Number(token.balanceRaw);
@@ -411,9 +429,7 @@ function CoinDetailScreen(): React.JSX.Element {
           </BuyButton>
           {!onActiveNetwork && tokensQuery.data ? (
             <BuyHint testID="coin-detail-buy-hint">
-              {`${
-                activeNetwork?.name ?? '현재 네트워크'
-              }의 자산이 아니라 받을 주소를 결제 화면에서 직접 입력해야 합니다.`}
+              {buyAddressHint(activeNetwork)}
             </BuyHint>
           ) : null}
 

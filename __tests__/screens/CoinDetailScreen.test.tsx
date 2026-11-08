@@ -74,7 +74,9 @@ jest.mock('react-native-svg', () => {
   };
 });
 
-import CoinDetailScreen from '../../src/screens/CoinDetail/CoinDetailScreen';
+import CoinDetailScreen, {
+  buyAddressHint,
+} from '../../src/screens/CoinDetail/CoinDetailScreen';
 
 const DETAIL = {
   id: 'ethereum',
@@ -208,10 +210,27 @@ describe('CoinDetailScreen', () => {
     render(<CoinDetailScreen />);
     await waitFor(() => screen.getByTestId('coin-detail-buy-hint'));
     expect(screen.getByTestId('coin-detail-buy-hint')).toHaveTextContent(
-      'Arbitrum One의 자산이 아니라 받을 주소를 결제 화면에서 직접 입력해야 합니다.',
+      'Arbitrum One에서 받을 수 있는 자산으로 확인되지 않아, 받을 주소와 네트워크를 결제 화면에서 직접 입력해야 합니다.',
     );
     fireEvent.press(screen.getByTestId('coin-detail-buy'));
     expect(mockShowBuyProviderAlert).toHaveBeenCalledWith('btc');
+  });
+
+  it('does not tell a custom-network user that its own coin is not on that network', () => {
+    // 직접 추가한 BNB Chain에서 BNB를 볼 때 "BNB Chain의 자산이 아니라"라고 하지 않는다
+    const custom = buyAddressHint({
+      name: 'BNB Chain',
+      isCustom: true,
+      isTestnet: false,
+    });
+    expect(custom).toBe(
+      '직접 추가한 네트워크(BNB Chain)는 결제 서비스가 지원하지 않아, 받을 주소와 네트워크를 결제 화면에서 직접 입력해야 합니다.',
+    );
+    expect(custom).not.toContain('자산이 아니라');
+    // 테스트넷에서는 구매한 자산을 이 네트워크로 받을 수 없다고 분명히 알린다
+    expect(buyAddressHint({ name: 'Sepolia', isTestnet: true })).toBe(
+      'Sepolia은(는) 테스트넷이라 구매한 자산을 받을 수 없습니다. 받을 주소와 네트워크를 결제 화면에서 직접 입력하세요.',
+    );
   });
 
   it('does not prefill the address before the token list has loaded', () => {

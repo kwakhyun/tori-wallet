@@ -173,6 +173,11 @@ export function snapshotBlocker(
   if (tokens.length === 0) return 'empty';
   if (tokens.some(token => token.isTestnet)) return 'testnet';
   if (tokens.some(token => token.balanceError)) return 'lookupFailed';
+  // 시세 출처가 있는 자산이 하나도 없으면(커스텀 네트워크 등) 잔액이 0이어도 기록하지 않는다.
+  // 0으로 남긴 기록이 나중에 잔액이 생긴 뒤에도 '최고 자산액 ₩0'처럼 보이지 않게 한다.
+  if (tokens.every(token => token.hasPriceSource === false)) {
+    return 'noPriceSource';
+  }
   const summary = summarizeTokenTotal(tokens);
   if (summary.total === null) {
     return summary.unknownReason === 'noPriceSource'
