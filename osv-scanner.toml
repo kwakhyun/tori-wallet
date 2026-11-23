@@ -54,21 +54,3 @@ id = "GHSA-hqr4-qq8f-hg3x"
 # audit.patchSha256 = "740e43c44f9647aaef234fc2742e9eb1575cb3a74a540b2848f1c5bf6f61ab22"
 ignoreUntil = 2027-01-20
 reason = "Not affected: v1.9.1 does not ship the JSONC parser or verifier. The installed-package regression asserts the JSONC entry points remain absent; exception is version-scoped."
-
-[[IgnoredVulns]]
-id = "GHSA-hp3w-g68c-fv3c"
-# audit.package = "sprintf-js"
-# audit.version = "1.0.3"
-# audit.patch = "patches/sprintf-js+1.0.3.patch"
-# audit.patchSha256 = "c839b3a8610013c1b7bca748af6dd29831f230aa1abc18fd619f6f5f35652610"
-ignoreUntil = 2027-01-20
-reason = "No fixed upstream version. Local patch caps numeric precision at ECMAScript limits; regressions cover all three numeric formatters and normal formatting."
-
-[[IgnoredVulns]]
-id = "GHSA-vfj7-8cjw-p6xm"
-# audit.package = "braces"
-# audit.version = "3.0.3"
-# audit.patch = "patches/braces+3.0.3.patch"
-# audit.patchSha256 = "ae91059bc47a7ad998fc538689043c7a7a78c06cea6d5a381f426e25d1f95bf6"
-ignoreUntil = 2027-01-20
-reason = "No fixed upstream version. Local patch bounds parsing and preflights caller-provided AST depth before recursive walkers. Regressions cover compile, expand, stringify and normal patterns."
